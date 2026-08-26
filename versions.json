@@ -4,10 +4,10 @@
     {
       "version": "0.1.0",
       "channel": "stable",
-      "released_at": "2026-08-26T00:00:00.000Z",
+      "released_at": "2026-08-26T12:50:00.501Z",
       "breaking": false,
       "security": false,
-      "summary": "First release. Control plane, panel and agent.",
+      "summary": "fix: container boot, image runtime paths, release pipeline",
       "notes_url": "https://github.com/FutureForge-Studios/kaname/releases/tag/v0.1.0",
       "migrations": {
         "destructive": false,
@@ -16,7 +16,16 @@
       "artifacts": {
         "control_plane": "ghcr.io/futureforge-studios/kaname-control-plane:0.1.0",
         "web": "ghcr.io/futureforge-studios/kaname-web:0.1.0",
-        "agent": {}
+        "agent": {
+          "linux-amd64": {
+            "url": "https://github.com/FutureForge-Studios/kaname/releases/download/v0.1.0/kanamed-linux-amd64",
+            "sha256": "1726904f27643769709ad3df0ff0ea549d57d76ffdaa7e01719b112a2fc7a988"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/FutureForge-Studios/kaname/releases/download/v0.1.0/kanamed-linux-arm64",
+            "sha256": "7cf5f19e123da1bb77337bd6d2e332b4b204d576b4a1e57969a416c4621fd439"
+          }
+        }
       }
     }
   ]
