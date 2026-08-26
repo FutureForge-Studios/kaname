@@ -1,0 +1,40 @@
+# ------------------------------------------------------------------
+# One origin for the browser and for agents.
+#
+# /api and /agent go to the control plane; everything else goes to the
+# panel UI. Because both live under the same host, the session cookie
+# needs no CORS exemption and can carry the __Host- prefix.
+# ------------------------------------------------------------------
+
+{$KANAME_DOMAIN} {
+	encode zstd gzip
+
+	# Agent sockets and API traffic.
+	@control path /api/* /agent/* /health
+	handle @control {
+		reverse_proxy control-plane:4000 {
+			# SSE and the terminal WebSocket must not be buffered.
+			flush_interval -1
+		}
+	}
+
+	# The agent installer, served from the control plane so the URL in
+	# the enrollment command is the same host the agent will dial.
+	handle /install.sh {
+		reverse_proxy control-plane:4000
+	}
+	handle /download/* {
+		reverse_proxy control-plane:4000
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

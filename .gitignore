@@ -1,0 +1,34 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# local state
+.data/
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# agent artifacts
+agent/bin/
+agent/kanamed
+agent/kanamed.exe
+agent/.state/
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# test output
+coverage/
+playwright-report/
+test-results/
+.artifacts/
+e2e/.state/

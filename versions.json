@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "releases": [
+    {
+      "version": "0.1.0",
+      "channel": "stable",
+      "released_at": "2026-08-26T00:00:00.000Z",
+      "breaking": false,
+      "security": false,
+      "summary": "First release. Control plane, panel and agent.",
+      "notes_url": "https://github.com/FutureForge-Studios/kaname/releases/tag/v0.1.0",
+      "migrations": {
+        "destructive": false,
+        "adds_config": []
+      },
+      "artifacts": {
+        "control_plane": "ghcr.io/futureforge-studios/kaname-control-plane:0.1.0",
+        "web": "ghcr.io/futureforge-studios/kaname-web:0.1.0",
+        "agent": {}
+      }
+    }
+  ]
+}

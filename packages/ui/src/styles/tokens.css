@@ -1,0 +1,288 @@
+/* ------------------------------------------------------------------ *
+ * Kaname design tokens
+ *
+ * Near-black, monochrome, one accent. Every colour, radius, shadow and
+ * duration in the product comes from here. Components never hardcode a
+ * hex value and never use an arbitrary spacing value off the 4px grid.
+ * ------------------------------------------------------------------ */
+
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* --- surfaces ------------------------------------------------- */
+  --kn-bg: #0b0c0e;
+  --kn-bg-inset: #08090a;
+  --kn-surface: #111316;
+  --kn-surface-2: #16191d;
+  --kn-surface-3: #1c2024;
+  --kn-overlay: rgb(4 5 6 / 72%);
+
+  /* --- lines ---------------------------------------------------- */
+  --kn-border: #22262c;
+  --kn-border-strong: #2e333a;
+  --kn-border-subtle: #191c21;
+
+  /* --- text ----------------------------------------------------- */
+  --kn-text: #e7e9ec;
+  --kn-text-2: #9ba3ae;
+  --kn-text-3: #6b7280;
+  --kn-text-inverse: #0b0c0e;
+
+  /* --- accent: Keystone Indigo (KD-005) ------------------------- */
+  --kn-accent-300: #a9b8ff;
+  --kn-accent-400: #8aa0ff;
+  --kn-accent-500: #5b76f7;
+  --kn-accent-600: #4a63e0;
+  --kn-accent-700: #3a4fbf;
+  --kn-accent-fg: #ffffff;
+  --kn-accent-soft: rgb(91 118 247 / 12%);
+  --kn-accent-soft-strong: rgb(91 118 247 / 22%);
+
+  /* --- semantic ------------------------------------------------- */
+  --kn-ok: #3fb950;
+  --kn-ok-soft: rgb(63 185 80 / 14%);
+  --kn-warn: #d29922;
+  --kn-warn-soft: rgb(210 153 34 / 14%);
+  --kn-danger: #f85149;
+  --kn-danger-soft: rgb(248 81 73 / 14%);
+  --kn-info: #58a6ff;
+  --kn-info-soft: rgb(88 166 255 / 14%);
+  --kn-neutral-soft: rgb(155 163 174 / 12%);
+
+  /* --- chart ramp (monochrome-first, accent-led) ---------------- */
+  --kn-chart-1: #5b76f7;
+  --kn-chart-2: #58a6ff;
+  --kn-chart-3: #3fb950;
+  --kn-chart-4: #d29922;
+  --kn-chart-5: #f85149;
+  --kn-chart-6: #a9b8ff;
+  --kn-chart-grid: #1c2024;
+
+  /* --- radius (nothing pill-shaped except status badges) -------- */
+  --kn-r-xs: 4px;
+  --kn-r-sm: 6px;
+  --kn-r-md: 8px;
+  --kn-r-lg: 10px;
+  --kn-r-pill: 9999px;
+
+  /* --- elevation ------------------------------------------------ */
+  --kn-shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+  --kn-shadow-md: 0 4px 12px rgb(0 0 0 / 45%);
+  --kn-shadow-lg: 0 12px 32px rgb(0 0 0 / 55%);
+
+  /* --- focus ---------------------------------------------------- */
+  --kn-ring: var(--kn-accent-500);
+  --kn-ring-offset: var(--kn-bg);
+
+  /* --- motion: 120-200ms, opacity/transform only ---------------- */
+  --kn-ease: cubic-bezier(0.2, 0, 0, 1);
+  --kn-dur-fast: 120ms;
+  --kn-dur: 160ms;
+  --kn-dur-slow: 200ms;
+
+  /* --- type ----------------------------------------------------- */
+  --kn-font-sans:
+    "InterVariable", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --kn-font-mono:
+    "JetBrains Mono", ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, monospace;
+
+  /* --- layout metrics ------------------------------------------- */
+  --kn-sidebar-w: 232px;
+  --kn-sidebar-collapsed-w: 56px;
+  --kn-topbar-h: 48px;
+  --kn-row-h: 36px;
+  --kn-row-h-compact: 30px;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --kn-bg: #fbfbfc;
+  --kn-bg-inset: #f2f3f5;
+  --kn-surface: #ffffff;
+  --kn-surface-2: #f6f7f9;
+  --kn-surface-3: #eceef1;
+  --kn-overlay: rgb(20 22 26 / 40%);
+
+  --kn-border: #e2e5ea;
+  --kn-border-strong: #cdd2d9;
+  --kn-border-subtle: #eef0f3;
+
+  --kn-text: #14171c;
+  --kn-text-2: #565d68;
+  --kn-text-3: #858c96;
+  --kn-text-inverse: #ffffff;
+
+  --kn-accent-300: #7f97ff;
+  --kn-accent-400: #5b76f7;
+  --kn-accent-500: #4a63e0;
+  --kn-accent-600: #3a4fbf;
+  --kn-accent-700: #2f409c;
+  --kn-accent-soft: rgb(74 99 224 / 10%);
+  --kn-accent-soft-strong: rgb(74 99 224 / 18%);
+
+  --kn-ok: #1a7f37;
+  --kn-ok-soft: rgb(26 127 55 / 12%);
+  --kn-warn: #9a6700;
+  --kn-warn-soft: rgb(154 103 0 / 12%);
+  --kn-danger: #cf222e;
+  --kn-danger-soft: rgb(207 34 46 / 12%);
+  --kn-info: #0969da;
+  --kn-info-soft: rgb(9 105 218 / 12%);
+  --kn-neutral-soft: rgb(86 93 104 / 10%);
+
+  --kn-chart-grid: #eceef1;
+  --kn-shadow-sm: 0 1px 2px rgb(20 22 26 / 8%);
+  --kn-shadow-md: 0 4px 12px rgb(20 22 26 / 10%);
+  --kn-shadow-lg: 0 12px 32px rgb(20 22 26 / 14%);
+  --kn-ring-offset: var(--kn-bg);
+}
+
+/* ------------------------------------------------------------------ *
+ * Base
+ * ------------------------------------------------------------------ */
+
+* {
+  border-color: var(--kn-border);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  background: var(--kn-bg);
+  color: var(--kn-text);
+  font-family: var(--kn-font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  font-feature-settings:
+    "cv05" 1,
+    "ss03" 1;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Every number that can be compared vertically gets tabular figures. */
+.kn-num,
+table td,
+table th {
+  font-variant-numeric: tabular-nums;
+}
+
+code,
+kbd,
+pre,
+samp,
+.kn-mono {
+  font-family: var(--kn-font-mono);
+  font-size: 0.9285em; /* 12px against a 13px base */
+  font-variant-ligatures: none;
+}
+
+::selection {
+  background: var(--kn-accent-soft-strong);
+}
+
+/* One focus treatment for the entire product. */
+:focus-visible {
+  outline: 2px solid var(--kn-ring);
+  outline-offset: 1px;
+  border-radius: var(--kn-r-xs);
+}
+
+/* Scrollbars that match the surface instead of the OS. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--kn-border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--kn-border-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: var(--kn-r-pill);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--kn-text-3);
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Keyframes — opacity/transform only, no bounce
+ * ------------------------------------------------------------------ */
+
+@keyframes kn-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes kn-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes kn-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes kn-shimmer {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 0.9;
+  }
+}
+
+@keyframes kn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes kn-pulse-ring {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}

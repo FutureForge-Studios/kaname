@@ -1,0 +1,29 @@
+# ------------------------------------------------------------------
+# Building and publishing the images.
+#
+#   cd infra
+#   KANAME_VERSION=0.2.0 docker compose -f docker-compose.build.yml build
+#   KANAME_VERSION=0.2.0 docker compose -f docker-compose.build.yml push
+#
+# Deliberately separate from docker-compose.yml: the file install.sh
+# puts on a server has no build context, because that server does not
+# have the repository on it.
+# ------------------------------------------------------------------
+name: kaname-build
+
+services:
+  control-plane:
+    image: ${KANAME_REGISTRY:-ghcr.io/futureforge-studios}/kaname-control-plane:${KANAME_VERSION:-0.1.0}
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.control-plane
+      args:
+        KANAME_VERSION: ${KANAME_VERSION:-0.1.0}
+
+  web:
+    image: ${KANAME_REGISTRY:-ghcr.io/futureforge-studios}/kaname-web:${KANAME_VERSION:-0.1.0}
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.web
+      args:
+        KANAME_CONTROL_PLANE_URL: http://control-plane:4000

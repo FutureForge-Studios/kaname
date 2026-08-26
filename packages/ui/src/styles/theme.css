@@ -1,0 +1,77 @@
+/* ------------------------------------------------------------------ *
+ * Tailwind v4 theme bridge.
+ *
+ * Maps the design tokens in tokens.css onto Tailwind's utility
+ * namespaces so `bg-surface`, `text-muted`, `border-strong`,
+ * `rounded-md` and friends resolve to the same CSS variables the
+ * component kit uses. Nothing in the product may introduce a colour
+ * that is not reachable from here.
+ * ------------------------------------------------------------------ */
+
+@theme inline {
+  --color-bg: var(--kn-bg);
+  --color-bg-inset: var(--kn-bg-inset);
+  --color-surface: var(--kn-surface);
+  --color-surface-2: var(--kn-surface-2);
+  --color-surface-3: var(--kn-surface-3);
+
+  --color-line: var(--kn-border);
+  --color-line-strong: var(--kn-border-strong);
+  --color-line-subtle: var(--kn-border-subtle);
+
+  --color-fg: var(--kn-text);
+  --color-muted: var(--kn-text-2);
+  --color-faint: var(--kn-text-3);
+  --color-inverse: var(--kn-text-inverse);
+
+  --color-accent: var(--kn-accent-500);
+  --color-accent-hi: var(--kn-accent-400);
+  --color-accent-lo: var(--kn-accent-600);
+  --color-accent-press: var(--kn-accent-700);
+  --color-accent-fg: var(--kn-accent-fg);
+  --color-accent-soft: var(--kn-accent-soft);
+
+  --color-ok: var(--kn-ok);
+  --color-ok-soft: var(--kn-ok-soft);
+  --color-warn: var(--kn-warn);
+  --color-warn-soft: var(--kn-warn-soft);
+  --color-danger: var(--kn-danger);
+  --color-danger-soft: var(--kn-danger-soft);
+  --color-info: var(--kn-info);
+  --color-info-soft: var(--kn-info-soft);
+  --color-neutral-soft: var(--kn-neutral-soft);
+
+  --radius-xs: var(--kn-r-xs);
+  --radius-sm: var(--kn-r-sm);
+  --radius-md: var(--kn-r-md);
+  --radius-lg: var(--kn-r-lg);
+
+  --shadow-sm: var(--kn-shadow-sm);
+  --shadow-md: var(--kn-shadow-md);
+  --shadow-lg: var(--kn-shadow-lg);
+
+  --font-sans: var(--kn-font-sans);
+  --font-mono: var(--kn-font-mono);
+
+  --text-2xs: 10px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12px;
+  --text-sm--line-height: 18px;
+  --text-base: 13px;
+  --text-base--line-height: 20px;
+  --text-md: 14px;
+  --text-md--line-height: 20px;
+  --text-lg: 16px;
+  --text-lg--line-height: 24px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+
+  --animate-fade-in: kn-fade-in var(--kn-dur) var(--kn-ease);
+  --animate-rise: kn-rise var(--kn-dur) var(--kn-ease);
+  --animate-scale-in: kn-scale-in var(--kn-dur-fast) var(--kn-ease);
+  --animate-spin-slow: kn-spin 900ms linear infinite;
+}

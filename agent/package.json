@@ -1,0 +1,12 @@
+{
+  "name": "@kaname/agent",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "go build -o bin/kanamed ./cmd/kanamed",
+    "dev": "go run ./cmd/kanamed --simulate",
+    "test": "go test ./...",
+    "typecheck": "go vet ./...",
+    "clean": "rimraf bin"
+  }
+}

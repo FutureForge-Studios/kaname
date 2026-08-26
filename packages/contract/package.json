@@ -1,0 +1,28 @@
+{
+  "name": "@kaname/contract",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent": "./src/agent/index.ts"
+  },
+  "scripts": {
+    "build": "tsx scripts/emit-agent-manifest.ts",
+    "typecheck": "tsc --noEmit",
+    "emit:agent-manifest": "tsx scripts/emit-agent-manifest.ts",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rimraf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8",
+    "zod-to-json-schema": "^3.24.1"
+  }
+}

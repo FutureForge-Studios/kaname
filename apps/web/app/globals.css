@@ -1,0 +1,68 @@
+/* ------------------------------------------------------------------ *
+ * The app's only stylesheet.
+ *
+ * Order matters: Tailwind first, then the design tokens, then the
+ * @theme bridge that maps those tokens onto utility namespaces, then
+ * the self-hosted faces. Nothing below may introduce a colour, radius
+ * or duration that is not already a token.
+ * ------------------------------------------------------------------ */
+
+@import "tailwindcss";
+@import "@kaname/ui/styles.css";
+@import "@kaname/ui/tailwind";
+
+@import "@fontsource-variable/inter";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
+/*
+ * Tailwind scans the project it lives in and skips node_modules, so the
+ * component kit's classes would never be generated without this.
+ */
+@source "../";
+@source "../../../packages/ui/src";
+
+/*
+ * @fontsource-variable publishes the family as "Inter Variable"; the
+ * token stack names the rsms build ("InterVariable"). Same typeface,
+ * different registration, so the app widens the stack rather than
+ * silently falling through to system-ui.
+ */
+:root,
+[data-theme="dark"],
+[data-theme="light"] {
+  --kn-font-sans: "Inter Variable", "InterVariable", "Inter", ui-sans-serif, system-ui,
+    -apple-system, "Segoe UI", sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  overscroll-behavior-y: none;
+}
+
+/*
+ * The skip link is the first focusable node in the document and the
+ * only thing in the product that appears purely on focus.
+ */
+.kn-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  transform: translateY(-200%);
+  transition: transform var(--kn-dur) var(--kn-ease);
+}
+
+.kn-skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+/* Scroll anchoring inside the main pane, so a job event cannot jump the page. */
+#kn-main {
+  overflow-anchor: none;
+}

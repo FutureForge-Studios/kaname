@@ -1,0 +1,10 @@
+node_modules
+dist
+.next
+.turbo
+.data
+coverage
+packages/db/drizzle
+agent/bin
+pnpm-lock.yaml
+infra

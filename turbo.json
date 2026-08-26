@@ -1,0 +1,63 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "ui": "stream",
+  "globalEnv": [
+    "NODE_ENV",
+    "KANAME_ENV",
+    "DATABASE_URL",
+    "KANAME_MASTER_KEY",
+    "KANAME_CONTROL_PLANE_URL",
+    "PORT"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**",
+        ".next/**",
+        "!.next/cache/**",
+        "bin/**",
+        "../../agent/internal/rpc/methods.json"
+      ]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "typecheck": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "lint": {
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": []
+    },
+    "clean": {
+      "cache": false
+    }
+  },
+  "globalPassThroughEnv": [
+    "HOME",
+    "USERPROFILE",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "GOPATH",
+    "GOCACHE",
+    "GOMODCACHE",
+    "GOROOT",
+    "GOFLAGS",
+    "CGO_ENABLED",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP"
+  ]
+}

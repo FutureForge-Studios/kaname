@@ -1,0 +1,37 @@
+{
+  "name": "kaname",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Kaname — the control plane for your infrastructure",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel --filter=@kaname/control-plane --filter=@kaname/web",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "test:e2e": "pnpm --filter @kaname/e2e test:e2e",
+    "clean": "turbo run clean && rimraf node_modules",
+    "db:generate": "pnpm --filter @kaname/db generate",
+    "db:migrate": "pnpm --filter @kaname/db migrate",
+    "db:seed": "pnpm --filter @kaname/db seed",
+    "db:reset": "pnpm --filter @kaname/db reset",
+    "agent:build": "pnpm --filter @kaname/agent build",
+    "agent:dev": "pnpm --filter @kaname/agent dev",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,css}\"",
+    "dev:fleet": "node scripts/dev-fleet.mjs",
+    "dev:all": "turbo run dev --parallel",
+    "setup": "pnpm install && pnpm db:migrate && pnpm db:seed",
+    "verify": "node scripts/verify.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "prettier": "^3.4.2",
+    "rimraf": "^6.0.1",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3"
+  }
+}

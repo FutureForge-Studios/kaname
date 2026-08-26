@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180">
+  <!-- Home-screen icons are composited on an unknown wallpaper, so this one
+       carries its own canvas. Both values are the literal --kn-bg and
+       --kn-accent-400 tokens; a CSS variable cannot reach an icon file. -->
+  <rect width="180" height="180" rx="40" fill="#0b0c0e" />
+  <g transform="translate(30 30) scale(5)">
+    <g fill="none" stroke="#8aa0ff" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M5.6 5h12.8l-2.6 14H8.2z" />
+    </g>
+    <circle cx="12" cy="12" r="1.9" fill="#8aa0ff" />
+  </g>
+</svg>

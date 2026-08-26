@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "kaname-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@kaname/web", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "kaname-web-prod",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@kaname/web", "start"],
+      "port": 3000
+    }
+  ]
+}
