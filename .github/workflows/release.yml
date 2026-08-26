@@ -44,6 +44,9 @@ jobs:
       contents: read
       packages: write
     strategy:
+      # One image failing should not cancel the other: knowing both
+      # results is what tells you whether the problem is shared.
+      fail-fast: false
       matrix:
         include:
           - image: kaname-control-plane

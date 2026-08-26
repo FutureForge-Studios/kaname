@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { NextConfig } from "next";
 
 /* ------------------------------------------------------------------ *
@@ -15,6 +16,15 @@ const CONTROL_PLANE = process.env.KANAME_CONTROL_PLANE_URL ?? "http://localhost:
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+
+  /*
+   * The runtime image copies `.next/standalone` and runs it directly, so
+   * it carries no pnpm store and no workspace symlinks. Next has to be
+   * told to emit it, and — in a workspace — told where the root is, or
+   * it traces from apps/web and leaves the shared packages behind.
+   */
+  output: "standalone",
+  outputFileTracingRoot: join(import.meta.dirname, "..", ".."),
 
   /* Both packages ship TypeScript source rather than a build artefact. */
   transpilePackages: ["@kaname/ui", "@kaname/contract"],
