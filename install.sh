@@ -47,7 +47,9 @@ KANAME_LOCAL_API="http://127.0.0.1:4000"
 
 # Options
 MODE="all-in-one"          # all-in-one | control-plane-only | agent-only
-VERSION="$KANAME_DEFAULT_VERSION"
+# Deliberately not called VERSION: /etc/os-release defines that, and
+# anything that sources it would overwrite the release we install.
+REQ_VERSION="$KANAME_DEFAULT_VERSION"
 TOKEN=""
 CONTROL_PLANE=""
 FORCE=0
@@ -79,8 +81,8 @@ while [ $# -gt 0 ]; do
     --token=*) TOKEN="${1#*=}" ;;
     --control-plane) need "$1" "${2:-}"; CONTROL_PLANE="$2"; shift ;;
     --control-plane=*) CONTROL_PLANE="${1#*=}" ;;
-    --version) need "$1" "${2:-}"; VERSION="$2"; shift ;;
-    --version=*) VERSION="${1#*=}" ;;
+    --version) need "$1" "${2:-}"; REQ_VERSION="$2"; shift ;;
+    --version=*) REQ_VERSION="${1#*=}" ;;
     --force) FORCE=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "kaname: unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -236,6 +238,60 @@ The panel is served at that address, so there is nothing to point a browser at.
 Give this host an IPv4 address and run this again."
 }
 
+# A release looks like 1.2.3, optionally with a pre-release suffix.
+# Anything else in KANAME_VERSION is not something a registry can serve,
+# and is worth failing on here rather than inside `docker compose pull`.
+valid_version() {
+  case "$1" in
+    ""|*[!0-9A-Za-z.+-]*) return 1 ;;
+  esac
+  echo "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'
+}
+
+env_value() {
+  # $1 key. Prints nothing when the key is absent.
+  grep "^$1=" "$DATA_DIR/.env" 2>/dev/null | head -n 1 | cut -d= -f2- || true
+}
+
+set_env_value() {
+  # $1 key, $2 value. Replaces in place, appends when absent.
+  tmp="$DATA_DIR/.env.tmp"
+  if grep -q "^$1=" "$DATA_DIR/.env" 2>/dev/null; then
+    awk -v k="$1" -v v="$2" 'BEGIN{FS=OFS="="} $1==k {print k "=" v; next} {print}' \
+      "$DATA_DIR/.env" >"$tmp"
+  else
+    cp "$DATA_DIR/.env" "$tmp"
+    printf '%s=%s\n' "$1" "$2" >>"$tmp"
+  fi
+  cat "$tmp" >"$DATA_DIR/.env"
+  rm -f "$tmp"
+}
+
+# The version and the two image tags are ours, not the operator's. On a
+# repair they are left alone unless --version asked for something else,
+# or what is stored could never have worked -- an earlier installer
+# sourced /etc/os-release, which defines VERSION, and wrote the
+# distribution's name into the image tag.
+reconcile_version() {
+  stored="$(env_value KANAME_VERSION)"
+
+  if [ "$REQ_VERSION" != "$KANAME_DEFAULT_VERSION" ] && [ "$REQ_VERSION" != "$stored" ]; then
+    log "    moving this install from ${stored:-unknown} to $REQ_VERSION"
+  elif valid_version "$stored"; then
+    REQ_VERSION="$stored"
+    return 0
+  else
+    warn "the stored version is not a release number: '${stored}'"
+    warn "rewriting it to $REQ_VERSION; the images it named could never have been pulled."
+  fi
+
+  set_env_value KANAME_VERSION "$REQ_VERSION"
+  set_env_value KANAME_IMAGE_CONTROL_PLANE "$KANAME_REGISTRY/kaname-control-plane:$REQ_VERSION"
+  set_env_value KANAME_IMAGE_WEB "$KANAME_REGISTRY/kaname-web:$REQ_VERSION"
+  chmod 0660 "$DATA_DIR/.env"
+  chown "root:$KANAME_UID" "$DATA_DIR/.env"
+}
+
 prepare_data_dir() {
   step "preparing $DATA_DIR"
 
@@ -252,6 +308,7 @@ prepare_data_dir() {
 
   if [ -f "$DATA_DIR/.env" ]; then
     log "    keeping the existing secrets in $DATA_DIR/.env"
+    reconcile_version
     return 0
   fi
 
@@ -273,13 +330,13 @@ prepare_data_dir() {
 # for you. Back this file up somewhere the panel cannot reach.
 
 KANAME_ENV=production
-KANAME_VERSION=$VERSION
+KANAME_VERSION=$REQ_VERSION
 KANAME_DEPLOYMENT=compose
 KANAME_COMPOSE_PROJECT=$KANAME_COMPOSE_PROJECT
 KANAME_DATA_DIR=$DATA_DIR
 
-KANAME_IMAGE_CONTROL_PLANE=$KANAME_REGISTRY/kaname-control-plane:$VERSION
-KANAME_IMAGE_WEB=$KANAME_REGISTRY/kaname-web:$VERSION
+KANAME_IMAGE_CONTROL_PLANE=$KANAME_REGISTRY/kaname-control-plane:$REQ_VERSION
+KANAME_IMAGE_WEB=$KANAME_REGISTRY/kaname-web:$REQ_VERSION
 
 KANAME_MASTER_KEY=$MASTER_KEY
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
