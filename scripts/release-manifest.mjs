@@ -23,7 +23,11 @@ const RELEASE_BASE =
 const TARGETS = ["linux-amd64", "linux-arm64"];
 
 function parseArgs(argv) {
-  const version = argv.find((a) => !a.startsWith("-"));
+  // Positional: the version is the FIRST token, and only if it is not a
+  // flag. `find` would otherwise happily take a flag's value -- so
+  // omitting the version entirely produced a manifest named after the
+  // summary rather than the usage message.
+  const version = argv[0]?.startsWith("-") ? undefined : argv[0];
   if (!version) {
     console.error("usage: node scripts/release-manifest.mjs <version> [--breaking] [--security]");
     console.error(

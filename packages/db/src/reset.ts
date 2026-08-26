@@ -1,6 +1,4 @@
 import { rm } from "node:fs/promises";
-import { loadWorkspaceEnv } from "./env.js";
-import { pathToFileURL } from "node:url";
 import { sql } from "drizzle-orm";
 import { createDb, resolveDataDir } from "./index.js";
 import { runMigrations } from "./migrate.js";
@@ -49,17 +47,4 @@ export async function reset(url = process.env.DATABASE_URL): Promise<void> {
   } finally {
     await handle.close();
   }
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  loadWorkspaceEnv();
-  reset()
-    .then(() => {
-      console.log("database reset");
-      process.exit(0);
-    })
-    .catch((err) => {
-      console.error(err);
-      process.exit(1);
-    });
 }

@@ -1,0 +1,45 @@
+# ------------------------------------------------------------------
+# What never belongs in a build context.
+#
+# CI builds from a fresh checkout, so this changes nothing there. It
+# matters when someone builds from a working tree: `COPY . .` in the
+# build stage would otherwise copy the host's node_modules straight over
+# the one the deps stage just installed — replacing Linux binaries with
+# whatever the developer's machine has — and would bake .env and the
+# development database into a published image.
+# ------------------------------------------------------------------
+
+node_modules
+**/node_modules
+
+.git
+.gitignore
+
+# Built here, never brought in.
+dist
+**/dist
+.next
+**/.next
+.turbo
+**/.turbo
+*.tsbuildinfo
+**/*.tsbuildinfo
+agent/bin
+
+# Local state and secrets.
+.data
+.env
+.env.*
+!.env.example
+agent/.state
+
+# Test output.
+coverage
+playwright-report
+test-results
+e2e/.artifacts
+e2e/.state
+
+.claude
+.vscode
+.idea

@@ -46,6 +46,9 @@ RUN addgroup -g 10001 -S kaname && adduser -u 10001 -S kaname -G kaname
 
 COPY --from=build /app/apps/control-plane/dist ./dist
 COPY --from=build /app/packages/db/drizzle ./drizzle
+# Read at runtime, not bundled: the migrator resolves it beside its own
+# module, which after bundling is dist/.
+COPY --from=build /app/packages/db/src/hardening.sql ./dist/hardening.sql
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=agent /out/ ./public/
 COPY install.sh ./public/install.sh

@@ -1,8 +1,7 @@
 import { readFile } from "node:fs/promises";
-import { loadWorkspaceEnv } from "./env.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { sql } from "drizzle-orm";
 import { createDb, type DbHandle } from "./index.js";
 
@@ -55,19 +54,4 @@ function splitStatements(source: string): string[] {
         .trim(),
     )
     .filter(Boolean);
-}
-
-// pathToFileURL, not string concatenation: on Windows argv[1] is a drive
-// path and the naive form produces file://C:/... instead of file:///C:/...
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  loadWorkspaceEnv();
-  runMigrations()
-    .then(() => {
-      console.log("migrations applied");
-      process.exit(0);
-    })
-    .catch((err) => {
-      console.error(err);
-      process.exit(1);
-    });
 }

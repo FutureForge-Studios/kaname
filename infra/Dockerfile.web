@@ -22,6 +22,12 @@ RUN pnpm --filter @kaname/web build
 
 FROM base AS runtime
 ENV NODE_ENV=production
+# Next's standalone server binds $HOSTNAME, and Docker injects the
+# container id into that variable. Left alone it listens on a name
+# nothing can resolve, so the healthcheck never passes and every install
+# and every self-update reads as a failed boot.
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 RUN addgroup -S kaname && adduser -S kaname -G kaname
 # The standalone bundle is rooted at the workspace, so server.js lands
 # at apps/web/server.js with node_modules beside it. Static assets are

@@ -1,5 +1,3 @@
-import { pathToFileURL } from "node:url";
-import { loadWorkspaceEnv } from "./env.js";
 import { sql } from "drizzle-orm";
 import { createDb, type Database } from "./index.js";
 import * as s from "./schema/index.js";
@@ -998,15 +996,4 @@ function clamp(v: number, lo: number, hi: number): number {
 function round(v: number, digits: number): number {
   const f = 10 ** digits;
   return Math.round(v * f) / f;
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  loadWorkspaceEnv();
-  const handle = await createDb();
-  try {
-    await seedDemo(handle.db);
-  } finally {
-    await handle.close();
-  }
-  process.exit(0);
 }

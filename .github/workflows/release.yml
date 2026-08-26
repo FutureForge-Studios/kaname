@@ -28,11 +28,18 @@ jobs:
     outputs:
       version: ${{ steps.derive.outputs.version }}
       registry: ${{ steps.derive.outputs.registry }}
+      latest: ${{ steps.derive.outputs.latest }}
     steps:
       - name: Derive the version from the tag
         id: derive
         run: |
-          echo "version=${GITHUB_REF_NAME#v}" >>"$GITHUB_OUTPUT"
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          # A release candidate must not become what `:latest` resolves to.
+          case "$version" in
+            *-*) echo "latest=false" >>"$GITHUB_OUTPUT" ;;
+            *) echo "latest=true" >>"$GITHUB_OUTPUT" ;;
+          esac
           # The owner login is mixed case; a GHCR path may not be.
           owner="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
           echo "registry=ghcr.io/$owner" >>"$GITHUB_OUTPUT"
@@ -76,7 +83,10 @@ jobs:
           push: true
           tags: |
             ${{ needs.version.outputs.registry }}/${{ matrix.image }}:${{ needs.version.outputs.version }}
-            ${{ needs.version.outputs.registry }}/${{ matrix.image }}:latest
+            ${{ needs.version.outputs.latest == 'true' && format('{0}/{1}:latest', needs.version.outputs.registry, matrix.image) || '' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
@@ -116,8 +126,19 @@ jobs:
             GOARCH="$arch" go build -trimpath -o "bin/kanamed-linux-$arch" ./cmd/kanamed
           done
 
+      # main first, then generate. release-manifest.mjs prepends to the
+      # manifest it finds on disk, and the tag's copy predates any
+      # release recorded after it was cut — generating from the tag and
+      # then committing that over main erases those.
+      - name: Base the manifest on main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git checkout -f -B main origin/main
+
       # After the binaries exist: the manifest publishes a sha256 of
-      # each one, and a target with no build is left out entirely.
+      # each one, and a target with no build is left out entirely. The
+      # binaries live in agent/bin, which is gitignored, so the checkout
+      # above leaves them alone.
       - name: Write versions.json
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -133,33 +154,44 @@ jobs:
           args+=(--notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME")
           pnpm exec tsx scripts/release-manifest.mjs "${args[@]}"
 
-      - name: Commit the manifest to main
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-        run: |
-          cp versions.json "$RUNNER_TEMP/versions.json"
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git checkout -f -B main origin/main
-          cp "$RUNNER_TEMP/versions.json" versions.json
-          if git diff --quiet -- versions.json; then
-            echo "versions.json on main already describes $VERSION"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add versions.json
-          git commit -m "chore(release): versions.json for $VERSION"
-          git push origin HEAD:main
-
+      # Before the manifest is published, not after: the moment main
+      # carries it, every running instance can read agent URLs that
+      # point at this release's assets.
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
+          assets=(agent/bin/kanamed-linux-amd64 agent/bin/kanamed-linux-arm64)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --clobber "${assets[@]}"
+            exit 0
+          fi
           args=("$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes)
           case "$VERSION" in
             *-*) args+=(--prerelease) ;;
           esac
-          gh release create "${args[@]}" \
-            agent/bin/kanamed-linux-amd64 \
-            agent/bin/kanamed-linux-arm64
+          gh release create "${args[@]}" "${assets[@]}"
+
+      # install.sh is served from main and pins the version it installs,
+      # so a release that does not move that constant is invisible to
+      # everyone installing fresh. A prerelease deliberately does not
+      # become the default.
+      - name: Point main at this release
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          case "$VERSION" in
+            *-*) echo "prerelease: leaving install.sh pinned to the last stable" ;;
+            *) sed -i -E "s/^KANAME_DEFAULT_VERSION=\"[^\"]*\"/KANAME_DEFAULT_VERSION=\"$VERSION\"/" install.sh ;;
+          esac
+
+          if git diff --quiet -- versions.json install.sh; then
+            echo "main already describes $VERSION"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add versions.json install.sh
+          git commit -m "chore(release): $VERSION"
+          git push origin HEAD:main

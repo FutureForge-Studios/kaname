@@ -58,7 +58,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
 
   app.get("/health", async () => ({
     status: "ok",
-    version: process.env.npm_package_version ?? "0.1.0",
+    version: ctx.config.KANAME_VERSION,
     agents_connected: ctx.hub.connectedServerIds().length,
     subscribers: ctx.events.subscriberCount,
     driver: ctx.dbHandle.driver,

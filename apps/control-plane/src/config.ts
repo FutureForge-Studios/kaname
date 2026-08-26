@@ -33,6 +33,17 @@ export function loadEnvFile(startDir = process.cwd()): string | null {
   return null;
 }
 
+/**
+ * Environment variables are strings, and Zod's boolean coercion is just
+ * `Boolean(value)` — so "false" becomes true and a flag written as false
+ * can never turn anything off. This parses the word instead.
+ */
+const envBool = (fallback: boolean) =>
+  z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default(fallback ? "true" : "false")
+    .transform((value) => value === "true" || value === "1" || value === "yes");
+
 const schema = z.object({
   KANAME_ENV: z.enum(["development", "production", "test"]).default("development"),
   PORT: z.coerce.number().int().default(4000),
@@ -65,7 +76,7 @@ const schema = z.object({
   SECURE_COOKIES: z.enum(["true", "false", "auto"]).default("auto"),
 
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
-  LOG_PRETTY: z.coerce.boolean().default(false),
+  LOG_PRETTY: envBool(false),
 
   /** Agent hub tuning. */
   AGENT_HEARTBEAT_SECONDS: z.coerce.number().int().default(15),
@@ -74,7 +85,7 @@ const schema = z.object({
   ENROLLMENT_TOKEN_TTL_MINUTES: z.coerce.number().int().default(15),
 
   /** Job worker. */
-  JOB_WORKER_ENABLED: z.coerce.boolean().default(true),
+  JOB_WORKER_ENABLED: envBool(true),
   JOB_WORKER_CONCURRENCY: z.coerce.number().int().default(4),
   JOB_LEASE_SECONDS: z.coerce.number().int().default(60),
   JOB_POLL_MS: z.coerce.number().int().default(750),
@@ -104,7 +115,7 @@ const schema = z.object({
    */
   KANAME_SETUP_TOKEN: z.string().optional(),
   /** True when install.sh also paired an agent on this same host. */
-  KANAME_ALL_IN_ONE: z.coerce.boolean().default(false),
+  KANAME_ALL_IN_ONE: envBool(false),
 
   /** Root of the install: secrets, rollback snapshots, logs. */
   KANAME_DATA_DIR: z.string().optional(),

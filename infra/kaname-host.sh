@@ -252,7 +252,10 @@ apply() {
 
   mkdir -p "$(dirname "$LOG_FILE")"
   : >"$LOG_FILE"
-  chmod 0600 "$LOG_FILE"
+  # Handed to the uid that reads it back: the control plane splices this
+# into the update run the operator is watching.
+chmod 0640 "$LOG_FILE"
+chown "root:$KANAME_UID" "$LOG_FILE" 2>/dev/null || true
 
   # The request is consumed immediately, so a crash below cannot leave a
   # path unit re-triggering this in a loop.

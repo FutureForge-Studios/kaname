@@ -97,6 +97,7 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 log()  { printf '%s\n' "$*"; [ -n "$LOG_FILE" ] && printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" >>"$LOG_FILE"; return 0; }
 step() { log ""; log "==> $*"; }
+warn() { log "    !! $*"; }
 
 die() {
   printf '\n%s\n' "kaname: $*" >&2
