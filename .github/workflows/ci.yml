@@ -1,0 +1,51 @@
+# ==================================================================
+# Every push to main and every pull request.
+#
+# `pnpm verify` is the same command a developer runs locally, so a
+# green checkout and a green pipeline cannot disagree about what
+# "green" means.
+# ==================================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No version pin here: action-setup reads packageManager from
+      # package.json, so the lockfile and the CI pnpm stay in step.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm verify
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # install.sh is piped into a root shell on other people's
+      # servers. Nothing it reports is treated as advisory.
+      - name: shellcheck
+        run: |
+          shellcheck --version
+          shellcheck install.sh infra/*.sh

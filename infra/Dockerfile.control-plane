@@ -23,7 +23,11 @@ FROM deps AS build
 COPY . .
 RUN pnpm --filter @kaname/control-plane build
 
-FROM golang:1.23-alpine AS agent
+# Pinned to the build platform, not the target. One control plane hands
+# out agents to hosts of both architectures, so an arm64 image that
+# carried only an arm64 agent would be wrong; both are cross-compiled
+# here whatever the image itself ends up running on.
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS agent
 WORKDIR /agent
 COPY agent/go.mod agent/go.sum ./
 RUN go mod download

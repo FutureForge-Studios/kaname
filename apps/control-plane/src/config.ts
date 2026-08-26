@@ -46,6 +46,11 @@ const schema = z.object({
 
   /** Public origin of the panel, used in enrollment commands and cookies. */
   KANAME_PUBLIC_URL: z.string().default("http://localhost:3000"),
+  /**
+   * Empty while the panel is reachable only by IP. Setting it adds an
+   * HTTPS site without taking the IP one away.
+   */
+  KANAME_DOMAIN: z.string().optional(),
   /** Where agents dial. Usually the same origin behind the reverse proxy. */
   KANAME_AGENT_URL: z.string().optional(),
   /** Where a browser reaches this control plane for WebSockets. */

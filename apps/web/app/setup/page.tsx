@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Check,
   Copy,
+  Globe,
   KeyRound,
   RefreshCw,
   Server,
@@ -36,6 +37,12 @@ import {
   cn,
   useToast,
 } from "@kaname/ui";
+import {
+  domainProblem,
+  normalizeDomain,
+  type PanelAddress,
+  type PanelAddressApplying,
+} from "@/lib/address";
 import { ApiError, api, isApiError } from "@/lib/api";
 import { connectEventStream } from "@/lib/events";
 import { useSession } from "@/lib/queries";
@@ -61,6 +68,10 @@ export default function SetupPage() {
 
   const [state, setState] = React.useState<SetupState | null>(null);
   const [error, setError] = React.useState<ApiError | null>(null);
+  // Held here rather than applied on the preferences step: naming the
+  // panel restarts the control plane, and setup should be interrupted
+  // by that once, at the end, not between two of its own screens.
+  const [domain, setDomain] = React.useState("");
 
   const load = React.useCallback(async () => {
     try {
@@ -137,8 +148,10 @@ export default function SetupPage() {
       )}
       {step === "instance" && <InstanceStep onAdvance={setState} />}
       {step === "server" && <ServerStep onAdvance={setState} />}
-      {step === "preferences" && <PreferencesStep onAdvance={setState} />}
-      {step === "done" && <DoneStep state={state} />}
+      {step === "preferences" && (
+        <PreferencesStep domain={domain} onDomainChange={setDomain} onAdvance={setState} />
+      )}
+      {step === "done" && <DoneStep state={state} domain={domain} />}
     </Frame>
   );
 }
@@ -910,29 +923,58 @@ function PairingBlock({ pairing }: { pairing: PairingInstructions }) {
  * 5. Preferences — entirely skippable
  * ------------------------------------------------------------------ */
 
-function PreferencesStep({ onAdvance }: { onAdvance: (next: SetupState) => void }) {
+function PreferencesStep({
+  domain,
+  onDomainChange,
+  onAdvance,
+}: {
+  domain: string;
+  onDomainChange: (next: string) => void;
+  onAdvance: (next: SetupState) => void;
+}) {
   const [tier, setTier] = React.useState<UpdateTier>("notify");
   const [notify, setNotify] = React.useState(false);
   const [address, setAddress] = React.useState("");
   const [acme, setAcme] = React.useState("");
+  const [panel, setPanel] = React.useState<PanelAddress | null>(null);
+  const [domainDraft, setDomainDraft] = React.useState(domain);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [pending, setPending] = React.useState(false);
+
+  const nextDomain = normalizeDomain(domainDraft);
+  const problem = domainProblem(nextDomain);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api.get<PanelAddress>("/settings/address");
+        if (!cancelled) setPanel(result);
+      } catch {
+        // An instance that cannot answer this cannot change its own
+        // address either, so the field is simply not offered.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const save = async (skip: boolean) => {
     setPending(true);
     setError(null);
     try {
-      onAdvance(
-        await api.post<SetupState>("/setup/preferences", {
-          update_tier: skip ? "notify" : tier,
-          update_interval: "daily",
-          ...(!skip && acme.trim() ? { acme_email: acme.trim() } : {}),
-          notification:
-            !skip && notify && address.trim()
-              ? { kind: "email", address: address.trim() }
-              : { kind: "none" },
-        }),
-      );
+      const next = await api.post<SetupState>("/setup/preferences", {
+        update_tier: skip ? "notify" : tier,
+        update_interval: "daily",
+        ...(!skip && acme.trim() ? { acme_email: acme.trim() } : {}),
+        notification:
+          !skip && notify && address.trim()
+            ? { kind: "email", address: address.trim() }
+            : { kind: "none" },
+      });
+      onDomainChange(skip ? "" : nextDomain);
+      onAdvance(next);
     } catch (err) {
       setError(toError(err));
     } finally {
@@ -991,6 +1033,29 @@ function PreferencesStep({ onAdvance }: { onAdvance: (next: SetupState) => void 
           </p>
         </div>
 
+        {/* Offered only where there is nothing to lose: an instance that
+            already has a name is one that Settings owns, not this screen. */}
+        {panel?.managed && !panel.domain && (
+          <FormField
+            label="Panel domain"
+            hint="optional"
+            error={problem ?? undefined}
+            description="You are reading this over plain HTTP on this server's IP address. Point an A record at this server, leave ports 80 and 443 open, and Kaname will also serve the panel on that name over HTTPS with a certificate it renews. The IP address keeps working. Applied when you finish setup, not now."
+          >
+            <Input
+              mono
+              size="md"
+              boxClassName="w-72"
+              value={domainDraft}
+              onChange={(event) => setDomainDraft(event.target.value)}
+              onBlur={() => setDomainDraft(nextDomain)}
+              placeholder="panel.example.com"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </FormField>
+        )}
+
         <FormField
           label="ACME contact address"
           hint="Only needed if you will issue certificates from this panel. Let's Encrypt uses it for expiry warnings."
@@ -1013,6 +1078,7 @@ function PreferencesStep({ onAdvance }: { onAdvance: (next: SetupState) => void 
             size="md"
             iconRight={ArrowRight}
             loading={pending}
+            disabled={problem !== null}
             onClick={() => void save(false)}
           >
             Save and continue
@@ -1030,22 +1096,77 @@ function PreferencesStep({ onAdvance }: { onAdvance: (next: SetupState) => void 
  * 6. Done
  * ------------------------------------------------------------------ */
 
-function DoneStep({ state }: { state: SetupState }) {
+function DoneStep({ state, domain }: { state: SetupState; domain: string }) {
   const router = useRouter();
   const [pending, setPending] = React.useState(false);
+  const [completed, setCompleted] = React.useState(false);
+  const [applied, setApplied] = React.useState<PanelAddressApplying | null>(null);
   const [error, setError] = React.useState<ApiError | null>(null);
 
   const finish = async () => {
     setPending(true);
     setError(null);
     try {
-      await api.post<SetupState>("/setup/complete");
+      // Completing first, because applying the address takes the control
+      // plane down: a /setup/complete sent into that restart is the one
+      // request that decides whether this instance counts as set up.
+      if (!completed) {
+        await api.post<SetupState>("/setup/complete");
+        setCompleted(true);
+      }
+      if (domain) {
+        setApplied(await api.post<PanelAddressApplying>("/settings/address", { domain }));
+        setPending(false);
+        return;
+      }
       router.replace("/");
     } catch (err) {
       setError(toError(err));
       setPending(false);
     }
   };
+
+  if (applied) {
+    return (
+      <Card>
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--kn-r-sm)] bg-[var(--kn-accent-soft)] text-[var(--kn-accent-400)]">
+            <Globe size={14} aria-hidden />
+          </span>
+          <div className="min-w-0">
+            <h1 className="text-lg font-medium tracking-tight text-[var(--kn-text)]">
+              Setting up {applied.domain}
+            </h1>
+            <p className="mt-0.5 text-[var(--kn-text-2)]">
+              Kaname is restarting to pick up the name and asking the certificate authority for a
+              certificate. That usually lands inside a minute; the first attempt can be slower.
+            </p>
+          </div>
+        </div>
+
+        <p className="mt-3 text-sm text-[var(--kn-text-2)]">
+          The address you are on now keeps answering on port 80 throughout, so nothing here depends
+          on the certificate arriving. Once it does,{" "}
+          <span className="font-mono text-[var(--kn-text)]">{applied.public_url}</span> answers as
+          well &mdash; and if the A record is not pointing at this server yet, correct it and the
+          request retries on its own.
+        </p>
+
+        <Button
+          className="mt-4"
+          variant="primary"
+          size="md"
+          iconRight={ArrowRight}
+          onClick={() => router.replace("/")}
+          fullWidth
+        >
+          Open the Command Center
+        </Button>
+
+        <MasterKeyNote />
+      </Card>
+    );
+  }
 
   return (
     <Card>
@@ -1066,6 +1187,14 @@ function DoneStep({ state }: { state: SetupState }) {
         </div>
       </div>
 
+      {domain && (
+        <p className="mt-3 text-sm text-[var(--kn-text-2)]">
+          Finishing also names this panel{" "}
+          <span className="font-mono text-[var(--kn-text)]">{domain}</span>. Kaname restarts once to
+          apply it, and this address keeps working while it does.
+        </p>
+      )}
+
       <div className="mt-4">
         <StepError error={error} />
       </div>
@@ -1079,17 +1208,35 @@ function DoneStep({ state }: { state: SetupState }) {
         onClick={() => void finish()}
         fullWidth
       >
-        Open the Command Center
+        {error && completed ? "Try again" : "Open the Command Center"}
       </Button>
 
-      <p className="mt-3 flex items-start gap-1.5 text-xs text-[var(--kn-text-3)]">
-        <TriangleAlert size={12} className="mt-0.5 shrink-0" aria-hidden />
-        <span>
-          Back up <code className="font-mono">KANAME_MASTER_KEY</code> from the environment file the
-          installer wrote. Without it, every credential Kaname stores for you is unrecoverable.
-        </span>
-      </p>
+      {error && completed && (
+        <Button
+          className="mt-2"
+          variant="ghost"
+          size="sm"
+          onClick={() => router.replace("/")}
+          fullWidth
+        >
+          Continue without the domain
+        </Button>
+      )}
+
+      <MasterKeyNote />
     </Card>
+  );
+}
+
+function MasterKeyNote() {
+  return (
+    <p className="mt-3 flex items-start gap-1.5 text-xs text-[var(--kn-text-3)]">
+      <TriangleAlert size={12} className="mt-0.5 shrink-0" aria-hidden />
+      <span>
+        Back up <code className="font-mono">KANAME_MASTER_KEY</code> from the environment file the
+        installer wrote. Without it, every credential Kaname stores for you is unrecoverable.
+      </span>
+    </p>
   );
 }
 

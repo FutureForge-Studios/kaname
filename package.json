@@ -28,6 +28,7 @@
     "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {
+    "@kaname/contract": "workspace:*",
     "@types/node": "^22.10.5",
     "prettier": "^3.4.2",
     "rimraf": "^6.0.1",

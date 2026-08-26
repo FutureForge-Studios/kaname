@@ -15,12 +15,11 @@ decision in it — see [PLAN.md](PLAN.md) for the architecture and [DECISIONS.md
 for why each call was made.
 
 > [!IMPORTANT]
-> **Pre-release — the install below does not work yet.** Nothing has been published: this
-> repository has no commits, so the `curl` in the one-liner 404s before `sh` ever runs. Given the
-> script locally it then fails fetching the deployment files from the same unpublished ref, and
-> after that would fail pulling `ghcr.io/futureforge-studios/*`, which has never been pushed.
-> The installer is written and reviewed but has **no automated test and has never been run end to
-> end**. See [Status](#status) for the rest of what is and is not real.
+> **Beta, and not published yet.** The install below works once this repository has been pushed and
+> a `v*` tag has built the images — `.github/workflows/release.yml` publishes them to GHCR and
+> writes `versions.json`. Until that first tag exists, the one-liner has nothing to fetch. The
+> installer has also never been run end to end on a real server; it is reviewed and
+> shellcheck-gated in CI, not proven. See [Status](#status) for the rest.
 >
 > What works today is [running it from source](#running-it-from-source) against a simulated fleet.
 
@@ -59,25 +58,26 @@ Two consequences you will notice immediately:
 
 ## Install
 
-One command on a fresh server installs the control plane, the panel, Postgres and Caddy as a
-Compose project, and pairs an agent on that same box so it becomes managed server #1.
+One command on a fresh server. It installs the control plane, the panel, Postgres and Caddy as a
+Compose project, serves the panel on that server's IP, and pairs an agent on the same box so it
+becomes managed server #1.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FutureForge-Studios/kaname/main/install.sh | sudo sh -s -- --domain=panel.example.com
+curl -fsSL https://raw.githubusercontent.com/FutureForge-Studios/kaname/main/install.sh | sudo sh
 ```
 
+No arguments, no domain, no DNS record. When it finishes it prints an address like
+`http://203.0.113.10` and a setup token. You can set a domain and get HTTPS later, from inside the
+panel — see [Setting a domain](#setting-a-domain).
+
 `install.sh` is POSIX `sh` and is meant to be read before it is run — no obfuscation, and every
-file it downloads with `curl` has its URL printed first. (The container images it pulls come from
+file it downloads with `curl` has its URL printed first. (The container images come from
 `$KANAME_REGISTRY`, default `ghcr.io/futureforge-studios`, plus `postgres:16-alpine` and
 `caddy:2-alpine`; that pull logs to the install log rather than the terminal.) Read it first:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/FutureForge-Studios/kaname/main/install.sh | less
 ```
-
-> **Pass `--domain`.** Without it Caddy's only site address is the literal `localhost`, while the
-> installer still prints `http://<this box's first IP>` as the URL to open — an address Caddy will
-> not answer for. Nothing serves the panel until you set a domain.
 
 ### What the panel host needs
 
@@ -86,83 +86,70 @@ curl -fsSL https://raw.githubusercontent.com/FutureForge-Studios/kaname/main/ins
 | OS           | Linux with systemd. Tested on Debian 11+, Ubuntu 20.04+, Rocky/AlmaLinux/RHEL 9+, Fedora 38+. Only the distro **ID** is checked, never the version: `debian, ubuntu, raspbian, rocky, almalinux, rhel, centos, fedora` pass silently at any release; anything else warns and continues. |
 | Architecture | `x86_64` or `aarch64`. Nothing else is accepted.                                                                                                                                                                                                                                        |
 | Docker       | 24 or newer (server version), with the Compose v2 plugin. Installed from `https://get.docker.com` if absent.                                                                                                                                                                            |
-| Also         | `curl`, `tar`, and root.                                                                                                                                                                                                                                                                |
-| Network      | Ports 80 and 443 reachable. **The installer does not touch your firewall** — open them yourself.                                                                                                                                                                                        |
+| Also         | `curl` and root.                                                                                                                                                                                                                                                                        |
+| Network      | Port 80 reachable, and 443 too once you set a domain. **The installer does not touch your firewall** — open them yourself.                                                                                                                                                              |
 
 ### What it does, in order
 
-1. **Open the log.** `<data-dir>/logs/` is created before any check runs — so a non-root
+1. **Open the log.** `/etc/kaname/logs/` is created before any check runs — so a non-root
    invocation dies on that `mkdir`, not on the friendly root check below.
-2. **Preflight.** OS, architecture, systemd, root, `curl`/`tar`. Fails loudly and names what is
-   missing rather than half-proceeding.
+2. **Preflight.** OS, architecture, systemd, root, `curl`. Fails loudly and names what is missing
+   rather than half-proceeding.
 3. **Docker.** Installs it if absent; verifies the server version is 24+ and that the Compose
    plugin is there.
-4. **Existing install?** A re-run is a reconfigure-and-repair, never a wipe. Secrets and data are
-   kept, deployment files and units are refreshed.
-5. **Secrets.** `KANAME_MASTER_KEY`, the Postgres password and the setup token are generated on
-   the machine with `openssl rand` (or `/dev/urandom` if openssl is absent). No placeholder or
+4. **Existing install?** A re-run is a reconfigure-and-repair, never a wipe.
+5. **Secrets and address.** Finds this server's primary IPv4 address with `ip route get` — no
+   external service is contacted — and generates `KANAME_MASTER_KEY`, the Postgres password and the
+   setup token with `openssl rand` (or `/dev/urandom` if openssl is absent). No placeholder or
    example credential exists anywhere in the installer or the images.
-6. **Deployment files.** Fetches `infra/docker-compose.yml`, `infra/Caddyfile` and
-   `infra/kaname-update.sh` from `KANAME_SOURCE_URL`, printing each URL first.
+6. **Deployment files.** Fetches `infra/docker-compose.yml` and `infra/kaname-host.sh`, printing
+   each URL first, then generates the Caddyfile from `.env`.
 7. **Update units.** Writes the two `kaname-update` systemd units and enables the path watcher.
 8. **Deploy.** Pulls the pinned images and brings the project up with `--wait`.
-9. **Pair.** On a _first_ install in the default mode, mints an enrollment token through the
-   control plane on loopback and enrols a local `kanamed`. Skipped by `--control-plane-only`,
-   `--agent-only`, `--no-start` — and skipped on any re-run, which restarts the agent already
-   paired here instead of pairing a second time.
-10. **Verify.** Waits for `/health`, and — in the default mode — waits up to 60 seconds for
-    `/health` to report at least one connected agent. If either fails it prints what broke and the
-    exact command to investigate, and does not claim success.
+9. **Pair.** Unless `--control-plane-only`, enrols a local `kanamed` over loopback. Whether to pair
+   is decided by whether this host is _actually enrolled_, so a run that failed at pairing is fixed
+   by running the installer again.
+10. **Verify.** Waits for `/health`, and — in the default mode — for `/health` to report at least
+    one connected agent. If either fails it prints what broke and the command to investigate, and
+    does not claim success.
 11. **Print** the URL, the setup token, and where the secrets live.
 
-Everything is logged to the terminal and to `<data-dir>/logs/install-<timestamp>.log`.
-
-> A failure _before_ pairing is safe to re-run over. A failure **at** pairing is not: `.env`
-> already exists by then, so the re-run is treated as a repair, skips pairing, and fails
-> verification every time. Clear it with `--force`, or enrol the agent by hand.
+Everything is logged to the terminal and to `/etc/kaname/logs/install-<timestamp>.log`.
 
 ### Modes
 
 ```bash
 # Control plane + an agent on this box (the default)
-curl -fsSL <installer> | sudo sh -s -- --domain=panel.example.com
+curl -fsSL <installer> | sudo sh
 
 # Control plane only — pair servers separately
-curl -fsSL <installer> | sudo sh -s -- --domain=panel.example.com --control-plane-only
+curl -fsSL <installer> | sudo sh -s -- --control-plane-only
 
 # A managed server, joining an existing panel
 curl -fsSL <installer> | sudo sh -s -- \
-  --agent-only --token=<pairing-token> --control-plane=https://panel.example.com
+  --agent-only --token=<pairing-token> --control-plane=http://203.0.113.10
 ```
 
-A managed server needs **no Docker** — only systemd, `curl`, `tar` and root. `--agent-only` skips
-the Docker check entirely.
+A managed server needs **no Docker** — only systemd, `curl` and root. `--agent-only` skips the
+Docker check entirely.
 
 ### Flags
 
-| Flag                    | Default           |                                                                                                                                                                                                                                                                   |
-| ----------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--domain=<domain>`     | `localhost`       | Public domain. Caddy gets a certificate for it.                                                                                                                                                                                                                   |
-| `--control-plane-only`  | off               | Install the control plane; pair no agent here.                                                                                                                                                                                                                    |
-| `--agent-only`          | off               | Install only the agent. Requires `--token` and `--control-plane`.                                                                                                                                                                                                 |
-| `--token=<token>`       | —                 | Pairing token from **Infrastructure → Servers → Add server**.                                                                                                                                                                                                     |
-| `--control-plane=<url>` | —                 | Where the agent dials. (`--url` is accepted as an alias.)                                                                                                                                                                                                         |
-| `--version=<version>`   | `0.1.0`           | Release to install.                                                                                                                                                                                                                                               |
-| `--data-dir=<path>`     | `/etc/kaname`     | Install root.                                                                                                                                                                                                                                                     |
-| `--state-dir=<path>`    | `/var/lib/kaname` | Agent identity directory.                                                                                                                                                                                                                                         |
-| `--force`               | off               | Only when `<data-dir>/.env` exists: `docker compose down -v` and delete the data root, after listing what it will destroy. Leaves the agent behind — the binary, `kanamed.service`, the identity in `/var/lib/kaname` and both `kaname-update` units all survive. |
-| `--no-start`            | off               | Write the deployment files and the systemd units; start no containers. The `kaname-update.path` watcher **is** enabled and started, and Docker is installed and started if it was absent.                                                                         |
-| `--debug`               | off               | `set -x`.                                                                                                                                                                                                                                                         |
-| `--help`                |                   | Usage. `-h` also works.                                                                                                                                                                                                                                           |
+Seven, and none of them required.
+
+| Flag                    | Default |                                                                        |
+| ----------------------- | ------- | ---------------------------------------------------------------------- |
+| `--control-plane-only`  | off     | Install the control plane; pair no agent here.                         |
+| `--agent-only`          | off     | Install only the agent. Requires `--token` and `--control-plane`.      |
+| `--token=<token>`       | —       | Pairing token from **Infrastructure → Servers → Add server**.          |
+| `--control-plane=<url>` | —       | Where the agent dials.                                                 |
+| `--version=<version>`   | `0.1.0` | Release to install.                                                    |
+| `--force`               | off     | Destroy an existing install first, after listing what it will destroy. |
+| `--help`                |         | Usage. `-h` also works.                                                |
 
 Every value flag accepts both `--flag value` and `--flag=value`. `KANAME_SOURCE_URL` and
-`KANAME_REGISTRY` are environment-overridable, which is how you point the installer at a fork or
-a private registry.
-
-Re-running with `--domain`, `--version` or a different image changes nothing that is deployed:
-those live in `<data-dir>/.env`, which an existing install keeps. (The closing banner still echoes
-whatever `--version` you passed — trust the `.env` over it.) Edit that file, or use `--force`, to
-change them.
+`KANAME_REGISTRY` are environment-overridable, which is how you point the installer at a fork or a
+private registry.
 
 ### What lands on disk
 
@@ -170,14 +157,14 @@ In the default all-in-one mode:
 
 ```
 /etc/kaname/                       0750 root:10001 — numeric gid the control-plane image runs as
-  .env                             0640 — secrets and pinned image tags
+  .env                             0660 — secrets, the address, and pinned image tags
   docker-compose.yml
-  Caddyfile
-  logs/                            install logs
+  Caddyfile                        generated from .env; edits are lost on the next address change
+  logs/                            install and reconfigure logs
   rollback/                        per-update .env snapshots
-  updates/queue/                   update requests for the host-side updater
+  updates/queue/                   requests for the host-side helper
 /usr/local/bin/kanamed             the agent            — not installed by --control-plane-only
-/usr/local/lib/kaname/kaname-update.sh                  — control-plane installs only
+/usr/local/lib/kaname/kaname-host.sh                    — control-plane installs only
 /var/lib/kaname/                   0700 — the agent's key, certificate and CA
 ```
 
@@ -190,15 +177,13 @@ systemd units: `kanamed.service` (the agent — all-in-one and `--agent-only` on
 Only the `.path` unit is enabled; the service has no `[Install]` section and runs when a request
 file appears in the queue.
 
-Ports: Caddy holds **80** and **443**. The control-plane container publishes **127.0.0.1:4000**
-only, so nothing reaches that port directly from outside the box — but the API itself is public:
-Caddy proxies `/api/*`, `/agent/*`, `/health`, `/install.sh` and `/download/*` to it on 443, which
-is how the browser and remote agents reach it.
+Ports: Caddy holds **80**, and **443** once a domain is set. The control-plane container publishes
+**127.0.0.1:4000** only, so nothing reaches that port directly from outside the box — but the API
+itself is public: Caddy proxies `/api/*`, `/agent/*`, `/health`, `/install.sh` and `/download/*` to
+it, which is how the browser and remote agents reach it.
 
-> **Back up `KANAME_MASTER_KEY` from `<data-dir>/.env`, somewhere that is not the server.** It
+> **Back up `KANAME_MASTER_KEY` from `/etc/kaname/.env`, somewhere that is not the server.** It
 > wraps every credential Kaname stores for you. Losing it loses all of them, permanently.
-
----
 
 ## First run
 
@@ -245,6 +230,25 @@ its certificate and drops the socket immediately. Certificates are valid 90 days
 auto-rotate** — a host has to be re-enrolled by hand after that.
 
 ---
+
+## Setting a domain
+
+A fresh install answers on its IP over plain HTTP. There is no certificate, and
+`SECURE_COOKIES` is off — a `__Host-` prefixed cookie is never stored over plain HTTP, so the
+alternative would be an install nobody can sign in to.
+
+Point an A record at the server, then set the domain from **Administration → Settings → Address**,
+or on the last step of onboarding. Ports 80 and 443 both have to be reachable for the certificate
+to be issued.
+
+Setting a domain **adds** a site rather than moving one. Caddy's configuration is regenerated with
+both the `:80` block and the new name, so the IP address you are currently looking at keeps working
+while the certificate is provisioned, and secure cookies switch on. There is no window where the
+panel is unreachable at the address you arrived by, and clearing the domain returns you to the IP.
+
+The control plane writes the change into `.env` and queues it for the same host-side unit that
+applies updates — a container cannot regenerate the proxy in front of it and restart itself. The
+panel blinks for a few seconds while that happens.
 
 ## Keeping it current
 
@@ -357,9 +361,10 @@ packages/db/           Drizzle schema, migrations, demo seed
 packages/ui/           Design tokens and the shared component system
 agent/                 kanamed — Go, static binary, no listening socket
 e2e/                   Playwright over a stack it boots from source
-infra/                 compose files, Dockerfiles, Caddyfile, the host-side updater
+infra/                 compose files, Dockerfiles, kaname-host.sh (the host-side helper)
 scripts/               verify.mjs, the dev-fleet launcher, the release-manifest builder
 docs/                  agent protocol and design-system references
+.github/workflows/     CI (pnpm verify + shellcheck) and the tagged release pipeline
 install.sh             the one-line installer
 versions.json          the published release manifest
 ```
@@ -408,23 +413,13 @@ Further reading: [`docs/agent-protocol.md`](docs/agent-protocol.md) for the wire
 
 Honest about what is and is not real.
 
-**Not released.** No tag, no published images, no CI, and the repository has no commits yet.
+**Beta.** 0.x, no tag pushed yet, and the images are published by CI on the first `v*` tag rather
+than existing today.
 
 **Never run on a real host.** Every host-touching file in the Linux provider is behind
 `//go:build linux`; it compiles, cross-compiles, and its pure logic is unit-tested, but this was
 built on Windows and that code has never executed. Everything demonstrable today runs through the
-simulated provider.
-
-**Known bugs that block a real install:**
-
-- The control plane serves `/install.sh` and `/download/kanamed-linux-*` from a path resolved
-  relative to its own module, which is only correct in a source checkout — inside the built image
-  both 404, so all-in-one pairing and the add-a-server one-liner cannot fetch the agent.
-- The control plane cannot write `<data-dir>/.env` (it is `0640 root:10001` in a `0750` directory,
-  so its uid has read but not write), which is the first thing a self-update tries to do. That
-  path has only ever run against a temp-directory fixture.
-- A rolled-back update re-`chmod`s `.env` to `0600`, after which the control plane cannot read it
-  either.
+simulated provider. The installer likewise has no automated test beyond shellcheck.
 
 **Scaffolding — present in the UI, not wired to a host:**
 
@@ -438,14 +433,13 @@ simulated provider.
 - sshd configuration changes arm a rollback timer on the agent with no way to confirm them, so a
   change made with the default window silently reverts.
 - The job drawer links to a job-detail page that does not exist.
+- Agent certificates are valid 90 days and do not auto-rotate.
 - Terminal recordings are never pruned.
 
 **What is real**, and covered by the test suites plus an end-to-end Playwright run over four live
 simulated agents: the three-tier boundary, enrollment and the RPC protocol, the job queue and its
 worker, RBAC with per-server scoping, the audit chain, the mail DNS-authentication engine, the
 terminal, onboarding, and the update system's decision logic.
-
----
 
 ## Licence
 

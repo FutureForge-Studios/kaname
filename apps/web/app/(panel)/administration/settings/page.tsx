@@ -5,6 +5,7 @@ import {
   Archive,
   ArrowUpCircle,
   Bell,
+  Globe,
   Plus,
   RadioTower,
   Save,
@@ -44,6 +45,12 @@ import {
   cn,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
+import {
+  domainProblem,
+  normalizeDomain,
+  type PanelAddress,
+  type PanelAddressApplying,
+} from "@/lib/address";
 import { api, type ApiError } from "@/lib/api";
 import type { IconComponent } from "@/lib/icons";
 import { timeZoneOptions } from "@/lib/cron";
@@ -53,10 +60,10 @@ import { useCan, useList, useResource, useResourceMutation } from "@/lib/queries
 /* ------------------------------------------------------------------ *
  * Settings.
  *
- * Six sections, one save button each. That is deliberate: a single
- * "Save everything" would let a stray keystroke in the ACME block ride
- * along with a deliberate change to session lifetime, and the audit
- * entry would record both as one act.
+ * One save button per section, never one for the page. That is
+ * deliberate: a single "Save everything" would let a stray keystroke in
+ * the ACME block ride along with a deliberate change to session
+ * lifetime, and the audit entry would record both as one act.
  *
  * The rows are FieldRow rather than stacked FormFields because settings
  * are read far more often than they are edited — a dense two-column
@@ -118,6 +125,7 @@ export default function SettingsPage() {
         {doc && (
           <>
             <PanelSection value={doc.panel} readOnly={readOnly} />
+            <AddressSection readOnly={readOnly} />
             <UpdatesSection readOnly={readOnly} />
             <SecuritySection value={doc.security} readOnly={readOnly} />
             <AgentsSection value={doc.agents} readOnly={readOnly} />
@@ -381,6 +389,206 @@ function PanelSection({
         />
       </FieldRow>
     </SettingsSection>
+  );
+}
+
+/* ------------------------------ address ----------------------------- */
+
+/**
+ * Not a settings write. Naming the panel regenerates the reverse proxy
+ * configuration and restarts the control plane, so it has its own
+ * endpoint and its own typed confirmation — and it only ever *adds* the
+ * HTTPS site. The plain site on :80 stays, which is what makes this
+ * safe to try: a name whose A record is not in place yet cannot take
+ * away the address the operator is reading this page on.
+ */
+function AddressSection({ readOnly }: { readOnly: boolean }) {
+  const address = useResource<PanelAddress>("address", "panel", { path: "/settings/address" });
+  const [draft, setDraft] = React.useState<string | null>(null);
+  const [applied, setApplied] = React.useState<PanelAddressApplying | null>(null);
+  const [error, setError] = React.useState<ApiError | null>(null);
+  const [confirming, setConfirming] = React.useState(false);
+
+  const current = address.data ?? null;
+  const stored = (applied ? applied.domain : current?.domain) ?? "";
+  const publicUrl = applied?.public_url ?? current?.public_url ?? "";
+  const raw = draft ?? stored;
+  const domain = normalizeDomain(raw);
+  const problem = domainProblem(domain);
+
+  const mutation = useResourceMutation<string, PanelAddressApplying>({
+    mutationFn: (next) => api.post<PanelAddressApplying>("/settings/address", { domain: next }),
+    /*
+     * Nothing is invalidated on purpose: the control plane is going down
+     * as this resolves, so a refetch would replace a successful apply
+     * with a connection error and tell the operator the opposite of
+     * what happened.
+     */
+    successMessage: () => "Applying. The control plane is restarting.",
+    onDone: (result) => {
+      setApplied(result);
+      setDraft(null);
+      setConfirming(false);
+    },
+    onFailed: (failure) => {
+      setError(failure);
+      setConfirming(false);
+    },
+  });
+
+  const managed = current?.managed ?? false;
+
+  return (
+    <>
+      <SettingsSection
+        title="Address"
+        description="Where this panel answers, and how to give it a name."
+        icon={Globe}
+        dirty={managed && domain !== stored && problem === null}
+        saving={mutation.isPending}
+        readOnly={readOnly || !managed}
+        error={error}
+        onSave={() => {
+          setError(null);
+          setConfirming(true);
+        }}
+        onReset={() => {
+          setDraft(null);
+          setError(null);
+        }}
+      >
+        {address.isLoading && (
+          <div className="py-3">
+            <Skeleton className="h-16" label="Loading the panel address" />
+          </div>
+        )}
+
+        {address.isError && (
+          <div className="py-3">
+            <PageError
+              error={address.error}
+              onRetry={() => void address.refetch()}
+              context="Address"
+            />
+          </div>
+        )}
+
+        {applied && (
+          <div
+            role="status"
+            className="mt-3 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-3 py-2 text-sm text-[var(--kn-text-2)]"
+          >
+            {applied.domain
+              ? `Applying ${applied.public_url}. The control plane is restarting and the certificate is being requested — reload this page in a minute.`
+              : "Removing the domain. The control plane is restarting — reload this page in a minute."}
+          </div>
+        )}
+
+        {current && (
+          <>
+            <FieldRow
+              label="Current address"
+              description={
+                current.tls
+                  ? "Served over HTTPS on the domain, and still over plain HTTP on this server's IP address."
+                  : "Served over plain HTTP on port 80. On an untrusted network the session cookie is readable in transit."
+              }
+            >
+              <span className="font-mono text-sm text-[var(--kn-text-2)]">{publicUrl}</span>
+            </FieldRow>
+
+            {managed ? (
+              <>
+                <FieldRow
+                  label="Domain"
+                  description="Empty means the IP address only. Setting it adds an HTTPS site for the name; it does not take the IP one away."
+                  error={problem ?? undefined}
+                >
+                  <Input
+                    mono
+                    boxClassName="w-80"
+                    placeholder="panel.example.com"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={readOnly}
+                    value={raw}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onBlur={() => setDraft(domain)}
+                  />
+                </FieldRow>
+
+                <div className="flex flex-col gap-2 py-3 text-sm text-[var(--kn-text-2)]">
+                  <p>
+                    Two things have to be true before the name resolves here: an A record for it
+                    points at this server, and ports 80 and 443 are reachable from the internet.
+                    Port 80 is how the certificate authority proves the name is yours; 443 is how
+                    the panel is served once it has.
+                  </p>
+                  <p>
+                    Applying restarts the control plane, so the panel is unavailable for a few
+                    seconds. The plain HTTP site on port 80 is kept either way &mdash; if the
+                    certificate never issues, this address still answers.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col gap-2 py-3 text-sm text-[var(--kn-text-2)]">
+                <p>
+                  This instance was not installed by{" "}
+                  <code className="font-mono text-[var(--kn-text)]">install.sh</code>, so Kaname
+                  does not own the proxy in front of it and will not rewrite a configuration it did
+                  not write. The address is whatever your own proxy, ingress or compose file says it
+                  is.
+                </p>
+                <p>
+                  Terminate TLS there and point{" "}
+                  <code className="font-mono text-[var(--kn-text)]">KANAME_PUBLIC_URL</code> at the
+                  address you serve it on.
+                </p>
+              </div>
+            )}
+          </>
+        )}
+      </SettingsSection>
+
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title={domain ? `Serve this panel at ${domain}` : "Remove the domain"}
+        confirmText={domain || "remove domain"}
+        confirmLabel={domain ? "Apply" : "Remove it"}
+        destructive={domain.length === 0}
+        loading={mutation.isPending}
+        onConfirm={() => mutation.mutate(domain)}
+      >
+        <div className="flex flex-col gap-2 text-[var(--kn-text-2)]">
+          {domain ? (
+            <>
+              <p>
+                Kaname keeps the plain site on port 80 and adds{" "}
+                <span className="font-mono text-[var(--kn-text)]">{domain}</span> beside it, then
+                asks the certificate authority for a certificate. If the A record is not pointing
+                here yet, that request keeps failing until it is &mdash; nothing else breaks, and
+                nothing has to be re-applied once you fix the record.
+              </p>
+              <p>
+                The control plane restarts to pick this up. The panel is unavailable for a few
+                seconds and requests in flight are lost; sessions are not.
+              </p>
+            </>
+          ) : (
+            <>
+              <p>
+                The panel goes back to plain HTTP on this server&rsquo;s IP address. Anything
+                pointed at <span className="font-mono text-[var(--kn-text)]">{stored}</span> &mdash;
+                a bookmark, an agent, a webhook &mdash; stops resolving to this panel.
+              </p>
+              <p>The control plane restarts to pick this up.</p>
+            </>
+          )}
+        </div>
+      </ConfirmDialog>
+    </>
   );
 }
 

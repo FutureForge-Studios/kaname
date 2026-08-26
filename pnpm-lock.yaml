@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@kaname/contract':
+        specifier: workspace:*
+        version: link:packages/contract
       '@types/node':
         specifier: ^22.10.5
         version: 22.20.1

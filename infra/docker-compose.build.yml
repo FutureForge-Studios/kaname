@@ -1,9 +1,14 @@
 # ------------------------------------------------------------------
-# Building and publishing the images.
+# Building and publishing the images by hand.
 #
+#   docker buildx create --use            # once, for the two platforms
 #   cd infra
 #   KANAME_VERSION=0.2.0 docker compose -f docker-compose.build.yml build
 #   KANAME_VERSION=0.2.0 docker compose -f docker-compose.build.yml push
+#
+# Releases normally come out of .github/workflows/release.yml; this is
+# the same two builds, kept here so a fork can publish to its own
+# registry without GitHub Actions.
 #
 # Deliberately separate from docker-compose.yml: the file install.sh
 # puts on a server has no build context, because that server does not
@@ -17,6 +22,9 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.control-plane
+      platforms:
+        - linux/amd64
+        - linux/arm64
       args:
         KANAME_VERSION: ${KANAME_VERSION:-0.1.0}
 
@@ -25,5 +33,8 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile.web
+      platforms:
+        - linux/amd64
+        - linux/arm64
       args:
         KANAME_CONTROL_PLANE_URL: http://control-plane:4000

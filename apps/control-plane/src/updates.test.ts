@@ -9,6 +9,7 @@ import { migrateHandle } from "@kaname/db/migrate";
 import { auditEvents, servers, settings, updateRuns } from "@kaname/db/schema";
 import {
   mayApplyUnattended,
+  type AddressSettings,
   type Release,
   type UpdateOverview,
   type UpdateRun,
@@ -340,6 +341,73 @@ describe("the agent fleet", () => {
     });
     expect(res.statusCode).toBe(412);
     expect(JSON.parse(res.body).error.message).toContain("simulated");
+  });
+});
+
+describe("the panel's own address", () => {
+  it("starts on the IP, with no domain and no TLS", async () => {
+    const res = await as("/api/v1/settings/address", undefined, "GET");
+    expect(res.statusCode, res.body).toBe(200);
+
+    const address = body<AddressSettings>(res);
+    expect(address.domain).toBeNull();
+    expect(address.tls).toBe(false);
+    expect(address.managed).toBe(true);
+  });
+
+  it("refuses something that is not a hostname", async () => {
+    const res = await as("/api/v1/settings/address", { domain: "not a domain" });
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.body).error.fields.domain).toContain("panel.example.com");
+  });
+
+  it("adds a domain without taking the IP away", async () => {
+    const before = dispatcher.requests.length;
+    const res = await as("/api/v1/settings/address", { domain: "Panel.Example.COM" });
+    expect(res.statusCode, res.body).toBe(202);
+
+    const address = body<AddressSettings & { applying: boolean }>(res);
+    expect(address.domain).toBe("panel.example.com");
+    expect(address.public_url).toBe("https://panel.example.com");
+    expect(address.tls).toBe(true);
+    expect(address.applying).toBe(true);
+
+    const env = readFileSync(join(dataDir, ".env"), "utf8");
+    expect(env).toContain("KANAME_DOMAIN=panel.example.com");
+    expect(env).toContain("KANAME_PUBLIC_URL=https://panel.example.com");
+    // A secure cookie is only possible once there is TLS to carry it.
+    expect(env).toContain("KANAME_SECURE_COOKIES=auto");
+
+    const request = dispatcher.requests[dispatcher.requests.length - 1]!;
+    expect(dispatcher.requests.length).toBe(before + 1);
+    expect(request.kind).toBe("reconfigure");
+  });
+
+  it("goes back to plain HTTP when the domain is cleared", async () => {
+    const res = await as("/api/v1/settings/address", { domain: "" });
+    expect(res.statusCode, res.body).toBe(202);
+    // Back to the address the installer set up, not http://<domain>.
+    expect(body<AddressSettings>(res).public_url).toBe("http://localhost:3000");
+    expect(body<AddressSettings>(res).domain).toBeNull();
+
+    const env = readFileSync(join(dataDir, ".env"), "utf8");
+    expect(env).toContain("KANAME_SECURE_COOKIES=false");
+    expect(env).toContain("KANAME_DOMAIN=");
+  });
+
+  it("says so rather than pretending when there is no host helper", async () => {
+    dispatcher.installed = false;
+    try {
+      expect(body<AddressSettings>(await as("/api/v1/settings/address", undefined, "GET")).managed).toBe(
+        false,
+      );
+
+      const res = await as("/api/v1/settings/address", { domain: "panel.example.com" });
+      expect(res.statusCode).toBe(412);
+      expect(JSON.parse(res.body).error.message).toContain("does not manage its own address");
+    } finally {
+      dispatcher.installed = true;
+    }
   });
 });
 

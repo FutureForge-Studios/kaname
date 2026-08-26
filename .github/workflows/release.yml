@@ -1,0 +1,162 @@
+# ==================================================================
+# Cutting a release.
+#
+#   git tag -a v0.2.0 -m "What changed"
+#   git push origin v0.2.0
+#
+# Images go to GHCR, agent binaries go to the GitHub release, and
+# versions.json — the file a running instance reads to decide whether
+# it may update itself — is regenerated and pushed back to main.
+#
+# The manifest lands only after the images do. It names image tags by
+# reference, so publishing it first would point live instances at tags
+# that do not exist yet.
+# ==================================================================
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+      registry: ${{ steps.derive.outputs.registry }}
+    steps:
+      - name: Derive the version from the tag
+        id: derive
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >>"$GITHUB_OUTPUT"
+          # The owner login is mixed case; a GHCR path may not be.
+          owner="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          echo "registry=ghcr.io/$owner" >>"$GITHUB_OUTPUT"
+
+  images:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - image: kaname-control-plane
+            dockerfile: infra/Dockerfile.control-plane
+            build-args: KANAME_VERSION=${{ needs.version.outputs.version }}
+          - image: kaname-web
+            dockerfile: infra/Dockerfile.web
+            build-args: KANAME_CONTROL_PLANE_URL=http://control-plane:4000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          build-args: ${{ matrix.build-args }}
+          push: true
+          tags: |
+            ${{ needs.version.outputs.registry }}/${{ matrix.image }}:${{ needs.version.outputs.version }}
+            ${{ needs.version.outputs.registry }}/${{ matrix.image }}:latest
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  release:
+    needs: [version, images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Full history: the manifest commit is pushed back to main, and a
+      # shallow clone cannot push.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the agent binaries
+        working-directory: agent
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          for arch in amd64 arm64; do
+            GOARCH="$arch" go build -trimpath -o "bin/kanamed-linux-$arch" ./cmd/kanamed
+          done
+
+      # After the binaries exist: the manifest publishes a sha256 of
+      # each one, and a target with no build is left out entirely.
+      - name: Write versions.json
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          KANAME_REGISTRY: ${{ needs.version.outputs.registry }}
+        run: |
+          args=("$VERSION")
+          # A breaking release may never apply itself unattended, and the
+          # tag message is the only place that fact is written down.
+          case "$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")" in
+            *BREAKING*) args+=(--breaking) ;;
+          esac
+          args+=(--summary "$(git tag -l --format='%(contents:subject)' "$GITHUB_REF_NAME")")
+          args+=(--notes-url "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME")
+          pnpm exec tsx scripts/release-manifest.mjs "${args[@]}"
+
+      - name: Commit the manifest to main
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cp versions.json "$RUNNER_TEMP/versions.json"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git checkout -f -B main origin/main
+          cp "$RUNNER_TEMP/versions.json" versions.json
+          if git diff --quiet -- versions.json; then
+            echo "versions.json on main already describes $VERSION"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add versions.json
+          git commit -m "chore(release): versions.json for $VERSION"
+          git push origin HEAD:main
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          args=("$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes)
+          case "$VERSION" in
+            *-*) args+=(--prerelease) ;;
+          esac
+          gh release create "${args[@]}" \
+            agent/bin/kanamed-linux-amd64 \
+            agent/bin/kanamed-linux-arm64

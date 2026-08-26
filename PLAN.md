@@ -546,8 +546,8 @@ remediation, not a raw record dump:
   `kanamed --simulate` with a seeded fake fleet — the entire product, no Docker, no Linux box,
   on Windows or macOS.
 - `pnpm dev:pg` swaps PGlite for a real Postgres via `DATABASE_URL`.
-- Production: one command — `curl -fsSL https://get.kaname.dev/install.sh | sudo sh` — which
-  deploys the Compose project and pairs an agent on the same box. Further servers join with
+- Production: one command — `curl -fsSL <raw>/install.sh | sudo sh` — which deploys the Compose
+  project on the server's IP and pairs an agent on the same box. Further servers join with
   `... | sudo sh -s -- --agent-only --token=<pairing-token> --control-plane=<url>`. See section 9.
 - Secrets: `KANAME_MASTER_KEY` (32-byte base64) is required at boot; the process refuses to
   start without it. All at-rest secrets are envelope-encrypted with per-row DEKs.
@@ -561,15 +561,17 @@ without an operator having to remember it exists.
 
 ### 9.1 Packaging
 
-`install.sh` at the repo root is the only entry point. One constant, `KANAME_SOURCE_URL`, drives
-every self-reference in it, so moving to `get.kaname.dev` is a one-line change. It fetches
-exactly three files and prints each URL before fetching it.
+`install.sh` at the repo root is the only entry point. Two constants — `KANAME_SOURCE_URL` and
+`KANAME_REGISTRY` — carry every self-reference and are environment-overridable, so a fork
+publishes to its own registry without touching the script. It fetches exactly two files and
+prints each URL before fetching it.
 
 | Piece                | Shipped as                                                              |
 | -------------------- | ----------------------------------------------------------------------- |
 | Control plane, panel | Container images, pinned by tag in `.env`                               |
 | Postgres, Caddy      | Upstream images                                                         |
 | Deployment           | `infra/docker-compose.yml` — no build context, so it works with no repo |
+| Reverse proxy        | A Caddyfile generated on the host by `kaname-host.sh` from `.env`       |
 | Agent                | A static Go binary under systemd, served by the control plane itself    |
 | Host updater         | `infra/kaname-update.sh` plus a systemd path unit                       |
 
@@ -578,15 +580,35 @@ is deliberately not containerised — its job is to manage the host, so containi
 handing that container the privileges the architecture exists to avoid concentrating.
 
 Modes: all-in-one by default (control plane plus an agent paired over loopback), with
-`--control-plane-only` and `--agent-only --token=… --control-plane=…`. Re-running is a
-reconfigure-and-repair pass; `--force` is the only thing that destroys anything, and it lists
-what it is about to destroy first.
+`--control-plane-only` and `--agent-only --token=… --control-plane=…`. Seven flags in total and
+no required ones. Re-running is a reconfigure-and-repair pass, and whether to pair is decided by
+whether the host is actually enrolled rather than by whether `.env` exists, so a run that failed
+at pairing can be repaired by running it again. `--force` is the only thing that destroys
+anything, and it lists what it is about to destroy first.
 
 Secrets — the master key, the database password, the setup token — come from `openssl rand` on
 the machine being installed. There is no default, placeholder or example credential anywhere in
 the installer, the compose file or the images.
 
-### 9.2 First run
+### 9.2 The panel's address
+
+An install starts on the server's IP over plain HTTP, with no domain and no certificate. That is
+deliberate: requiring a domain and a DNS record before anyone has seen the product is a worse
+first run than asking for one afterwards, and the installer cannot verify a record it has no way
+to observe. It follows that `SECURE_COOKIES` is `false` on a fresh install — a `__Host-` prefixed
+cookie is never stored over plain HTTP, so the alternative is an install nobody can sign in to.
+
+A domain is set later, from **Administration → Settings** or on the last step of onboarding. Doing
+so **adds** a site rather than moving one: `kaname-host.sh` regenerates the Caddyfile with both the
+`:80` block and the domain, so the address the operator is currently looking at keeps working
+while the certificate is provisioned, and `SECURE_COOKIES` moves to `auto`. There is no window in
+which the panel is unreachable at the address you arrived by.
+
+The control plane writes the new values into `.env` and queues a `reconfigure` request; the same
+host-side unit that applies updates regenerates the proxy configuration and recreates the
+containers that read the address at boot ([KD-030](DECISIONS.md#kd-030)).
+
+### 9.3 First run
 
 Onboarding runs exactly once, and every guard is server-side. `bootstrap()` no longer invents an
 owner account ([KD-031](DECISIONS.md#kd-031)); a fresh instance mints a one-time setup token,
@@ -609,7 +631,7 @@ tab resumes where it left off:
 After an owner exists, `/setup/token` and `/setup/owner` refuse outright; the rest require that
 owner's session. `apps/web/middleware.ts` routes accordingly, but the API is the control.
 
-### 9.3 Version manifest
+### 9.4 Version manifest
 
 `versions.json`, published alongside releases and validated by `releaseManifest` in
 `@kaname/contract`. Per release: `version`, `channel`, `released_at`, `breaking`, `security`,
@@ -619,7 +641,8 @@ and artifact references including a sha256 for every agent binary.
 It is published data rather than something inferred from registry tags because tags cannot answer
 the only question an unattended updater is actually asking — _is applying this without a human
 safe_ ([KD-028](DECISIONS.md#kd-028)). `scripts/release-manifest.mjs` builds it and digests
-whatever agent builds are present.
+whatever agent builds are present; `.github/workflows/release.yml` runs it on a `v*` tag, after it
+has pushed the multi-architecture images and built the agent binaries, and commits the result.
 
 Four cadence tiers in Administration → Settings: `off`, `notify` (the default), `auto_minor`, and
 `auto_all` — which cannot be reached without an explicit acknowledgement, enforced by the API and
@@ -627,10 +650,11 @@ not just by the dialog.
 
 **The hard rule.** A release marked `breaking`, or whose migrations are marked `destructive`, is
 never applied to the control plane without explicit confirmation, under every tier including
-`auto_all`. `mayApplyUnattended()` is the single function that decides it, and it answers `false`
-for those releases before it looks at the tier at all.
+`auto_all`. Two functions encode it — `mayApplyUnattended()`, which the scheduler asks, and
+`requiresConfirmation()`, which the apply endpoint asks — and neither consults the tier before
+answering `false`.
 
-### 9.4 Applying and rolling back
+### 9.5 Applying and rolling back
 
 The control plane cannot restart itself and still be there to judge the result, so it does not
 try ([KD-030](DECISIONS.md#kd-030)). The sequence splits at the restart:

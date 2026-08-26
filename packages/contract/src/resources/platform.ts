@@ -400,6 +400,45 @@ export const updateSettingsInput = z.object({
 export type UpdateSettingsInput = z.infer<typeof updateSettingsInput>;
 
 /* ------------------------------------------------------------------ *
+ * The panel's own address
+ *
+ * An install starts life on its server's IP over plain HTTP, because
+ * asking for a domain before anyone has seen the product is a worse
+ * first run than asking for one afterwards. Setting a domain ADDS an
+ * HTTPS site; the IP keeps working, so this can never lock an operator
+ * out of the address they are currently using.
+ * ------------------------------------------------------------------ */
+
+export const addressSettings = z.object({
+  /** Null while the panel is reachable only by IP. */
+  domain: z.string().nullable(),
+  public_url: z.string(),
+  /** True once a domain is set and Caddy can provision a certificate. */
+  tls: z.boolean(),
+  /**
+   * False when this instance was not deployed by install.sh — there is
+   * no host helper to reconfigure, so the panel says so rather than
+   * offering a form that cannot work.
+   */
+  managed: z.boolean(),
+});
+export type AddressSettings = z.infer<typeof addressSettings>;
+
+/** A bare hostname. Empty clears the domain and returns to IP-only. */
+export const setAddressInput = z.object({
+  domain: z
+    .string()
+    .max(253)
+    .refine(
+      (value) =>
+        value === "" ||
+        /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(value),
+      "Enter a hostname like panel.example.com, or leave it empty to use the IP address.",
+    ),
+});
+export type SetAddressInput = z.infer<typeof setAddressInput>;
+
+/* ------------------------------------------------------------------ *
  * Per-user preferences
  *
  * Kept on the account rather than in browser storage: a hint dismissed

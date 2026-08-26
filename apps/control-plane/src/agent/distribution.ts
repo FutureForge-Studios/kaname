@@ -25,7 +25,10 @@ export async function registerDistributionRoutes(
 ): Promise<void> {
   const roots = [
     process.env.KANAME_AGENT_DIST_DIR,
-    // Where the image puts them.
+    // Where the image puts them. Two spellings because the bundler
+    // collapses src/agent/ into dist/, so `here` is one level deep in
+    // the image and three in a checkout.
+    resolve(here, "..", "public"),
     resolve(here, "..", "..", "public"),
     // Where they are in a checkout: install.sh at the repo root, agent
     // binaries wherever `go build` left them.

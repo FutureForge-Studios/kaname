@@ -23,6 +23,7 @@ import {
   PERMISSION_DESCRIPTIONS,
   PERMISSION_GROUP_LABELS,
   roleListQuery,
+  setAddressInput,
   SYSTEM_ROLE_SLUGS,
   updateRoleInput,
   updateSettingsInput,
@@ -38,6 +39,7 @@ import {
   type User,
 } from "@kaname/contract";
 import { z } from "zod";
+import { applyAddress, readAddress } from "../services/address.js";
 import {
   helpers,
   item,
@@ -822,6 +824,32 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   /* ------------------------------------------------------------------ *
    * Settings
    * ------------------------------------------------------------------ */
+
+  /* ----------------------------- address ---------------------------- */
+
+  app.get("/settings/address", async (req, reply) => {
+    helpers(req).authorize("admin.settings:read");
+    return item(reply, await readAddress(req.ctx));
+  });
+
+  /*
+   * 202, not 200: applying this recreates the control plane, so the
+   * process answering the request is not the one that will finish it.
+   * The panel keeps working on the IP throughout either way.
+   */
+  app.post("/settings/address", async (req, reply) => {
+    const h = helpers(req);
+    const principal = h.authorize("admin.settings:write");
+    const body = parseBody(req, setAddressInput);
+
+    const result = await applyAddress(req.ctx, body.domain, {
+      id: principal.kind === "user" ? principal.id : null,
+      name: principal.name,
+      ip: req.ip ?? null,
+    });
+
+    return reply.status(202).send({ data: { ...result, applying: true } });
+  });
 
   app.get("/settings", async (req, reply) => {
     helpers(req).authorize("admin.settings:read");

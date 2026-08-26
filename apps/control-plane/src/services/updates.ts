@@ -98,7 +98,15 @@ interface PendingRun {
  * some other way can say so out loud instead of half-applying an update.
  * ------------------------------------------------------------------ */
 
+/**
+ * What the host helper is asked to do. `kind` is the first thing it
+ * branches on, so a new host-side operation is a new kind rather than a
+ * second queue.
+ */
+export type HostRequest = UpdateRequest | ReconfigureRequest;
+
 export interface UpdateRequest {
+  kind: "update";
   run_id: string;
   from_version: string;
   to_version: string;
@@ -109,10 +117,21 @@ export interface UpdateRequest {
   images: { control_plane: string; web: string };
 }
 
+/**
+ * Regenerate the Caddyfile from .env and recreate the containers that
+ * read the address at boot. Used when the panel's domain changes.
+ */
+export interface ReconfigureRequest {
+  kind: "reconfigure";
+  project: string;
+  data_dir: string;
+  log_file: string;
+}
+
 export interface UpdateDispatcher {
-  /** Whether a host-side updater is installed and watching for requests. */
+  /** Whether a host-side helper is installed and watching for requests. */
   available(dataDir: string): boolean;
-  dispatch(request: UpdateRequest): Promise<void>;
+  dispatch(request: HostRequest): Promise<void>;
 }
 
 /**
@@ -296,6 +315,26 @@ export class UpdateService {
     return this.manifest;
   }
 
+  /* --------------------------- host helper -------------------------- */
+
+  /**
+   * Whether this instance can ask its host to do anything. False on an
+   * install that did not come from install.sh, which is the difference
+   * between "we will apply that" and a precondition failure that says
+   * why.
+   */
+  hostHelperAvailable(): boolean {
+    return (
+      this.ctx.config.deployment === "compose" &&
+      this.dispatcher.available(this.ctx.config.dataDir)
+    );
+  }
+
+  /** Queues work for the host helper. Shared with the address change. */
+  dispatchHostRequest(request: HostRequest): Promise<void> {
+    return this.dispatcher.dispatch(request);
+  }
+
   /* ---------------------------- overview ---------------------------- */
 
   async overview(): Promise<UpdateOverview> {
@@ -427,7 +466,7 @@ export class UpdateService {
     if (this.ctx.config.deployment !== "compose") {
       throw notComposeManaged();
     }
-    if (!this.dispatcher.available(this.ctx.config.dataDir)) {
+    if (!this.hostHelperAvailable()) {
       throw updaterMissing(this.ctx.config.dataDir);
     }
 
@@ -536,6 +575,7 @@ export class UpdateService {
       `--> handing over to the host updater; this process is about to be replaced`,
     );
     await this.dispatcher.dispatch({
+      kind: "update",
       run_id: runId,
       from_version: this.currentVersion,
       to_version: release.version,

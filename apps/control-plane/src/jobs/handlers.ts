@@ -249,7 +249,20 @@ const agentUpdate: JobHandler = async (ctx) => {
   );
   ctx.signal.addEventListener("abort", () => handle.cancel(), { once: true });
 
-  const result = await handle.done;
+  let result: unknown;
+  try {
+    result = await handle.done;
+  } catch (err) {
+    // The socket dropping mid-swap is exactly the case an operator has
+    // to look at: the binary may or may not have been replaced, and
+    // this process cannot tell which. Leaving the run at `running` for
+    // ever would hide it.
+    const message = err instanceof Error ? err.message : String(err);
+    await appendRunLog(ctx, p.run_id, `!! lost contact during the update: ${message}`);
+    await settleRun(ctx, p.run_id, "needs_attention", message);
+    throw err;
+  }
+
   await appendRunLog(ctx, p.run_id, "--> binary replaced; waiting for the agent to dial back in");
 
   if (await waitForReconnect(ctx, serverId, p.version)) {

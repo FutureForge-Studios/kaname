@@ -2,30 +2,27 @@
 # ==================================================================
 # Kaname installer.
 #
-#   Control plane + an agent on this same box (the default):
-#     curl -fsSL https://get.kaname.dev/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/FutureForge-Studios/kaname/main/install.sh | sudo sh
 #
-#   Control plane only:
-#     curl -fsSL https://get.kaname.dev/install.sh | sudo sh -s -- --control-plane-only
+# That installs the control plane and pairs this box as the first
+# managed server. --control-plane-only skips the agent; --agent-only
+# --token=<token> --control-plane=<url> enrols another server against a
+# panel that already exists.
 #
-#   Add another server to an existing install:
-#     curl -fsSL https://get.kaname.dev/install.sh | sudo sh -s -- \
-#       --agent-only --token=<pairing-token> --control-plane=https://panel.example.com
+# The panel is served over plain HTTP on port 80 at this server's IPv4
+# address: nothing to answer, no domain to own. A domain and HTTPS are
+# set later from Administration in the panel, and the IP address keeps
+# working afterwards, so setting one cannot lock anyone out.
 #
 # This script is meant to be read before it is run. It fetches exactly
-# three files, all from KANAME_SOURCE_URL below, and it says so as it
-# goes. Nothing is downloaded from a URL that is not printed first.
-#
-# Re-running it is safe: an existing install is reconfigured and
-# repaired, never wiped. --force is the only thing that destroys data,
-# and it says what it is about to destroy first.
+# two files, both from KANAME_SOURCE_URL below, and prints each URL
+# before it fetches it. Re-running it is a repair, never a wipe: --force
+# is the only thing that destroys data, and it says what first.
 # ==================================================================
 set -eu
 
-# ------------------------------------------------------------------
-# The only place a URL is spelled out. Point this somewhere else and
+# The only place a URL is spelled out. Point these somewhere else and
 # the whole installer follows.
-# ------------------------------------------------------------------
 KANAME_SOURCE_URL="${KANAME_SOURCE_URL:-https://raw.githubusercontent.com/FutureForge-Studios/kaname/main}"
 KANAME_REGISTRY="${KANAME_REGISTRY:-ghcr.io/futureforge-studios}"
 KANAME_DOCKER_INSTALL_URL="https://get.docker.com"
@@ -34,32 +31,26 @@ KANAME_DEFAULT_VERSION="0.1.0"
 KANAME_MIN_DOCKER_MAJOR=24
 KANAME_COMPOSE_PROJECT="kaname"
 
+DATA_DIR="/etc/kaname"
+STATE_DIR="/var/lib/kaname"
+BIN_DIR="/usr/local/bin"
+LIB_DIR="/usr/local/lib/kaname"
+
 # The control-plane image runs as this uid, fixed in its Dockerfile so
 # the paths it has to write can be owned by it without running as root.
 KANAME_UID=10001
 
 # Where the control plane answers on the loopback interface. Caddy
-# fronts 80/443; this is bound to 127.0.0.1 only, and is what the
-# local agent dials and what this script health-checks.
+# fronts port 80; this is bound to 127.0.0.1 only, and is what the local
+# agent dials and what this script health-checks.
 KANAME_LOCAL_API="http://127.0.0.1:4000"
 
-SUPPORTED_DISTROS="Debian 11+, Ubuntu 20.04+, Rocky/AlmaLinux/RHEL 9+, Fedora 38+"
-
-# ------------------------------------------------------------------
 # Options
-# ------------------------------------------------------------------
 MODE="all-in-one"          # all-in-one | control-plane-only | agent-only
 VERSION="$KANAME_DEFAULT_VERSION"
-DATA_DIR="/etc/kaname"
-STATE_DIR="/var/lib/kaname"
-BIN_DIR="/usr/local/bin"
-LIB_DIR="/usr/local/lib/kaname"
-DOMAIN=""
 TOKEN=""
 CONTROL_PLANE=""
 FORCE=0
-START=1
-DEBUG=0
 
 usage() {
   cat <<'USAGE'
@@ -68,65 +59,47 @@ kaname installer
   --control-plane-only     Install the control plane, do not pair an agent here.
   --agent-only             Install only the agent. Requires --token and --control-plane.
   --token=<token>          Pairing token, printed by the panel when adding a server.
-  --control-plane=<url>    Where the agent should dial, e.g. https://panel.example.com
-  --domain=<domain>        Public domain for the panel. Caddy gets a certificate for it.
-  --version=<version>      Release to install. Defaults to the latest known to this script.
-  --data-dir=<path>        Install root. Default /etc/kaname
+  --control-plane=<url>    Where the agent should dial, e.g. http://203.0.113.10
+  --version=<version>      Release to install. Defaults to the one this script ships with.
   --force                  Destroy an existing install first. Never the default.
-  --no-start               Write everything, start nothing.
-  --debug                  Print every command as it runs.
   --help                   This.
 USAGE
+}
+
+need() {
+  # $1 flag, $2 the argument after it
+  [ -n "$2" ] || { echo "kaname: $1 needs a value" >&2; exit 2; }
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --control-plane-only) MODE="control-plane-only" ;;
     --agent-only) MODE="agent-only" ;;
-    --token) TOKEN="$2"; shift ;;
+    --token) need "$1" "${2:-}"; TOKEN="$2"; shift ;;
     --token=*) TOKEN="${1#*=}" ;;
-    --control-plane) CONTROL_PLANE="$2"; shift ;;
+    --control-plane) need "$1" "${2:-}"; CONTROL_PLANE="$2"; shift ;;
     --control-plane=*) CONTROL_PLANE="${1#*=}" ;;
-    # Accepted because the panel's older enrollment command used it.
-    --url) CONTROL_PLANE="$2"; shift ;;
-    --url=*) CONTROL_PLANE="${1#*=}" ;;
-    --domain) DOMAIN="$2"; shift ;;
-    --domain=*) DOMAIN="${1#*=}" ;;
-    --version) VERSION="$2"; shift ;;
+    --version) need "$1" "${2:-}"; VERSION="$2"; shift ;;
     --version=*) VERSION="${1#*=}" ;;
-    --data-dir) DATA_DIR="$2"; shift ;;
-    --data-dir=*) DATA_DIR="${1#*=}" ;;
-    --state-dir) STATE_DIR="$2"; shift ;;
-    --state-dir=*) STATE_DIR="${1#*=}" ;;
     --force) FORCE=1 ;;
-    --no-start) START=0 ;;
-    --debug) DEBUG=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "kaname: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
 
-[ "$DEBUG" = "1" ] && set -x
-
-# ------------------------------------------------------------------
-# Output
-#
-# Everything goes to the terminal and to a log under the data root, so
-# a failed install can be read afterwards without scrolling back.
-# ------------------------------------------------------------------
+# Everything said below goes to the terminal and to a log under the data
+# root, so a failed install can be read afterwards without scrolling back.
 LOG_FILE=""
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 log()  { printf '%s\n' "$*"; [ -n "$LOG_FILE" ] && printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" >>"$LOG_FILE"; return 0; }
 step() { log ""; log "==> $*"; }
-warn() { printf '%s\n' "$*" >&2; [ -n "$LOG_FILE" ] && printf '%s WARN %s\n' "$(date -u +%H:%M:%S)" "$*" >>"$LOG_FILE"; return 0; }
 
 die() {
   printf '\n%s\n' "kaname: $*" >&2
   [ -n "$LOG_FILE" ] && printf 'FAILED %s\n' "$*" >>"$LOG_FILE"
   [ -n "$LOG_FILE" ] && printf '%s\n' "The full log is at $LOG_FILE" >&2
-  printf '%s\n' "Nothing was left half-applied. Fix the above and run this installer again." >&2
   exit 1
 }
 
@@ -138,22 +111,18 @@ open_log() {
   chmod 0600 "$LOG_FILE"
 }
 
-# ------------------------------------------------------------------
+compose() {
+  docker compose -p "$KANAME_COMPOSE_PROJECT" -f "$DATA_DIR/docker-compose.yml" --env-file "$DATA_DIR/.env" "$@"
+}
+
 # 1. Preflight
-#
-# Fail here, loudly, rather than part-way through. Everything below
-# assumes a systemd host on a supported architecture.
-# ------------------------------------------------------------------
 preflight() {
   step "checking this host"
 
   [ "$(id -u)" = "0" ] || die "run this as root (prefix the command with sudo)."
 
-  case "$(uname -s)" in
-    Linux) : ;;
-    *) die "Kaname manages Linux servers and its agent is a Linux binary. This is $(uname -s).
-Supported: $SUPPORTED_DISTROS" ;;
-  esac
+  [ "$(uname -s)" = "Linux" ] ||
+    die "Kaname manages Linux servers and its agent is a Linux binary. This is $(uname -s)."
 
   case "$(uname -m)" in
     x86_64|amd64) ARCH="amd64" ;;
@@ -163,38 +132,14 @@ Supported: $SUPPORTED_DISTROS" ;;
 
   command -v systemctl >/dev/null 2>&1 ||
     die "systemd is required. The agent runs as a systemd unit, and control-plane updates are
-applied by a systemd unit on the host.
-Supported: $SUPPORTED_DISTROS"
+applied by a systemd unit on the host."
 
-  DISTRO_ID="unknown"; DISTRO_VERSION=""; DISTRO_NAME="this system"
-  if [ -r /etc/os-release ]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    DISTRO_ID="${ID:-unknown}"
-    DISTRO_VERSION="${VERSION_ID:-}"
-    DISTRO_NAME="${PRETTY_NAME:-$DISTRO_ID}"
-  fi
+  command -v curl >/dev/null 2>&1 || die "curl is required and is not installed."
 
-  case "$DISTRO_ID" in
-    debian|ubuntu|raspbian|rocky|almalinux|rhel|centos|fedora) : ;;
-    *)
-      warn "$DISTRO_NAME is not a distribution Kaname is tested on."
-      warn "Tested: $SUPPORTED_DISTROS"
-      warn "Continuing, because the requirements below are what actually matter:"
-      warn "  systemd, Docker $KANAME_MIN_DOCKER_MAJOR or newer, and the Compose plugin."
-      ;;
-  esac
-
-  for tool in curl tar; do
-    command -v "$tool" >/dev/null 2>&1 || die "$tool is required and is not installed."
-  done
-
-  log "    $DISTRO_NAME ($ARCH), systemd present"
+  log "    Linux/$ARCH, systemd present"
 }
 
-# ------------------------------------------------------------------
 # 2. Docker
-# ------------------------------------------------------------------
 ensure_docker() {
   step "checking Docker"
 
@@ -231,14 +176,8 @@ Install it and run this again: https://docs.docker.com/compose/install/linux/"
   log "    Docker $DOCKER_VERSION with the Compose plugin"
 }
 
-# ------------------------------------------------------------------
-# 3. Existing install
-#
-# Re-running is a repair, not a reinstall. Only --force destroys, and
-# only after saying exactly what it is about to destroy.
-# ------------------------------------------------------------------
-REPAIR=0
-
+# 3. Existing install. Re-running is a repair; only --force destroys, and
+#    only after saying exactly what it is about to destroy.
 check_existing() {
   [ -f "$DATA_DIR/.env" ] || return 0
 
@@ -248,31 +187,27 @@ check_existing() {
     log "      - the Kaname database, including every server, user and audit record"
     log "      - $DATA_DIR (secrets, rollback snapshots, logs)"
     log "      - the Compose project '$KANAME_COMPOSE_PROJECT' and its volumes"
-    log "    the agent on this host and its identity in $STATE_DIR are left alone."
+    log "      - $STATE_DIR, this host's agent identity, which the new database would not know"
     log ""
-    docker compose -p "$KANAME_COMPOSE_PROJECT" -f "$DATA_DIR/docker-compose.yml" down -v >>"$LOG_FILE" 2>&1 || true
+    compose down -v >>"$LOG_FILE" 2>&1 || true
+    systemctl stop kanamed >/dev/null 2>&1 || true
     # The log lives under here, so it is moved aside first.
     mv "$LOG_FILE" "/tmp/kaname-install-$STAMP.log" 2>/dev/null || true
-    rm -rf "$DATA_DIR"
+    rm -rf "$DATA_DIR" "$STATE_DIR"
     open_log
     log "    removed."
     return 0
   fi
 
-  REPAIR=1
   step "found an existing install at $DATA_DIR"
-  log "    re-running as a reconfigure and repair: existing secrets and data are kept,"
+  log "    re-running as a repair: existing secrets, data and version are kept,"
   log "    the deployment files and units are refreshed, and the services are restarted."
   log "    to wipe and start over instead, re-run with --force."
 }
 
-# ------------------------------------------------------------------
-# 4. Data root and secrets
-#
-# Every secret comes from openssl's CSPRNG. There is no default value
-# for any of them, and none of them is ever printed except the setup
-# token, which is single-purpose and dies when an account is created.
-# ------------------------------------------------------------------
+# 4. Data root and secrets. Every secret comes from openssl's CSPRNG;
+#    none ships with the software and none is printed except the setup
+#    token, which dies as soon as an account is created.
 random_b64() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 "$1"
@@ -288,6 +223,17 @@ random_hex() {
   else
     head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'
   fi
+}
+
+detect_ip() {
+  # No external service is consulted: the route the kernel would take to
+  # a public address already names the address it would send from.
+  IP="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.][0-9.]*\).*/\1/p' | head -n 1)"
+  [ -n "$IP" ] || IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -n "$IP" ] ||
+    die "could not work out this server's IPv4 address from 'ip route' or 'hostname -I'.
+The panel is served at that address, so there is nothing to point a browser at.
+Give this host an IPv4 address and run this again."
 }
 
 prepare_data_dir() {
@@ -309,13 +255,14 @@ prepare_data_dir() {
     return 0
   fi
 
+  detect_ip
+  log "    serving the panel at http://$IP"
   log "    generating secrets with openssl rand"
   MASTER_KEY="$(random_b64 32)"
   POSTGRES_PASSWORD="$(random_b64 24 | tr -d '/+=' | cut -c1-32)"
   SETUP_TOKEN="kn_setup_$(random_hex 24)"
-
-  PUBLIC_URL="http://$(hostname -I 2>/dev/null | awk '{print $1}')"
-  [ -n "$DOMAIN" ] && PUBLIC_URL="https://$DOMAIN"
+  ALL_IN_ONE=false
+  [ "$MODE" = "all-in-one" ] && ALL_IN_ONE=true
 
   umask 077
   cat >"$DATA_DIR/.env" <<ENV
@@ -337,21 +284,25 @@ KANAME_IMAGE_WEB=$KANAME_REGISTRY/kaname-web:$VERSION
 KANAME_MASTER_KEY=$MASTER_KEY
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 
-KANAME_DOMAIN=${DOMAIN:-localhost}
-KANAME_PUBLIC_URL=$PUBLIC_URL
+# Empty until a domain is set from Administration in the panel. A
+# __Host- prefixed cookie is never stored by a browser over plain HTTP,
+# so secure cookies stay off until there is HTTPS to put them behind.
+KANAME_DOMAIN=
+KANAME_PUBLIC_URL=http://$IP
+KANAME_SECURE_COOKIES=false
 
 # Consumed once, on first boot, to gate onboarding.
 KANAME_SETUP_TOKEN=$SETUP_TOKEN
-KANAME_ALL_IN_ONE=$([ "$MODE" = "all-in-one" ] && echo true || echo false)
+KANAME_ALL_IN_ONE=$ALL_IN_ONE
 ENV
-  chmod 0640 "$DATA_DIR/.env"
+  # 0660, not 0640: the control plane rewrites this file itself when it
+  # pins new image tags for an update.
+  chmod 0660 "$DATA_DIR/.env"
   chown "root:$KANAME_UID" "$DATA_DIR/.env"
-  log "    wrote $DATA_DIR/.env (0640 root:$KANAME_UID)"
+  log "    wrote $DATA_DIR/.env (0660 root:$KANAME_UID)"
 }
 
-# ------------------------------------------------------------------
 # 5. Deployment files
-# ------------------------------------------------------------------
 fetch() {
   # $1 url, $2 destination
   log "    fetching $1"
@@ -361,40 +312,40 @@ fetch() {
 
 fetch_deployment() {
   step "fetching the deployment files"
+  mkdir -p "$LIB_DIR"
   fetch "$KANAME_SOURCE_URL/infra/docker-compose.yml" "$DATA_DIR/docker-compose.yml"
-  fetch "$KANAME_SOURCE_URL/infra/Caddyfile" "$DATA_DIR/Caddyfile"
-  fetch "$KANAME_SOURCE_URL/infra/kaname-update.sh" "$LIB_DIR/kaname-update.sh"
-  chmod 0755 "$LIB_DIR/kaname-update.sh"
+  fetch "$KANAME_SOURCE_URL/infra/kaname-host.sh" "$LIB_DIR/kaname-host.sh"
+  chmod 0755 "$LIB_DIR/kaname-host.sh"
+
+  # The Caddyfile is generated from .env rather than downloaded, so it
+  # can never disagree with the configuration it is supposed to serve.
+  "$LIB_DIR/kaname-host.sh" caddyfile "$DATA_DIR" >>"$LOG_FILE" 2>&1 ||
+    die "could not generate $DATA_DIR/Caddyfile. See $LOG_FILE."
+  log "    generated $DATA_DIR/Caddyfile"
 }
 
-# ------------------------------------------------------------------
-# 6. The host-side updater
-#
-# A container cannot restart itself and still be around to check
-# whether the new build came up — so it does not try. The control plane
-# writes a request into the queue directory and this unit, running on
-# the host, does the pull, the restart, the health check and the
-# rollback.
-# ------------------------------------------------------------------
-install_updater() {
-  step "installing the update helper"
+# 6. The host-side helper. A container cannot restart itself and still be
+#    around to check whether the new build came up, so it does not try:
+#    the control plane queues a request and this unit, on the host, does
+#    the pull, the restart, the health check and the rollback.
+install_host_units() {
+  step "installing the host helper units"
 
   cat >/etc/systemd/system/kaname-update.service <<UNIT
 [Unit]
-Description=Apply a Kaname control-plane update
-Documentation=$KANAME_SOURCE_URL/infra/kaname-update.sh
+Description=Apply a queued Kaname host request
 After=docker.service
 Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=$LIB_DIR/kaname-update.sh $DATA_DIR
+ExecStart=$LIB_DIR/kaname-host.sh apply $DATA_DIR
 TimeoutStartSec=1800
 UNIT
 
   cat >/etc/systemd/system/kaname-update.path <<UNIT
 [Unit]
-Description=Watch for a Kaname update request
+Description=Watch for a Kaname host request
 
 [Path]
 PathExists=$DATA_DIR/updates/queue/request.json
@@ -409,23 +360,14 @@ UNIT
   log "    kaname-update.path is watching $DATA_DIR/updates/queue"
 }
 
-# ------------------------------------------------------------------
 # 7. Deploy
-# ------------------------------------------------------------------
 deploy() {
   step "starting the control plane"
 
-  if [ "$START" = "0" ]; then
-    log "    --no-start: everything is written, nothing was started."
-    log "    start it with: docker compose -p $KANAME_COMPOSE_PROJECT -f $DATA_DIR/docker-compose.yml up -d"
-    return 0
-  fi
+  compose pull >>"$LOG_FILE" 2>&1 ||
+    die "could not pull the Kaname images. See $LOG_FILE."
 
-  ( cd "$DATA_DIR" && docker compose -p "$KANAME_COMPOSE_PROJECT" pull ) >>"$LOG_FILE" 2>&1 ||
-    die "could not pull the Kaname images. See $LOG_FILE.
-If this is an air-gapped host, load the images yourself and re-run with --no-start."
-
-  ( cd "$DATA_DIR" && docker compose -p "$KANAME_COMPOSE_PROJECT" up -d --wait ) >>"$LOG_FILE" 2>&1 ||
+  compose up -d --wait >>"$LOG_FILE" 2>&1 ||
     die "the containers did not become healthy. See $LOG_FILE, and:
   docker compose -p $KANAME_COMPOSE_PROJECT -f $DATA_DIR/docker-compose.yml ps
   docker compose -p $KANAME_COMPOSE_PROJECT -f $DATA_DIR/docker-compose.yml logs control-plane"
@@ -446,9 +388,7 @@ wait_for_api() {
   return 1
 }
 
-# ------------------------------------------------------------------
 # 8. The agent
-# ------------------------------------------------------------------
 install_agent() {
   # $1 control plane url, $2 pairing token
   step "installing the agent"
@@ -537,74 +477,54 @@ pair_local_agent() {
   install_agent "$KANAME_LOCAL_API" "$PAIR_TOKEN"
 }
 
-# ------------------------------------------------------------------
-# 9. Verification
-#
-# "It installed" is not the same as "it works", and printing a success
-# banner for a broken install is worse than printing nothing.
-# ------------------------------------------------------------------
-verify() {
-  step "verifying"
-
-  wait_for_api 90 ||
-    die "the control plane did not answer $KANAME_LOCAL_API/health within 90 seconds.
-  docker compose -p $KANAME_COMPOSE_PROJECT -f $DATA_DIR/docker-compose.yml logs control-plane"
-  log "    control plane is answering"
-
-  if [ "$MODE" = "all-in-one" ]; then
-    i=0
-    connected=0
-    while [ "$i" -lt 60 ]; do
-      if curl -fsS "$KANAME_LOCAL_API/health" 2>/dev/null | grep -q '"agents_connected":[1-9]'; then
-        connected=1
-        break
-      fi
-      i=$((i + 1))
-      sleep 1
-    done
-    [ "$connected" = "1" ] ||
-      die "the agent on this host did not connect within 60 seconds.
+# 9. Verification. "It installed" is not "it works", and a success banner
+#    over a broken install is worse than no banner at all.
+verify_agent() {
+  i=0
+  while [ "$i" -lt 60 ]; do
+    if curl -fsS "$KANAME_LOCAL_API/health" 2>/dev/null | grep -q '"agents_connected":[1-9]'; then
+      log "    agent is connected"
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  die "the agent on this host did not connect within 60 seconds.
   systemctl status kanamed
   journalctl -u kanamed -n 100"
-    log "    agent is connected"
-  fi
 }
 
 summary() {
+  # Read back rather than reprint: on a repair the .env on disk is the
+  # truth, and --version was not applied to it.
   url="$(grep '^KANAME_PUBLIC_URL=' "$DATA_DIR/.env" | cut -d= -f2-)"
   token="$(grep '^KANAME_SETUP_TOKEN=' "$DATA_DIR/.env" | cut -d= -f2-)"
+  installed="$(grep '^KANAME_VERSION=' "$DATA_DIR/.env" | cut -d= -f2-)"
 
   printf '\n'
-  log "Kaname $VERSION is running."
+  log "Kaname $installed is running."
   log ""
   log "  Open           $url"
   log "  Setup token    $token"
   log ""
   log "The token is asked for once, on the first screen, and stops working as"
-  log "soon as an account exists. Until then it is the only thing standing"
-  log "between this panel and whoever else can reach it."
+  log "soon as an account exists."
   log ""
-  log "  Secrets        $DATA_DIR/.env  (0600 — back up KANAME_MASTER_KEY)"
-  log "  Deployment     $DATA_DIR/docker-compose.yml"
+  log "  Secrets        $DATA_DIR/.env  (back up KANAME_MASTER_KEY)"
   log "  Install log    $LOG_FILE"
   log ""
-  log "  Logs           docker compose -p $KANAME_COMPOSE_PROJECT -f $DATA_DIR/docker-compose.yml logs -f"
-  if [ "$MODE" = "all-in-one" ]; then
-    log "  Agent          systemctl status kanamed"
-  fi
+  log "A domain and HTTPS can be set later from Administration in the panel."
+  log "$url keeps working after that."
 }
 
-# ------------------------------------------------------------------
 # Run
-# ------------------------------------------------------------------
 if [ "$MODE" = "agent-only" ]; then
   [ -n "$TOKEN" ] || die "--agent-only needs --token=<pairing-token>, generated by the panel
 under Infrastructure > Servers > Add server. Tokens are single-use and
 expire in minutes."
   [ -n "$CONTROL_PLANE" ] || die "--agent-only needs --control-plane=<url>, the address this
-agent should dial, e.g. https://panel.example.com"
+agent should dial, e.g. http://203.0.113.10"
 
-  DATA_DIR="${DATA_DIR}"
   open_log
   preflight
   install_agent "$CONTROL_PLANE" "$TOKEN"
@@ -627,28 +547,27 @@ preflight
 ensure_docker
 check_existing
 prepare_data_dir
-mkdir -p "$LIB_DIR"
 fetch_deployment
-install_updater
+install_host_units
 deploy
 
-if [ "$START" = "0" ]; then
-  log ""
-  log "Nothing was started. Everything is in $DATA_DIR."
-  exit 0
-fi
-
+step "verifying"
 wait_for_api 90 ||
-  die "the control plane did not come up. See $LOG_FILE and:
+  die "the control plane did not answer $KANAME_LOCAL_API/health within 90 seconds.
   docker compose -p $KANAME_COMPOSE_PROJECT -f $DATA_DIR/docker-compose.yml logs control-plane"
+log "    control plane is answering"
 
-if [ "$MODE" = "all-in-one" ] && [ "$REPAIR" = "0" ]; then
-  pair_local_agent
-elif [ "$MODE" = "all-in-one" ]; then
-  log ""
-  log "==> this host is already paired; leaving the agent as it is"
-  systemctl restart kanamed >/dev/null 2>&1 || true
+if [ "$MODE" = "all-in-one" ]; then
+  # Whether to pair is decided by whether this host is actually
+  # enrolled, not by whether .env exists: a run that wrote .env and then
+  # failed to pair must still pair on the next run.
+  if [ -f "$STATE_DIR/cert.pem" ]; then
+    log "    this host is already enrolled; restarting the agent"
+    systemctl restart kanamed >/dev/null 2>&1 || true
+  else
+    pair_local_agent
+  fi
+  verify_agent
 fi
 
-verify
 summary
