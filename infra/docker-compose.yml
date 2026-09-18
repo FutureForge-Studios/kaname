@@ -36,6 +36,9 @@ services:
   control-plane:
     image: ${KANAME_IMAGE_CONTROL_PLANE:?set KANAME_IMAGE_CONTROL_PLANE in .env}
     restart: unless-stopped
+    # Long enough for in-flight jobs to be requeued and streams closed
+    # cleanly; the process exits on its own well before this.
+    stop_grace_period: 20s
     depends_on:
       postgres:
         condition: service_healthy

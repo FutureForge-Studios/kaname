@@ -72,7 +72,12 @@ const schema = z.object({
     .int()
     .default(24 * 14),
   SESSION_COOKIE_NAME: z.string().default("kaname_session"),
-  /** __Host- prefix requires HTTPS; disabled automatically in development. */
+  /**
+   * "true" always sets Secure + `__Host-` cookies, "false" never does,
+   * and "auto" decides per request from how it arrived — a panel that
+   * answers on its IP over HTTP and on a domain over HTTPS at the same
+   * time needs both kinds, and a per-process answer would lock one out.
+   */
   SECURE_COOKIES: z.enum(["true", "false", "auto"]).default("auto"),
 
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
@@ -92,6 +97,10 @@ const schema = z.object({
 
   METRICS_RETENTION_DAYS: z.coerce.number().int().default(90),
   RAW_METRICS_RETENTION_HOURS: z.coerce.number().int().default(48),
+  /** Finished jobs (and their logs) older than this are deleted. */
+  JOB_RETENTION_DAYS: z.coerce.number().int().min(1).default(30),
+  /** Expired and revoked sign-in sessions older than this are deleted. */
+  SESSION_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
 
   ACME_DIRECTORY_URL: z.string().default("https://acme-v02.api.letsencrypt.org/directory"),
   ACME_EMAIL: z.string().optional(),
@@ -146,8 +155,11 @@ export interface Config extends RawConfig {
   manifestUrl: string;
   /** Where a BROWSER can reach this control plane. See below. */
   clientApiUrl: string;
-  secureCookies: boolean;
+  /** The operator's word on the Secure flag; "auto" is settled per request. */
+  secureCookies: "always" | "never" | "auto";
+  /** The plain session cookie, and the `__Host-` one an HTTPS request gets instead. */
   cookieName: string;
+  secureCookieName: string;
 }
 
 let cached: Config | null = null;
@@ -180,9 +192,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     masterKey = deriveDevKey();
   }
 
-  const secureCookies =
-    raw.SECURE_COOKIES === "auto" ? isProduction : raw.SECURE_COOKIES === "true";
-
   cached = {
     ...raw,
     isProduction,
@@ -203,12 +212,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     clientApiUrl:
       raw.KANAME_CLIENT_API_URL ??
       (isProduction ? raw.KANAME_PUBLIC_URL : `http://localhost:${raw.PORT}`),
-    secureCookies,
+    secureCookies:
+      raw.SECURE_COOKIES === "auto" ? "auto" : raw.SECURE_COOKIES === "true" ? "always" : "never",
     dataDir: raw.KANAME_DATA_DIR ?? (isProduction ? "/etc/kaname" : resolve(".data")),
     deployment: raw.KANAME_DEPLOYMENT ?? (isProduction ? "compose" : "unmanaged"),
     manifestUrl: raw.KANAME_UPDATE_MANIFEST_URL ?? DEFAULT_MANIFEST_URL,
-    // The __Host- prefix is only legal over HTTPS on the root path.
-    cookieName: secureCookies ? `__Host-${raw.SESSION_COOKIE_NAME}` : raw.SESSION_COOKIE_NAME,
+    cookieName: raw.SESSION_COOKIE_NAME,
+    // The __Host- prefix is only legal over HTTPS on the root path, so
+    // which of the two a response sets is decided per request.
+    secureCookieName: `__Host-${raw.SESSION_COOKIE_NAME}`,
   };
   return cached;
 }
