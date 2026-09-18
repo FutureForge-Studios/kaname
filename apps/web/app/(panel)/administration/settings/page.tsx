@@ -6,15 +6,19 @@ import {
   ArrowUpCircle,
   Bell,
   Globe,
+  Mail,
   Plus,
   RadioTower,
   Save,
+  Send,
   Settings as SettingsIcon,
   ShieldCheck,
   Trash2,
   TriangleAlert,
 } from "lucide-react";
 import {
+  DEFAULT_NOTIFICATION_EVENTS,
+  NOTIFICATION_EVENT_LABELS,
   UPDATE_TIER_LABELS,
   notificationChannelKind,
   notificationEvent,
@@ -24,8 +28,10 @@ import {
   type BackupDestination,
   type NotificationChannel,
   type NotificationEvent,
+  type NotificationTestResult,
   type ReleaseChannel,
   type SettingsDocument,
+  type SmtpSettings,
   type UpdateCheckInterval,
   type UpdateOverview,
   type UpdateTier,
@@ -39,6 +45,7 @@ import {
   IconButton,
   Input,
   PageHeader,
+  RelativeTime,
   Select,
   Skeleton,
   Switch,
@@ -55,7 +62,7 @@ import { api, type ApiError } from "@/lib/api";
 import type { IconComponent } from "@/lib/icons";
 import { timeZoneOptions } from "@/lib/cron";
 import { pluralize } from "@/lib/format";
-import { useCan, useList, useResource, useResourceMutation } from "@/lib/queries";
+import { useCan, useList, useResource, useResourceMutation, useSession } from "@/lib/queries";
 
 /* ------------------------------------------------------------------ *
  * Settings.
@@ -69,17 +76,6 @@ import { useCan, useList, useResource, useResourceMutation } from "@/lib/queries
  * are read far more often than they are edited — a dense two-column
  * list is scannable, a column of large labelled inputs is not.
  * ------------------------------------------------------------------ */
-
-const EVENT_LABELS: Record<NotificationEvent, string> = {
-  job_failed: "Job failed",
-  server_offline: "Server went offline",
-  service_failed: "Service failed",
-  certificate_expiring: "Certificate expiring",
-  backup_failed: "Backup failed",
-  threat_detected: "Threat detected",
-  alert_firing: "Alert firing",
-  deployment_failed: "Deployment failed",
-};
 
 export default function SettingsPage() {
   const can = useCan();
@@ -131,6 +127,7 @@ export default function SettingsPage() {
             <AgentsSection value={doc.agents} readOnly={readOnly} />
             <AcmeSection value={doc.acme} readOnly={readOnly} />
             <BackupsSection value={doc.backups} readOnly={readOnly} />
+            <SmtpSection value={doc.notifications.smtp} readOnly={readOnly} />
             <NotificationsSection value={doc.notifications.channels} readOnly={readOnly} />
           </>
         )}
@@ -258,6 +255,7 @@ function useSectionSave<T>(
   patchBody: () => Record<string, unknown>,
   read: (document: SettingsDocument) => T,
   label: string,
+  onSaved?: (saved: T) => void,
 ) {
   const [error, setError] = React.useState<ApiError | null>(null);
 
@@ -265,7 +263,11 @@ function useSectionSave<T>(
     mutationFn: () => api.patch<SettingsDocument>("/settings", patchBody()),
     invalidates: ["settings"],
     successMessage: () => `${label} saved.`,
-    onDone: (result) => section.commit(read(result)),
+    onDone: (result) => {
+      const saved = read(result);
+      section.commit(saved);
+      onSaved?.(saved);
+    },
     onFailed: setError,
   });
 
@@ -907,7 +909,259 @@ function BackupsSection({
   );
 }
 
+/* ----------------------------- outgoing mail ------------------------ */
+
+type SmtpDraft = SmtpSettings & { password: string };
+
+/** What the API accepts: the shape, plus the password only when one was typed. */
+function smtpPatch(draft: SmtpDraft): Record<string, unknown> {
+  return {
+    host: draft.host.trim(),
+    port: draft.port,
+    security: draft.security,
+    username: draft.username.trim(),
+    from_address: draft.from_address.trim(),
+    from_name: draft.from_name.trim(),
+    ...(draft.password ? { password: draft.password } : {}),
+  };
+}
+
+function TestOutcome({ result }: { result: NotificationTestResult | null }) {
+  if (!result) return null;
+  return result.ok ? (
+    <p className="text-sm text-[var(--kn-ok)]">Delivered in {result.duration_ms} ms.</p>
+  ) : (
+    <p className="text-sm text-[var(--kn-danger)]">{result.error}</p>
+  );
+}
+
+/**
+ * The server every email channel sends through. Its own section, with
+ * its own save, because a wrong password here has nothing to do with
+ * which events go where — and because the password is write-only: it
+ * is sealed on the control plane and never comes back to this form.
+ */
+function SmtpSection({ value, readOnly }: { value: SmtpSettings; readOnly: boolean }) {
+  const { session } = useSession();
+  const section = useSection<SmtpDraft>({ ...value, password: "" });
+  const { error, saving, save } = useSectionSave(
+    section,
+    () => ({ notifications: { smtp: smtpPatch(section.draft) } }),
+    (document) => ({ ...document.notifications.smtp, password: "" }),
+    "Outgoing mail",
+    (saved) => section.setDraft(saved),
+  );
+
+  const [to, setTo] = React.useState(session?.user?.email ?? "");
+  const [result, setResult] = React.useState<NotificationTestResult | null>(null);
+  const test = useResourceMutation<void, NotificationTestResult>({
+    mutationFn: () =>
+      api.post<NotificationTestResult>("/settings/notifications/smtp/test", {
+        to: to.trim(),
+        smtp: smtpPatch(section.draft),
+      }),
+    onDone: setResult,
+  });
+
+  const configured = section.draft.host.trim().length > 0;
+
+  return (
+    <SettingsSection
+      title="Outgoing mail"
+      description="The SMTP server email notifications are sent through. Until it is set, email channels record an error instead of delivering."
+      icon={Mail}
+      dirty={section.dirty}
+      saving={saving}
+      readOnly={readOnly}
+      error={error}
+      onSave={save}
+      onReset={section.reset}
+    >
+      <FieldRow
+        label="Server"
+        description="Host, port and how the connection is secured. 587 with STARTTLS is the usual pair; 465 speaks TLS from the first byte."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            mono
+            boxClassName="w-64"
+            placeholder="smtp.example.com"
+            disabled={readOnly}
+            spellCheck={false}
+            autoComplete="off"
+            value={section.draft.host}
+            onChange={(event) => section.patch({ host: event.target.value })}
+          />
+          <NumberField
+            aria-label="SMTP port"
+            min={1}
+            max={65535}
+            width="w-24"
+            disabled={readOnly}
+            value={section.draft.port}
+            onValueChange={(port) => section.patch({ port })}
+          />
+          <Select
+            aria-label="Connection security"
+            boxClassName="w-36"
+            disabled={readOnly}
+            value={section.draft.security}
+            onChange={(event) =>
+              section.patch({ security: event.target.value as SmtpSettings["security"] })
+            }
+            options={[
+              { value: "starttls", label: "STARTTLS" },
+              { value: "tls", label: "TLS" },
+              { value: "none", label: "None" },
+            ]}
+          />
+        </div>
+      </FieldRow>
+
+      <FieldRow
+        label="Credentials"
+        description="Leave the username empty for a relay that does not authenticate. The password is stored encrypted and is not shown again."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            mono
+            boxClassName="w-56"
+            placeholder="username"
+            disabled={readOnly}
+            spellCheck={false}
+            autoComplete="off"
+            value={section.draft.username}
+            onChange={(event) => section.patch({ username: event.target.value })}
+          />
+          <Input
+            mono
+            type="password"
+            boxClassName="w-56"
+            placeholder={value.password_set ? "•••••••• (unchanged)" : "password"}
+            disabled={readOnly}
+            autoComplete="new-password"
+            value={section.draft.password}
+            onChange={(event) => section.patch({ password: event.target.value })}
+          />
+        </div>
+      </FieldRow>
+
+      <FieldRow
+        label="Sender"
+        description="The From line receivers see. Use an address on a domain whose SPF and DKIM you control, or the mail lands in spam."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            boxClassName="w-40"
+            placeholder="Kaname"
+            disabled={readOnly}
+            value={section.draft.from_name}
+            onChange={(event) => section.patch({ from_name: event.target.value })}
+          />
+          <Input
+            mono
+            type="email"
+            boxClassName="w-64"
+            placeholder="kaname@example.com"
+            disabled={readOnly}
+            spellCheck={false}
+            autoComplete="off"
+            value={section.draft.from_address}
+            onChange={(event) => section.patch({ from_address: event.target.value })}
+          />
+        </div>
+      </FieldRow>
+
+      <FieldRow
+        label="Send a test"
+        description="Tries the values as they are on this screen, saved or not, and says exactly what the server answered."
+        divided={false}
+      >
+        <div className="flex flex-col gap-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              mono
+              type="email"
+              boxClassName="w-64"
+              placeholder="you@example.com"
+              disabled={readOnly}
+              spellCheck={false}
+              value={to}
+              onChange={(event) => setTo(event.target.value)}
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Send}
+              loading={test.isPending}
+              disabled={readOnly || !configured || to.trim().length === 0}
+              onClick={() => {
+                setResult(null);
+                test.mutate();
+              }}
+            >
+              Send test email
+            </Button>
+          </div>
+          <TestOutcome result={result} />
+        </div>
+      </FieldRow>
+    </SettingsSection>
+  );
+}
+
 /* --------------------------- notifications -------------------------- */
+
+/** The form's row: the channel plus a write-only signing secret. */
+type ChannelDraft = NotificationChannel & { secret?: string | null };
+
+function ChannelStatus({
+  channel,
+  dirty,
+  readOnly,
+}: {
+  channel: ChannelDraft;
+  dirty: boolean;
+  readOnly: boolean;
+}) {
+  const [result, setResult] = React.useState<NotificationTestResult | null>(null);
+  const test = useResourceMutation<void, NotificationTestResult>({
+    mutationFn: () =>
+      api.post<NotificationTestResult>(`/settings/notifications/${channel.id}/test`),
+    invalidates: ["settings"],
+    onDone: setResult,
+  });
+
+  return (
+    <div className="sm:col-span-4 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <Button
+        variant="ghost"
+        size="xs"
+        icon={Send}
+        loading={test.isPending}
+        disabled={readOnly || dirty || !channel.enabled}
+        title={dirty ? "Save the section first; the test uses what is stored." : undefined}
+        onClick={() => {
+          setResult(null);
+          test.mutate();
+        }}
+      >
+        Send test
+      </Button>
+      {result ? (
+        <TestOutcome result={result} />
+      ) : channel.last_error ? (
+        <span className="text-[var(--kn-danger)]">Last delivery failed: {channel.last_error}</span>
+      ) : channel.last_delivery_at ? (
+        <span className="text-[var(--kn-text-3)]">
+          Last delivered <RelativeTime value={channel.last_delivery_at} />
+        </span>
+      ) : (
+        <span className="text-[var(--kn-text-3)]">Never delivered anything yet.</span>
+      )}
+    </div>
+  );
+}
 
 function NotificationsSection({
   value,
@@ -916,7 +1170,7 @@ function NotificationsSection({
   value: readonly NotificationChannel[];
   readOnly: boolean;
 }) {
-  const section = useSection<NotificationChannel[]>([...value]);
+  const section = useSection<ChannelDraft[]>([...value]);
   const { error, saving, save } = useSectionSave(
     section,
     () => ({ notifications: { channels: section.draft } }),
@@ -924,7 +1178,7 @@ function NotificationsSection({
     "Notifications",
   );
 
-  const update = (index: number, next: Partial<NotificationChannel>) =>
+  const update = (index: number, next: Partial<ChannelDraft>) =>
     section.setDraft((prev) =>
       prev.map((channel, position) => (position === index ? { ...channel, ...next } : channel)),
     );
@@ -937,8 +1191,11 @@ function NotificationsSection({
         name: "",
         kind: "email",
         target: "",
-        events: ["job_failed", "server_offline", "backup_failed"],
+        events: [...DEFAULT_NOTIFICATION_EVENTS],
         enabled: true,
+        last_delivery_at: null,
+        last_error: null,
+        secret_set: false,
       },
     ]);
 
@@ -986,14 +1243,18 @@ function NotificationsSection({
               }
               options={notificationChannelKind.options.map((kind) => ({
                 value: kind,
-                label: kind,
+                label: kind === "slack" ? "Slack" : kind,
               }))}
             />
             <Input
               mono
               aria-label={`Channel ${index + 1} target`}
               placeholder={
-                channel.kind === "email" ? "ops@example.com" : "https://hooks.example.com/…"
+                channel.kind === "email"
+                  ? "ops@example.com"
+                  : channel.kind === "slack"
+                    ? "https://hooks.slack.com/services/…"
+                    : "https://hooks.example.com/…"
               }
               disabled={readOnly}
               value={channel.target}
@@ -1014,7 +1275,7 @@ function NotificationsSection({
                 multiple
                 options={notificationEvent.options.map((event) => ({
                   value: event,
-                  label: EVENT_LABELS[event],
+                  label: NOTIFICATION_EVENT_LABELS[event],
                 }))}
                 value={channel.events}
                 onValueChange={(next) => update(index, { events: next as NotificationEvent[] })}
@@ -1035,6 +1296,43 @@ function NotificationsSection({
                 />
               </div>
             </div>
+
+            {channel.kind === "webhook" && (
+              <div className="sm:col-span-4 flex flex-wrap items-center gap-2">
+                <Input
+                  mono
+                  type="password"
+                  aria-label={`Channel ${index + 1} signing secret`}
+                  boxClassName="w-72"
+                  autoComplete="new-password"
+                  placeholder={
+                    channel.secret_set && channel.secret !== null
+                      ? "secret stored — leave blank to keep it"
+                      : "signing secret (optional)"
+                  }
+                  disabled={readOnly}
+                  value={channel.secret ?? ""}
+                  onChange={(event) => update(index, { secret: event.target.value || undefined })}
+                />
+                {channel.secret_set && channel.secret !== null && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    disabled={readOnly}
+                    onClick={() => update(index, { secret: null })}
+                  >
+                    Clear secret
+                  </Button>
+                )}
+                <span className="text-xs text-[var(--kn-text-3)]">
+                  Deliveries carry{" "}
+                  <code>X-Kaname-Signature: sha256=HMAC(secret, timestamp.body)</code> and{" "}
+                  <code>X-Kaname-Timestamp</code>.
+                </span>
+              </div>
+            )}
+
+            <ChannelStatus channel={channel} dirty={section.dirty} readOnly={readOnly} />
           </div>
         ))}
 

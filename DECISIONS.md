@@ -596,3 +596,39 @@ installing, and the token's whole lifetime is the minutes before an account exis
 **Consequence.** Onboarding is a one-way door. `/setup/token` and `/setup/owner` refuse once an
 owner exists; the remaining steps require that owner's session, so a stale setup cookie cannot
 keep renaming an instance somebody else now owns.
+
+---
+
+## KD-032 — Notifications are delivered in-process, from the same bus the panel reads
+
+**Decision.** A `NotificationService` in the control plane subscribes to the in-process event bus
+— the one `GET /events` fans out to browsers — and turns the events an operator subscribed a
+channel to into an email (SMTP via nodemailer), a signed webhook (`X-Kaname-Signature:
+sha256=HMAC(secret, "<timestamp>.<body>")`) or a Slack incoming-webhook message. The SMTP
+password and webhook signing secrets are sealed into `secrets` with the same envelope encryption
+as every other credential; the settings API returns `password_set` / `secret_set` booleans, never
+the values. Every channel and the mail server can be tested from Settings, and the answer is the
+transport's own error, not "something went wrong".
+
+**Alternatives considered.** A separate notifier daemon reading the database; a job type per
+notification so the worker carries it; delivering from the routes that raise the condition.
+
+**Why.** The panel already learns about everything it shows from the bus, so the bus is the one
+place a message can be raised once and reach every subscriber. A daemon would be a second process
+to install, supervise and update for what is a few hundred lines. Jobs are for work that reaches
+a host (KD-008) — an email is not that, and a channel that is down must not clog the queue that
+restarts services. Raising from routes would miss everything the reconciler, the worker and the
+updater discover on their own, which is most of what is worth an email.
+
+**What keeps it from becoming the thing people mute.** A server has to stay gone for the offline
+window (Settings → Agents) before anyone hears about it, and its return is one message under the
+same subscription. Repeated threats from one address are one message an hour; a failed unit one
+per half hour; a certificate one message per threshold (14, 7, 3, 1, 0 days), not one per sweep;
+a release one message, remembered across restarts. Every channel has a ceiling of deliveries per
+ten minutes, and the queue behind them is bounded. A delivery failure is `last_error` on the
+channel, shown in Settings — it never throws into the publisher and never disables the channel.
+
+**What it costs.** The control plane makes outbound SMTP and HTTPS connections, which it already
+did for release manifests and ACME. `nodemailer` is a new runtime dependency, kept external in the
+bundle like the other native-adjacent ones; its `sendmail` transport, which spawns a process, is
+not used and must not be — the control plane still has no `child_process`.
