@@ -3,7 +3,6 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { and, asc, desc, eq, inArray, isNull, not, sql, type Database } from "@kaname/db";
 import {
   apiKeys,
-  notificationChannels,
   roleGrants,
   roles,
   sessions,
@@ -24,14 +23,13 @@ import {
   PERMISSION_GROUP_LABELS,
   roleListQuery,
   setAddressInput,
+  smtpTestInput,
   SYSTEM_ROLE_SLUGS,
   updateRoleInput,
   updateSettingsInput,
   updateUserInput,
   userListQuery,
   uuid,
-  type NotificationChannel,
-  type NotificationEvent,
   type Permission,
   type Role,
   type RoleGrant,
@@ -40,6 +38,12 @@ import {
 } from "@kaname/contract";
 import { z } from "zod";
 import { applyAddress, readAddress } from "../services/address.js";
+import {
+  applyNotificationChannels,
+  loadNotificationChannels,
+  loadSmtpSettings,
+  saveSmtpSettings,
+} from "../services/notifications.js";
 import {
   helpers,
   item,
@@ -856,6 +860,27 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     return item(reply, await loadSettings(req.ctx));
   });
 
+  /* ---------------------------- notifications --------------------------- */
+
+  /**
+   * Sends a real message through one channel and reports exactly what
+   * happened. A channel that has never delivered anything is
+   * indistinguishable from one that works, so this is how an operator
+   * finds out before the night it matters.
+   */
+  app.post("/settings/notifications/:id/test", async (req, reply) => {
+    helpers(req).authorize("admin.settings:write");
+    const { id } = parseParams(req, idParam);
+    return item(reply, await req.ctx.notifications.sendTest(id));
+  });
+
+  /** Tries the outgoing mail server, with unsaved draft values if given. */
+  app.post("/settings/notifications/smtp/test", async (req, reply) => {
+    helpers(req).authorize("admin.settings:write");
+    const body = parseBody(req, smtpTestInput);
+    return item(reply, await req.ctx.notifications.sendTestEmail(body.to, body.smtp));
+  });
+
   app.patch("/settings", async (req, reply) => {
     const body = parseBody(req, updateSettingsInput);
     const h = helpers(req);
@@ -880,8 +905,13 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (body.notifications?.channels) {
-      await applyChannels(req, body.notifications.channels);
+      await applyNotificationChannels(req.ctx, body.notifications.channels);
       changed.push("notifications");
+    }
+
+    if (body.notifications?.smtp) {
+      await saveSmtpSettings(req.ctx, body.notifications.smtp, updatedBy);
+      if (!changed.includes("notifications")) changed.push("notifications");
     }
 
     if (changed.length === 0) {
@@ -1208,7 +1238,10 @@ export async function loadSettings(ctx: AppContext): Promise<SettingsDocument> {
     agents: deepMerge(base.agents, stored.get("agents")),
     backups: deepMerge(base.backups, stored.get("backups")),
     acme: deepMerge(base.acme, normalizeStored("acme", stored.get("acme"))),
-    notifications: { channels: await loadChannels(ctx.db) },
+    notifications: {
+      channels: await loadNotificationChannels(ctx.db),
+      smtp: await loadSmtpSettings(ctx),
+    },
   };
 }
 
@@ -1231,7 +1264,18 @@ function settingsDefaults(config: Config): SettingsDocument {
         lockout_minutes: 15,
       },
     },
-    notifications: { channels: [] },
+    notifications: {
+      channels: [],
+      smtp: {
+        host: "",
+        port: 587,
+        security: "starttls",
+        username: "",
+        from_address: "",
+        from_name: "Kaname",
+        password_set: false,
+      },
+    },
     agents: {
       heartbeat_seconds: config.AGENT_HEARTBEAT_SECONDS,
       offline_after_seconds: config.AGENT_OFFLINE_AFTER_SECONDS,
@@ -1281,56 +1325,4 @@ function pick(doc: SettingsDocument, keys: string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of keys) out[key] = (doc as unknown as Record<string, unknown>)[key];
   return out;
-}
-
-async function loadChannels(db: Database): Promise<NotificationChannel[]> {
-  const rows = await db.select().from(notificationChannels).orderBy(asc(notificationChannels.name));
-
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    kind: row.kind,
-    // Credentials live in `secrets`; only the address is ever returned.
-    target: typeof row.config.target === "string" ? row.config.target : "",
-    events: row.events as NotificationEvent[],
-    enabled: row.enabled,
-  }));
-}
-
-/** The supplied array is the whole set: anything omitted is removed. */
-async function applyChannels(req: FastifyRequest, next: NotificationChannel[]): Promise<void> {
-  const duplicate = next.find((c, i) => next.findIndex((o) => o.name === c.name) !== i);
-  if (duplicate) {
-    throw conflict(`Two notification channels are both called "${duplicate.name}".`, {
-      summary: "Channel names identify them in alerts and must be unique.",
-      actions: [],
-    });
-  }
-
-  const existing = await req.ctx.db
-    .select({ id: notificationChannels.id })
-    .from(notificationChannels);
-  const keep = new Set(next.map((c) => c.id));
-
-  for (const channel of next) {
-    const values = {
-      name: channel.name,
-      kind: channel.kind,
-      config: { target: channel.target },
-      events: channel.events,
-      enabled: channel.enabled,
-    };
-    await req.ctx.db
-      .insert(notificationChannels)
-      .values({ id: channel.id, ...values })
-      .onConflictDoUpdate({
-        target: notificationChannels.id,
-        set: { ...values, updatedAt: new Date() },
-      });
-  }
-
-  const removed = existing.filter((row) => !keep.has(row.id)).map((row) => row.id);
-  if (removed.length > 0) {
-    await req.ctx.db.delete(notificationChannels).where(inArray(notificationChannels.id, removed));
-  }
 }

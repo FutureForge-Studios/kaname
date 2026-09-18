@@ -311,19 +311,145 @@ export const notificationEvent = z.enum([
   "threat_detected",
   "alert_firing",
   "deployment_failed",
+  "update_available",
+  "update_applied",
+  "update_failed",
 ]);
 export type NotificationEvent = z.infer<typeof notificationEvent>;
 
-export const notificationChannel = z.object({
+/** Human labels, shared by the settings page and the wizard. */
+export const NOTIFICATION_EVENT_LABELS: Record<NotificationEvent, string> = {
+  job_failed: "Job failed",
+  server_offline: "Server went offline (and came back)",
+  service_failed: "Service failed",
+  certificate_expiring: "Certificate expiring",
+  backup_failed: "Backup failed",
+  threat_detected: "Threat detected",
+  alert_firing: "Alert firing",
+  deployment_failed: "Deployment failed",
+  update_available: "Update available",
+  update_applied: "Update applied",
+  update_failed: "Update failed, rolled back, or could not be checked",
+};
+
+/** The set a fresh channel starts with: the things worth a phone call. */
+export const DEFAULT_NOTIFICATION_EVENTS: readonly NotificationEvent[] = [
+  "job_failed",
+  "server_offline",
+  "backup_failed",
+  "certificate_expiring",
+  "update_failed",
+];
+
+const channelTarget = (
+  channel: { kind: NotificationChannelKind; target: string },
+  ctx: z.RefinementCtx,
+) => {
+  const target = channel.target.trim();
+  if (channel.kind === "email") {
+    if (!emailAddress.safeParse(target).success) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["target"],
+        message: "An email channel needs an email address to send to.",
+      });
+    }
+    return;
+  }
+  const url = z.string().url().safeParse(target);
+  if (!url.success || !/^https?:\/\//i.test(target)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["target"],
+      message:
+        channel.kind === "slack"
+          ? "A Slack channel needs its incoming-webhook URL."
+          : "A webhook channel needs an http(s) URL to POST to.",
+    });
+  }
+};
+
+const notificationChannelBase = z.object({
   id: uuid,
-  name: z.string(),
+  name: z.string().trim().min(1).max(64),
   kind: notificationChannelKind,
-  /** Address or masked webhook URL. The signing secret is never returned. */
-  target: z.string(),
+  /** Address or webhook URL. A webhook signing secret is never returned. */
+  target: z.string().trim().min(1).max(2048),
   events: z.array(notificationEvent),
   enabled: z.boolean(),
+  /** When this channel last delivered anything. Read-only. */
+  last_delivery_at: isoDate.nullable().optional(),
+  /** Why the last delivery failed, or null. Read-only. */
+  last_error: z.string().nullable().optional(),
+  /** Whether a signing secret is stored for a webhook. Read-only. */
+  secret_set: z.boolean().optional(),
 });
+
+export const notificationChannel = notificationChannelBase.superRefine(channelTarget);
 export type NotificationChannel = z.infer<typeof notificationChannel>;
+
+/**
+ * What the settings form sends. `secret` is write-only: omitted keeps
+ * the stored one, null clears it. It signs webhook deliveries
+ * (`X-Kaname-Signature: sha256=<hmac of the body>`).
+ */
+export const notificationChannelInput = notificationChannelBase
+  .extend({ secret: z.string().max(1024).nullable().optional() })
+  .superRefine(channelTarget);
+export type NotificationChannelInput = z.infer<typeof notificationChannelInput>;
+
+/* ------------------------------ smtp ------------------------------ */
+
+export const smtpSecurity = z.enum(["starttls", "tls", "none"]);
+export type SmtpSecurity = z.infer<typeof smtpSecurity>;
+
+/**
+ * The outgoing mail server every email channel sends through. An empty
+ * host means "not configured", and email channels say so instead of
+ * silently doing nothing.
+ */
+export const smtpSettings = z.object({
+  host: z.string().trim().max(253),
+  port: z.number().int().min(1).max(65535),
+  security: smtpSecurity,
+  username: z.string().trim().max(320),
+  from_address: z.string().trim().max(320),
+  from_name: z.string().trim().max(120),
+  /** Whether a password is stored. Read-only; write it with `password`. */
+  password_set: z.boolean(),
+});
+export type SmtpSettings = z.infer<typeof smtpSettings>;
+
+/** `password` is write-only: omitted keeps the stored one, null clears it. */
+export const smtpSettingsInput = smtpSettings
+  .omit({ password_set: true })
+  .partial()
+  .extend({ password: z.string().max(1024).nullable().optional() })
+  .superRefine((value, ctx) => {
+    if (value.from_address && !emailAddress.safeParse(value.from_address).success) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["from_address"],
+        message: "The sender must be an email address.",
+      });
+    }
+  });
+export type SmtpSettingsInput = z.infer<typeof smtpSettingsInput>;
+
+export const smtpTestInput = z.object({
+  to: emailAddress,
+  /** Unsaved draft values to try, merged over what is stored. */
+  smtp: smtpSettingsInput.optional(),
+});
+export type SmtpTestInput = z.infer<typeof smtpTestInput>;
+
+/** The answer to "send a test": either it arrived, or exactly why not. */
+export const notificationTestResult = z.object({
+  ok: z.boolean(),
+  error: z.string().nullable(),
+  duration_ms: z.number().int().min(0),
+});
+export type NotificationTestResult = z.infer<typeof notificationTestResult>;
 
 export const panelSettings = z.object({
   name: z.string().min(1).max(64),
@@ -352,8 +478,16 @@ export type SecuritySettings = z.infer<typeof securitySettings>;
 
 export const notificationSettings = z.object({
   channels: z.array(notificationChannel),
+  smtp: smtpSettings,
 });
 export type NotificationSettings = z.infer<typeof notificationSettings>;
+
+export const notificationSettingsInput = z.object({
+  /** The supplied array is the whole set: anything omitted is removed. */
+  channels: z.array(notificationChannelInput).optional(),
+  smtp: smtpSettingsInput.optional(),
+});
+export type NotificationSettingsInput = z.infer<typeof notificationSettingsInput>;
 
 export const agentSettings = z.object({
   heartbeat_seconds: z.number().int().min(5).max(300),
@@ -392,7 +526,7 @@ export const updateSettingsInput = z.object({
     .partial()
     .extend({ failed_login_lockout: failedLoginLockout.partial().optional() })
     .optional(),
-  notifications: notificationSettings.partial().optional(),
+  notifications: notificationSettingsInput.optional(),
   agents: agentSettings.partial().optional(),
   backups: backupSettings.partial().optional(),
   acme: acmeSettings.partial().optional(),

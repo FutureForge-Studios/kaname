@@ -24,6 +24,7 @@
     "@node-rs/argon2": "^2.0.2",
     "@peculiar/x509": "^1.12.3",
     "fastify": "^5.2.1",
+    "nodemailer": "^8.0.11",
     "otpauth": "^9.3.6",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",
@@ -32,6 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/nodemailer": "^8.0.2",
     "@types/ws": "^8.5.13",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
