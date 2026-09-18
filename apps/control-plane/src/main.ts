@@ -5,6 +5,7 @@ import { loadConfig, loadEnvFile } from "./config.js";
 import { createContext } from "./context.js";
 import { buildServer } from "./server.js";
 import { Reconciler } from "./services/reconciler.js";
+import { AlertEvaluator } from "./services/alerts.js";
 import { registerJobHandlers } from "./jobs/handlers.js";
 import { bootstrap } from "./bootstrap.js";
 
@@ -54,6 +55,10 @@ async function main(): Promise<void> {
   const reconciler = new Reconciler(ctx);
   reconciler.start();
 
+  // Rules are only promises until something checks them.
+  const alerts = new AlertEvaluator(ctx);
+  alerts.start();
+
   const app = await buildServer(ctx);
   await app.listen({ port: config.PORT, host: config.HOST });
   log.info({ port: config.PORT }, "control plane listening");
@@ -79,6 +84,7 @@ async function main(): Promise<void> {
     deadline.unref?.();
 
     reconciler.stop();
+    alerts.stop();
     ctx.updates.stop();
     ctx.notifications.stop();
     // Jobs first, while their agent sockets are still up: a handler that

@@ -281,6 +281,12 @@ other credential Kaname holds and is never shown again; the settings only say wh
 **Send test email** and each channel's **Send test** try the real thing and report exactly what
 the far end answered, and every channel shows when it last delivered or why it last failed.
 
+Alert rules under **Monitoring** are evaluated every minute against the raw samples: a rule fires
+when its condition has held for its whole duration (the worst sample in the window is what is
+compared, so one quiet second cannot hide a sustained breach and one spike cannot fake one) and
+resolves when the latest sample is back inside the line. A rule's own channel list narrows who is
+told.
+
 Webhooks receive a JSON body and, when the channel has a signing secret, `X-Kaname-Timestamp` and
 `X-Kaname-Signature: sha256=<HMAC-SHA256 of "<timestamp>.<body>">`. Delivery is deliberately
 quiet: a server has to stay gone for the offline window before anyone hears about it, repeats are
