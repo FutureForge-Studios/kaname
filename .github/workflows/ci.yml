@@ -49,3 +49,27 @@ jobs:
         run: |
           shellcheck --version
           shellcheck install.sh infra/*.sh
+
+  # The release manifest is built from release.json, and the hard rule
+  # on unattended updates runs on what it says. A pull request that adds
+  # a migration without touching it is a release that will describe
+  # that migration as harmless.
+  release-facts:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: A migration must be described in release.json
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed="$(git diff --name-only "$BASE" HEAD)"
+          if printf '%s\n' "$changed" | grep -q '^packages/db/drizzle/' &&
+            ! printf '%s\n' "$changed" | grep -qx 'release.json'; then
+            echo "packages/db/drizzle changed but release.json did not."
+            echo "Say what the migration is: destructive, adds_config, min_upgrade_from."
+            exit 1
+          fi

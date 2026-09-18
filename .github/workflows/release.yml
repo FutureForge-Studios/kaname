@@ -121,10 +121,16 @@ jobs:
         env:
           CGO_ENABLED: "0"
           GOOS: linux
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           for arch in amd64 arm64; do
-            GOARCH="$arch" go build -trimpath -o "bin/kanamed-linux-$arch" ./cmd/kanamed
+            GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
+              -o "bin/kanamed-linux-$arch" ./cmd/kanamed
           done
+          # An agent that reports the wrong version makes every fleet
+          # update end in needs_attention, so the stamp is checked here.
+          ./bin/kanamed-linux-amd64 version | grep -F "kanamed $VERSION " ||
+            { echo "agent binary does not report $VERSION"; exit 1; }
 
       # main first, then generate. release-manifest.mjs prepends to the
       # manifest it finds on disk, and the tag's copy predates any
@@ -145,8 +151,15 @@ jobs:
           KANAME_REGISTRY: ${{ needs.version.outputs.registry }}
         run: |
           args=("$VERSION")
-          # A breaking release may never apply itself unattended, and the
-          # tag message is the only place that fact is written down.
+          # The facts about this release — breaking, destructive, the
+          # config keys it adds — are release.json as it was at the tag.
+          # main is checked out here and may already describe the next
+          # release, so the file is read from the tag's tree.
+          git show "$GITHUB_REF_NAME:release.json" >/tmp/release.json 2>/dev/null ||
+            echo '{}' >/tmp/release.json
+          args+=(--from /tmp/release.json --reset-facts)
+          # A breaking release may never apply itself unattended; the tag
+          # message is still honoured for anyone who wrote it there.
           case "$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")" in
             *BREAKING*) args+=(--breaking) ;;
           esac
@@ -186,12 +199,14 @@ jobs:
             *) sed -i -E "s/^KANAME_DEFAULT_VERSION=\"[^\"]*\"/KANAME_DEFAULT_VERSION=\"$VERSION\"/" install.sh ;;
           esac
 
-          if git diff --quiet -- versions.json install.sh; then
+          # release.json goes back to its defaults in the same commit: the
+          # facts it carried were this release's, not the next one's.
+          if git diff --quiet -- versions.json install.sh release.json; then
             echo "main already describes $VERSION"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add versions.json install.sh
+          git add versions.json install.sh release.json
           git commit -m "chore(release): $VERSION"
           git push origin HEAD:main

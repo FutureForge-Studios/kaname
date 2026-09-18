@@ -44,6 +44,15 @@ func TestDownloadVerifiesTheDigest(t *testing.T) {
 	if string(got) != string(payload) {
 		t.Fatalf("downloaded %q, want %q", got, payload)
 	}
+
+	// Verified, but not yet runnable: that is Swap's decision to make.
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("the staged download is %v, want 0600 until it is swapped in", info.Mode().Perm())
+	}
 }
 
 func TestDownloadRefusesAMismatchedDigest(t *testing.T) {
@@ -102,6 +111,9 @@ func TestSwapKeepsThePreviousBinary(t *testing.T) {
 	current, _ := os.ReadFile(binary)
 	if string(current) != "new build" {
 		t.Fatalf("the binary is %q, want the new build", current)
+	}
+	if info, err := os.Stat(binary); err != nil || info.Mode().Perm() != 0o755 {
+		t.Fatalf("the installed binary is not executable: %v %v", info.Mode(), err)
 	}
 
 	previous, err := os.ReadFile(backup)
