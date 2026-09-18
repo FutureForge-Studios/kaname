@@ -65,7 +65,7 @@ importers:
         specifier: ^5.2.1
         version: 5.12.1
       nodemailer:
-        specifier: ^8
+        specifier: ^8.0.11
         version: 8.0.11
       otpauth:
         specifier: ^9.3.6
