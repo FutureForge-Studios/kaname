@@ -55,7 +55,10 @@ export interface TerminalPaneProps {
    * used". Minting per socket also makes reconnect free.
    */
   connect: (signal: AbortSignal) => Promise<{ ws_url: string }>;
-  onReady?: (controller: TerminalController) => void;
+  /** The session `connect` minted, once it is actually going to be used. */
+  onSession?: (session: { ws_url: string }) => void;
+  /** Null when the pane unmounts, so the parent drops its last reference to the terminal. */
+  onReady?: (controller: TerminalController | null) => void;
   onStatusChange?: (status: TerminalStatus, detail?: string) => void;
   onGeometry?: (geometry: TerminalGeometry) => void;
   /** Ctrl/Cmd+Shift+F, so the page can focus its own search field. */
@@ -66,6 +69,8 @@ export interface TerminalPaneProps {
 const FONT_SIZE = 12;
 const LINE_HEIGHT = 1.5;
 const SCROLLBACK = 10_000;
+/** Output that arrives before the pane has a size is held, but not forever. */
+const MAX_PENDING_BYTES = 1024 * 1024;
 
 function token(styles: CSSStyleDeclaration, name: string, fallback: string): string {
   const value = styles.getPropertyValue(name).trim();
@@ -120,6 +125,7 @@ function buildTheme(): Record<string, string> {
 export function TerminalPane({
   connect,
   onReady,
+  onSession,
   onStatusChange,
   onGeometry,
   onRequestSearch,
@@ -129,8 +135,14 @@ export function TerminalPane({
 
   /* Callbacks live in refs so a parent re-render never tears down a
    * live shell just because it passed a new closure. */
-  const callbacks = React.useRef({ onReady, onStatusChange, onGeometry, onRequestSearch });
-  callbacks.current = { onReady, onStatusChange, onGeometry, onRequestSearch };
+  const callbacks = React.useRef({
+    onReady,
+    onSession,
+    onStatusChange,
+    onGeometry,
+    onRequestSearch,
+  });
+  callbacks.current = { onReady, onSession, onStatusChange, onGeometry, onRequestSearch };
 
   const connectRef = React.useRef(connect);
   connectRef.current = connect;
@@ -172,6 +184,7 @@ export function TerminalPane({
     let flushed = false;
     let fontsReady = document.fonts === undefined || document.fonts.status === "loaded";
     const pending: (string | Uint8Array)[] = [];
+    let pendingBytes = 0;
 
     const openTerminal = (): boolean => {
       if (opened) return true;
@@ -211,19 +224,27 @@ export function TerminalPane({
       term.refresh(0, term.rows - 1);
     };
 
+    const encoder = new TextEncoder();
+    const abort = new AbortController();
+    let socket: WebSocket | null = null;
+    let disposed = false;
+
     const writeOut = (chunk: string | Uint8Array): void => {
+      if (disposed) return;
       if (flushed) {
         term.write(chunk);
         return;
       }
       pending.push(chunk);
+      pendingBytes += chunk.length;
+      // A shell that is already streaming into a pane that has not laid
+      // out yet keeps only its most recent output, the same trade the
+      // scrollback limit makes once it is open.
+      while (pendingBytes > MAX_PENDING_BYTES && pending.length > 1) {
+        pendingBytes -= pending.shift()!.length;
+      }
       flushSoon();
     };
-
-    const encoder = new TextEncoder();
-    const abort = new AbortController();
-    let socket: WebSocket | null = null;
-    let disposed = false;
     callbacks.current.onStatusChange?.("connecting");
 
     const safeFit = (): void => {
@@ -345,6 +366,7 @@ export function TerminalPane({
 
     if (!fontsReady) {
       void document.fonts.ready.then(() => {
+        if (disposed) return;
         fontsReady = true;
         if (openTerminal()) safeFit();
       });
@@ -378,6 +400,7 @@ export function TerminalPane({
       // The pane can be torn down while the ticket is in flight; opening
       // the socket then would spend it on a session nobody is watching.
       if (disposed) return;
+      callbacks.current.onSession?.(session);
       socket = new WebSocket(session.ws_url);
       socket.binaryType = "arraybuffer";
       wire(socket);
@@ -394,9 +417,12 @@ export function TerminalPane({
       resizeSub.dispose();
       if (socket) {
         socket.onclose = null;
+        socket.onmessage = null;
+        socket.onerror = null;
         socket.close(1000, "pane closed");
       }
       term.dispose();
+      callbacks.current.onReady?.(null);
     };
     // Deliberately mount-scoped: the parent remounts with a new `key` to
     // start a new session, so a changing callback must not reconnect.

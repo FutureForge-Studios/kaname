@@ -137,6 +137,9 @@ export class LogTail {
 
   private fail(error: ApiError): void {
     this.stopped = true;
+    // The reader that dispatched the error frame is still awaiting the
+    // body; without this it keeps delivering records after "closed".
+    this.controller?.abort();
     this.controller = null;
     this.setStatus("closed");
     this.options.onError?.(error);
