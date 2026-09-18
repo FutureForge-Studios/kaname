@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { and, asc, desc, eq, gte, lte, sql, type Database } from "@kaname/db";
+import { and, asc, desc, eq, gte, lte, ne, sql, type Database } from "@kaname/db";
 import {
   domains,
   mailAliases,
@@ -39,6 +39,7 @@ import {
   type MailLogEntry,
   type MailStatus,
   type Mailbox,
+  type MethodResult,
   type Permission,
 } from "@kaname/contract";
 import {
@@ -52,10 +53,12 @@ import {
   parseParams,
   parseQuery,
 } from "../http/plugin.js";
-import { agentUnsupported, conflict, notFound } from "../lib/errors.js";
+import { AgentOfflineError, AgentRpcError, type StreamHandle } from "../agent/hub.js";
+import { agentUnsupported, conflict, notFound, type ApiException } from "../lib/errors.js";
 import { MailAuthChecker } from "../services/mail-auth.js";
 import {
   combine,
+  drained,
   enqueueServerJob,
   loadConnectedServer,
   loadServer,
@@ -421,15 +424,20 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     const body = parseBody(req, createMailboxInput);
     const ctx = await loadMailDomain(req, body.mail_domain_id, "email.mailboxes:write");
 
-    const address = `${body.local_part}@${ctx.domainName}`;
+    // local_part is lower-cased by the contract; the domain name is
+    // compared case-insensitively too because the host does.
+    const address = `${body.local_part}@${ctx.domainName.toLowerCase()}`;
     const existing = await req.ctx.db
-      .select({ id: mailboxes.id })
+      .select({ id: mailboxes.id, status: mailboxes.status })
       .from(mailboxes)
-      .where(eq(mailboxes.address, address))
+      .where(sql`lower(${mailboxes.address}) = ${address}`)
       .limit(1);
     if (existing[0]) {
       throw conflict(`${address} already exists.`, {
-        summary: "Reset its password instead of creating a second mailbox at the same address.",
+        summary:
+          existing[0].status === "active"
+            ? "Reset its password instead of creating a second mailbox at the same address."
+            : "This mailbox never finished provisioning on the host. Delete it, then create it again.",
         actions: [{ label: "Open mailbox", href: `/email/mailboxes/${existing[0].id}` }],
       });
     }
@@ -546,6 +554,33 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     const { id } = parseParams(req, idParam);
     const body = parseBody(req, deleteMailboxInput);
     const row = await loadMailbox(req, id, "email.mailboxes:delete");
+
+    // A row whose create never landed has no account on the host, so
+    // with the agent away there is nothing to queue against: waiting for
+    // it to come back would only be a wait to delete a record. Once the
+    // agent is present the job runs and tolerates "not found" itself.
+    const neverProvisioned =
+      row.mailbox.status === "provisioning" || row.mailbox.status === "error";
+    if (neverProvisioned && !req.ctx.hub.isConnected(row.server.id)) {
+      await req.ctx.db.delete(mailboxes).where(eq(mailboxes.id, id));
+      await req.ctx.audit.record({
+        actor: helpers(req).actor(),
+        action: "mail.mailbox.deleted",
+        targetType: "mailbox",
+        targetId: id,
+        targetLabel: row.mailbox.address,
+        serverId: row.server.id,
+        before: { address: row.mailbox.address, status: row.mailbox.status },
+        metadata: { reason: "never provisioned; removed without a job" },
+      });
+      req.ctx.events.publish(
+        "servers",
+        "mailbox.deleted",
+        { server_id: row.server.id, mailbox_id: id, address: row.mailbox.address },
+        row.server.id,
+      );
+      return item(reply, { job: null, removed: true });
+    }
 
     const job = await enqueueServerJob(req, {
       type: "mail.mailbox.delete",
@@ -680,36 +715,21 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
   app.post("/mail-aliases", async (req, reply) => {
     const body = parseBody(req, createMailAliasInput);
     const ctx = await loadMailDomain(req, body.mail_domain_id, "email.routing:write");
+    await assertAliasAddress(req, ctx, body.address);
 
-    if (!body.address.toLowerCase().endsWith(`@${ctx.domainName.toLowerCase()}`)) {
-      throw conflict(`${body.address} is not an address in ${ctx.domainName}.`, {
-        summary:
-          "An alias rewrites an address this domain receives, so its left-hand side has to belong to the domain. To send mail elsewhere from another domain, add the alias on that domain instead.",
-        actions: [],
-      });
-    }
-
-    const existing = await req.ctx.db
-      .select({ id: mailAliases.id })
-      .from(mailAliases)
-      .where(eq(mailAliases.address, body.address))
-      .limit(1);
-    if (existing[0]) {
-      throw conflict(`${body.address} is already aliased.`, {
-        summary: "Edit the existing alias to add another destination — one address maps once.",
-        actions: [{ label: "Open alias", href: `/email/aliases/${existing[0].id}` }],
-      });
-    }
-
-    const [row] = await req.ctx.db
-      .insert(mailAliases)
-      .values({
-        mailDomainId: ctx.mailDomain.id,
-        address: body.address,
-        destinations: body.destinations,
-        enabled: body.enabled,
-      })
-      .returning();
+    const [row] = await guardUnique(
+      () =>
+        req.ctx.db
+          .insert(mailAliases)
+          .values({
+            mailDomainId: ctx.mailDomain.id,
+            address: body.address,
+            destinations: body.destinations,
+            enabled: body.enabled,
+          })
+          .returning(),
+      () => aliasTaken(body.address),
+    );
 
     await recordRoutingChange(req, ctx, "mail.alias.created", row!.id, body.address, null, body);
     return accepted(reply, await applyAliases(req, ctx));
@@ -721,15 +741,23 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     const before = await loadAlias(req, id, "email.routing:write");
     const ctx = await loadMailDomain(req, before.alias.mailDomainId, "email.routing:write");
 
-    await req.ctx.db
-      .update(mailAliases)
-      .set({
-        ...(body.address !== undefined ? { address: body.address } : {}),
-        ...(body.destinations !== undefined ? { destinations: body.destinations } : {}),
-        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(mailAliases.id, id));
+    // The same rules as a create, on what the row will say afterwards:
+    // an edit is how an alias would otherwise leave its domain.
+    await assertAliasAddress(req, ctx, body.address ?? before.alias.address, id);
+
+    await guardUnique(
+      () =>
+        req.ctx.db
+          .update(mailAliases)
+          .set({
+            ...(body.address !== undefined ? { address: body.address } : {}),
+            ...(body.destinations !== undefined ? { destinations: body.destinations } : {}),
+            ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(mailAliases.id, id)),
+      () => aliasTaken(body.address ?? before.alias.address),
+    );
 
     await recordRoutingChange(
       req,
@@ -816,42 +844,22 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
   app.post("/mail-forwarders", async (req, reply) => {
     const body = parseBody(req, createMailForwarderInput);
     const ctx = await loadMailDomain(req, body.mail_domain_id, "email.routing:write");
+    await assertForwarder(req, ctx, body.source, body.destination);
 
-    if (body.source.toLowerCase() === body.destination.toLowerCase()) {
-      throw conflict(`${body.source} forwards to itself.`, {
-        summary:
-          "That is a delivery loop: the mail stack would bounce the message with a maximum-hop error.",
-        actions: [],
-      });
-    }
-
-    const existing = await req.ctx.db
-      .select({ id: mailForwarders.id })
-      .from(mailForwarders)
-      .where(
-        and(
-          eq(mailForwarders.source, body.source),
-          eq(mailForwarders.destination, body.destination),
-        ),
-      )
-      .limit(1);
-    if (existing[0]) {
-      throw conflict(`${body.source} already forwards to ${body.destination}.`, {
-        summary: "Add a second forwarder with a different destination, or edit the existing one.",
-        actions: [{ label: "Open forwarder", href: `/email/forwarders/${existing[0].id}` }],
-      });
-    }
-
-    const [row] = await req.ctx.db
-      .insert(mailForwarders)
-      .values({
-        mailDomainId: ctx.mailDomain.id,
-        source: body.source,
-        destination: body.destination,
-        keepCopy: body.keep_copy,
-        enabled: body.enabled,
-      })
-      .returning();
+    const [row] = await guardUnique(
+      () =>
+        req.ctx.db
+          .insert(mailForwarders)
+          .values({
+            mailDomainId: ctx.mailDomain.id,
+            source: body.source,
+            destination: body.destination,
+            keepCopy: body.keep_copy,
+            enabled: body.enabled,
+          })
+          .returning(),
+      () => forwarderTaken(body.source, body.destination),
+    );
 
     await recordRoutingChange(req, ctx, "mail.forwarder.created", row!.id, body.source, null, body);
     return accepted(reply, await applyForwarders(req, ctx));
@@ -863,16 +871,24 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     const before = await loadForwarder(req, id, "email.routing:write");
     const ctx = await loadMailDomain(req, before.forwarder.mailDomainId, "email.routing:write");
 
-    await req.ctx.db
-      .update(mailForwarders)
-      .set({
-        ...(body.source !== undefined ? { source: body.source } : {}),
-        ...(body.destination !== undefined ? { destination: body.destination } : {}),
-        ...(body.keep_copy !== undefined ? { keepCopy: body.keep_copy } : {}),
-        ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(mailForwarders.id, id));
+    const source = body.source ?? before.forwarder.source;
+    const destination = body.destination ?? before.forwarder.destination;
+    await assertForwarder(req, ctx, source, destination, id);
+
+    await guardUnique(
+      () =>
+        req.ctx.db
+          .update(mailForwarders)
+          .set({
+            ...(body.source !== undefined ? { source: body.source } : {}),
+            ...(body.destination !== undefined ? { destination: body.destination } : {}),
+            ...(body.keep_copy !== undefined ? { keepCopy: body.keep_copy } : {}),
+            ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(mailForwarders.id, id)),
+      () => forwarderTaken(source, destination),
+    );
 
     await recordRoutingChange(
       req,
@@ -1013,6 +1029,12 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
   app.get("/mail-logs/tail", async (req, reply) => {
     const q = parseQuery(req, mailLogTailQuery);
     const server = await loadConnectedServer(req, q.server_id, "email.logs:read");
+    // Decided before the headers go out: once the response is an event
+    // stream a refusal can only be a frame, not the JSON error with a
+    // remediation that the rest of the API answers with.
+    if (!req.ctx.hub.capabilities(server.id).includes("mail")) {
+      throw agentUnsupported(server.name, "a mail stack");
+    }
 
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -1023,24 +1045,49 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     });
     reply.raw.write(`retry: 3000\n\n`);
 
-    const handle = req.ctx.hub.stream(
-      server.id,
-      "mail.logs",
-      { lines: q.lines, follow: true, ...(q.q ? { query: q.q } : {}) },
-      (data) => {
-        for (const line of data.split("\n")) {
-          if (!line.trim()) continue;
-          const payload = {
-            server_id: server.id,
-            server_name: server.name,
-            ts: new Date().toISOString(),
-            line,
-          };
-          reply.raw.write(`event: mail.log\ndata: ${JSON.stringify(payload)}\n\n`);
-        }
-      },
-      { timeoutMs: TAIL_TIMEOUT_MS },
-    );
+    const errorFrame = (err: unknown) => {
+      const code =
+        err instanceof AgentOfflineError
+          ? "agent_offline"
+          : err instanceof AgentRpcError && err.agentError.code === "unsupported"
+            ? "agent_unsupported"
+            : "agent_error";
+      const message = err instanceof Error ? err.message : String(err);
+      reply.raw.write(`event: error\ndata: ${JSON.stringify({ code, message })}\n\n`);
+    };
+
+    let handle: StreamHandle<MethodResult<"mail.logs">>;
+    try {
+      handle = req.ctx.hub.stream(
+        server.id,
+        "mail.logs",
+        { lines: q.lines, follow: true, ...(q.q ? { query: q.q } : {}) },
+        async (data) => {
+          for (const line of data.split("\n")) {
+            if (!line.trim()) continue;
+            if (reply.raw.writableEnded || reply.raw.destroyed) return;
+            const payload = {
+              server_id: server.id,
+              server_name: server.name,
+              ts: new Date().toISOString(),
+              line,
+            };
+            // A browser that is behind holds the next line, and the agent with it.
+            if (!reply.raw.write(`event: mail.log\ndata: ${JSON.stringify(payload)}\n\n`)) {
+              await drained(reply.raw);
+            }
+          }
+        },
+        { timeoutMs: TAIL_TIMEOUT_MS },
+      );
+    } catch (err) {
+      // The agent left between the connectivity check and this call.
+      // Fastify's error handler cannot speak on a response whose
+      // headers are out, so the client is told in its own dialect.
+      errorFrame(err);
+      reply.raw.end();
+      return reply;
+    }
 
     const keepalive = setInterval(() => reply.raw.write(`: keepalive\n\n`), KEEPALIVE_MS);
     keepalive.unref?.();
@@ -1054,8 +1101,14 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
 
     void handle.done
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        reply.raw.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
+        if (reply.raw.writableEnded || reply.raw.destroyed) return;
+        // The per-call deadline is a cap on one follow, not a fault on
+        // the host: the client opens a fresh one and carries on.
+        if (err instanceof AgentRpcError && err.agentError.code === "timeout") {
+          reply.raw.write(`event: rotate\ndata: {}\n\n`);
+          return;
+        }
+        errorFrame(err);
       })
       .finally(() => {
         clearInterval(keepalive);
@@ -1188,6 +1241,110 @@ async function loadForwarder(
   if (!row) throw notFound("Forwarder", id);
   h.authorize(permission, row.server.id);
   return row;
+}
+
+/* ------------------------------------------------------------------ *
+ * Routing rules
+ *
+ * One set of checks for a create and an edit alike, applied to what the
+ * row will say afterwards. Postfix matches map keys case-insensitively,
+ * so duplicates are judged the same way even though the unique indexes
+ * are not (the contract lower-cases new addresses; older rows may not be).
+ * ------------------------------------------------------------------ */
+
+function aliasTaken(address: string, id?: string): ApiException {
+  return conflict(`${address} is already aliased.`, {
+    summary: "Edit the existing alias to add another destination — one address maps once.",
+    actions: id ? [{ label: "Open alias", href: `/email/aliases/${id}` }] : [],
+  });
+}
+
+function forwarderTaken(source: string, destination: string, id?: string): ApiException {
+  return conflict(`${source} already forwards to ${destination}.`, {
+    summary: "Add a second forwarder with a different destination, or edit the existing one.",
+    actions: id ? [{ label: "Open forwarder", href: `/email/forwarders/${id}` }] : [],
+  });
+}
+
+function assertInDomain(ctx: MailDomainContext, address: string): void {
+  if (address.toLowerCase().endsWith(`@${ctx.domainName.toLowerCase()}`)) return;
+  throw conflict(`${address} is not an address in ${ctx.domainName}.`, {
+    summary:
+      "A rule rewrites an address this domain receives, so its left-hand side has to belong to the domain. To route mail for another domain, add the rule on that domain instead.",
+    actions: [],
+  });
+}
+
+async function assertAliasAddress(
+  req: FastifyRequest,
+  ctx: MailDomainContext,
+  address: string,
+  excludeId?: string,
+): Promise<void> {
+  assertInDomain(ctx, address);
+  const existing = await req.ctx.db
+    .select({ id: mailAliases.id })
+    .from(mailAliases)
+    .where(
+      and(
+        sql`lower(${mailAliases.address}) = ${address.toLowerCase()}`,
+        excludeId ? ne(mailAliases.id, excludeId) : undefined,
+      ),
+    )
+    .limit(1);
+  if (existing[0]) throw aliasTaken(address, existing[0].id);
+}
+
+async function assertForwarder(
+  req: FastifyRequest,
+  ctx: MailDomainContext,
+  source: string,
+  destination: string,
+  excludeId?: string,
+): Promise<void> {
+  assertInDomain(ctx, source);
+  if (source.toLowerCase() === destination.toLowerCase()) {
+    throw conflict(`${source} forwards to itself.`, {
+      summary:
+        "That is a delivery loop: the mail stack would bounce the message with a maximum-hop error.",
+      actions: [],
+    });
+  }
+  const existing = await req.ctx.db
+    .select({ id: mailForwarders.id })
+    .from(mailForwarders)
+    .where(
+      and(
+        sql`lower(${mailForwarders.source}) = ${source.toLowerCase()}`,
+        sql`lower(${mailForwarders.destination}) = ${destination.toLowerCase()}`,
+        excludeId ? ne(mailForwarders.id, excludeId) : undefined,
+      ),
+    )
+    .limit(1);
+  if (existing[0]) throw forwarderTaken(source, destination, existing[0].id);
+}
+
+/** Postgres unique_violation, wherever the driver put the SQLSTATE. */
+export function isUniqueViolation(err: unknown): boolean {
+  for (let cursor = err, depth = 0; cursor && depth < 5; depth += 1) {
+    if (typeof cursor === "object" && (cursor as { code?: unknown }).code === "23505") return true;
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * The checks above run before the write, so two operators racing on the
+ * same address is the only way the unique index still fires; it should
+ * answer like the check did rather than as an unexplained 500.
+ */
+async function guardUnique<T>(write: () => Promise<T>, onTaken: () => ApiException): Promise<T> {
+  try {
+    return await write();
+  } catch (err) {
+    if (isUniqueViolation(err)) throw onTaken();
+    throw err;
+  }
 }
 
 /* ------------------------------------------------------------------ *

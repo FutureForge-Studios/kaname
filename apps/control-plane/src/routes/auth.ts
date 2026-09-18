@@ -10,7 +10,14 @@ import {
   type UserStatus,
 } from "@kaname/contract";
 import { z } from "zod";
-import { helpers, item, noContent, parseBody } from "../http/plugin.js";
+import {
+  helpers,
+  item,
+  noContent,
+  parseBody,
+  secureCookie,
+  sessionCookieName,
+} from "../http/plugin.js";
 import { ApiException } from "../lib/errors.js";
 import { constantTimeEquals, generateToken, hmac } from "../lib/crypto.js";
 import type { AuthService } from "../services/auth.js";
@@ -405,6 +412,10 @@ async function completeLogin(
 
 /* ------------------------------------------------------------------ *
  * Cookie
+ *
+ * Name and Secure flag follow the request, not the process: the same
+ * install is signed in to over plain HTTP on its IP and over HTTPS on
+ * its domain, and only the second can hold a `__Host-` cookie.
  * ------------------------------------------------------------------ */
 
 export function setSessionCookie(
@@ -414,10 +425,10 @@ export function setSessionCookie(
   expiresAt: Date,
   remember: boolean,
 ): void {
-  reply.setCookie(req.ctx.config.cookieName, token, {
+  reply.setCookie(sessionCookieName(req), token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: req.ctx.config.secureCookies,
+    secure: secureCookie(req),
     path: "/",
     // Without `remember` the cookie dies with the browser session, while
     // the server-side session keeps its own shorter-lived expiry.
@@ -426,10 +437,10 @@ export function setSessionCookie(
 }
 
 function clearSessionCookie(req: FastifyRequest, reply: FastifyReply): void {
-  reply.clearCookie(req.ctx.config.cookieName, {
+  reply.clearCookie(sessionCookieName(req), {
     httpOnly: true,
     sameSite: "lax",
-    secure: req.ctx.config.secureCookies,
+    secure: secureCookie(req),
     path: "/",
   });
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -6,7 +6,7 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import pino from "pino";
 import { createDb, eq, sql, type DbHandle } from "@kaname/db";
 import { migrateHandle } from "@kaname/db/migrate";
-import { auditEvents, servers, settings, updateRuns } from "@kaname/db/schema";
+import { auditEvents, jobs, servers, settings, updateRuns } from "@kaname/db/schema";
 import {
   mayApplyUnattended,
   type AddressSettings,
@@ -18,7 +18,12 @@ import { loadConfig, resetConfigForTests } from "./config.js";
 import { createContext, type AppContext } from "./context.js";
 import { buildServer } from "./server.js";
 import { bootstrap } from "./bootstrap.js";
-import type { UpdateDispatcher, UpdateRequest } from "./services/updates.js";
+import {
+  UpdateService,
+  checkDue,
+  type UpdateDispatcher,
+  type UpdateRequest,
+} from "./services/updates.js";
 
 /* ------------------------------------------------------------------ *
  * Updates.
@@ -27,7 +32,8 @@ import type { UpdateDispatcher, UpdateRequest } from "./services/updates.js";
  * an install is never applied without a person saying so, whatever the
  * cadence is set to. Everything else here is about the half of the
  * sequence that happens after this process has been replaced — the
- * outcomes it can no longer observe for itself.
+ * outcomes it can no longer observe for itself — and the half where it
+ * is still alive but the host is the one doing the work.
  * ------------------------------------------------------------------ */
 
 const OWNER_PASSWORD = "kaname-updates-test-owner";
@@ -63,18 +69,34 @@ const MANIFEST = {
   ],
 };
 
+/** What the fake manifest server answers; tests swap it to stage a scenario. */
+let manifestBody: unknown = MANIFEST;
+let manifestUnreachable = false;
+
 /** Stands in for the host-side updater install.sh puts on the box. */
 class FakeDispatcher implements UpdateDispatcher {
   readonly requests: UpdateRequest[] = [];
   installed = true;
+  /** Thrown by the next dispatch, once — the queue directory going read-only. */
+  failNext: Error | null = null;
+  withdrawn = 0;
 
   available(): boolean {
     return this.installed;
   }
 
   dispatch(request: UpdateRequest): Promise<void> {
+    if (this.failNext) {
+      const err = this.failNext;
+      this.failNext = null;
+      return Promise.reject(err);
+    }
     this.requests.push(request);
     return Promise.resolve();
+  }
+
+  withdraw(): void {
+    this.withdrawn += 1;
   }
 }
 
@@ -93,10 +115,21 @@ function body<T>(res: LightMyRequestResponse): T {
   return (JSON.parse(res.body) as { data: T }).data;
 }
 
+const fakeFetch = (async () => {
+  if (manifestUnreachable) throw new Error("connect ECONNREFUSED");
+  return new Response(JSON.stringify(manifestBody), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}) as typeof globalThis.fetch;
+
 beforeAll(async () => {
   resetConfigForTests();
   dataDir = mkdtempSync(join(tmpdir(), "kaname-update-"));
-  writeFileSync(join(dataDir, ".env"), "KANAME_MASTER_KEY=existing\nPOSTGRES_PASSWORD=keep-me\n");
+  writeFileSync(
+    join(dataDir, ".env"),
+    "KANAME_VERSION=0.1.0\nKANAME_MASTER_KEY=existing\nPOSTGRES_PASSWORD=keep-me\n",
+  );
 
   const config = loadConfig({
     KANAME_ENV: "test",
@@ -116,14 +149,7 @@ beforeAll(async () => {
   dispatcher = new FakeDispatcher();
   ctx = createContext(
     { config, log: pino({ level: "fatal" }), dbHandle: handle },
-    {
-      dispatcher,
-      fetch: (async () =>
-        new Response(JSON.stringify(MANIFEST), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        })) as typeof globalThis.fetch,
-    },
+    { dispatcher, fetch: fakeFetch },
   );
   await ctx.ca.load();
   await bootstrap(ctx);
@@ -140,6 +166,7 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
+  ctx?.updates.stop();
   await app?.close();
   await handle?.close();
   resetConfigForTests();
@@ -191,9 +218,85 @@ describe("checking", () => {
     expect(overview.control_plane.requires_confirmation).toBe(true);
     expect(overview.settings.last_check_error).toBeNull();
   });
+
+  it("still knows about the release after a restart, without fetching", async () => {
+    // A fresh service on the same database is what the process that
+    // comes back after a restart — or a rollback — is.
+    const unreachable = (async () => {
+      throw new Error("no network");
+    }) as typeof globalThis.fetch;
+    const restarted = new UpdateService(ctx, { dispatcher, fetch: unreachable });
+
+    const overview = await restarted.overview();
+    expect(overview.control_plane.update_available).toBe(true);
+    expect(overview.control_plane.latest_version).toBe("0.3.0");
+    expect(await restarted.releaseFor("0.2.0")).toMatchObject({ version: "0.2.0" });
+  });
+
+  it("retries a failed check soon instead of after a whole interval", async () => {
+    const before = await ctx.updates.loadPolicy();
+    manifestUnreachable = true;
+    try {
+      const { policy } = await ctx.updates.checkNow();
+      expect(policy.last_check_error).toContain("ECONNREFUSED");
+      // The failure was not a check; the last real one still stands.
+      expect(policy.last_checked_at).toBe(before.last_checked_at);
+      expect(policy.retry_after).not.toBeNull();
+      const retryIn = Date.parse(policy.retry_after!) - Date.now();
+      expect(retryIn).toBeGreaterThan(0);
+      expect(retryIn).toBeLessThanOrEqual(15 * 60_000);
+
+      expect(checkDue(policy, Date.now())).toBe(false);
+      expect(checkDue(policy, Date.now() + 16 * 60_000)).toBe(true);
+
+      const overview = await ctx.updates.overview();
+      expect(overview.settings.next_check_at).toBe(policy.retry_after);
+      // The release found earlier is not forgotten because a fetch failed.
+      expect(overview.control_plane.update_available).toBe(true);
+    } finally {
+      manifestUnreachable = false;
+    }
+
+    const { policy: recovered } = await ctx.updates.checkNow();
+    expect(recovered.retry_after).toBeNull();
+    expect(recovered.check_failures).toBe(0);
+    expect(recovered.last_check_error).toBeNull();
+  });
+
+  it("writes down why an unattended apply was refused, and forgets it when the release moves on", async () => {
+    await ctx.updates.savePolicy({ tier: "auto_minor" });
+    manifestBody = { schema: 1, releases: [release("0.2.0"), release("0.1.5")] };
+    try {
+      const { policy } = await ctx.updates.checkNow({ auto: true });
+      expect(policy.last_apply_error).toBeNull();
+
+      const after = await ctx.updates.loadPolicy();
+      expect(after.last_apply_error?.version).toBe("0.2.0");
+      expect(after.last_apply_error?.message).toContain("backup");
+
+      const overview = await ctx.updates.overview();
+      expect(overview.settings.last_apply_error?.message).toContain("backup");
+
+      const audited = await ctx.db
+        .select({ action: auditEvents.action })
+        .from(auditEvents)
+        .where(eq(auditEvents.action, "update.unattended_refused"));
+      expect(audited.length).toBe(1);
+      // Nothing was started.
+      expect(await ctx.db.select().from(updateRuns)).toHaveLength(0);
+    } finally {
+      manifestBody = MANIFEST;
+      await ctx.updates.savePolicy({ tier: "notify" });
+    }
+
+    await ctx.updates.checkNow();
+    expect((await ctx.updates.loadPolicy()).last_apply_error).toBeNull();
+  });
 });
 
 describe("applying to the control plane", () => {
+  let appliedRunId: string;
+
   it("refuses a breaking release that was not confirmed, even at auto_all", async () => {
     const res = await as("/api/v1/updates/control-plane", {
       to_version: "0.3.0",
@@ -205,7 +308,45 @@ describe("applying to the control plane", () => {
     expect(JSON.parse(res.body).error.message).toContain("breaking");
   });
 
+  it("refuses when the host-side updater is not installed", async () => {
+    dispatcher.installed = false;
+    try {
+      const res = await as("/api/v1/updates/control-plane", {
+        to_version: "0.1.5",
+        skip_backup_check: true,
+      });
+      expect(res.statusCode, res.body).toBe(412);
+      expect(JSON.parse(res.body).error.message).toContain("host-side updater");
+    } finally {
+      dispatcher.installed = true;
+    }
+  });
+
+  it("puts the configuration back when the handover itself fails", async () => {
+    dispatcher.failNext = new Error("the queue directory is read-only");
+    const res = await as("/api/v1/updates/control-plane", {
+      to_version: "0.1.5",
+      skip_backup_check: true,
+    });
+    expect(res.statusCode, res.body).toBe(202);
+    const run = body<UpdateRun>(res);
+
+    await waitUntil(async () => (await readRun(run.id)).status === "failed");
+    const after = await readRun(run.id);
+    expect(after.error).toContain("read-only");
+    expect(after.error).toContain("restored");
+
+    // .env is exactly what it was: the next `compose up`, whatever
+    // triggers it, must not quietly apply the release.
+    const env = readFileSync(join(dataDir, ".env"), "utf8");
+    expect(env).toContain("KANAME_VERSION=0.1.0");
+    expect(env).not.toContain("0.1.5");
+    expect(await pendingRecord()).toBeNull();
+    expect(dispatcher.withdrawn).toBe(1);
+  });
+
   it("blocks on a missing backup and audits the decision to skip it", async () => {
+    const skipsBefore = await skipAudits();
     const blocked = await as("/api/v1/updates/control-plane", { to_version: "0.2.0" });
     expect(blocked.statusCode, blocked.body).toBe(412);
     expect(JSON.parse(blocked.body).error.message).toContain("backup");
@@ -215,12 +356,9 @@ describe("applying to the control plane", () => {
       skip_backup_check: true,
     });
     expect(accepted.statusCode, accepted.body).toBe(202);
+    appliedRunId = body<UpdateRun>(accepted).id;
 
-    const audited = await ctx.db
-      .select({ action: auditEvents.action })
-      .from(auditEvents)
-      .where(eq(auditEvents.action, "update.backup_check_skipped"));
-    expect(audited.length).toBe(1);
+    expect(await skipAudits()).toBe(skipsBefore + 1);
   });
 
   it("merges only the declared keys, pins the images, and hands over to the host", async () => {
@@ -243,33 +381,103 @@ describe("applying to the control plane", () => {
     expect(readFileSync(join(request.snapshot_dir, ".env"), "utf8")).toContain(
       "POSTGRES_PASSWORD=keep-me",
     );
+    // The record the next boot judges by was written before the handover.
+    expect((await pendingRecord())?.run_id).toBe(appliedRunId);
   });
 
-  it("refuses when the host-side updater is not installed", async () => {
-    dispatcher.installed = false;
-    try {
-      const res = await as("/api/v1/updates/control-plane", {
-        to_version: "0.1.5",
-        skip_backup_check: true,
-      });
-      expect(res.statusCode, res.body).toBe(412);
-      expect(JSON.parse(res.body).error.message).toContain("host-side updater");
-    } finally {
-      dispatcher.installed = true;
-    }
+  it("refuses a second update while one is in flight", async () => {
+    const res = await as("/api/v1/updates/control-plane", {
+      to_version: "0.1.5",
+      skip_backup_check: true,
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(JSON.parse(res.body).error.message).toContain("already in progress");
+  });
+
+  it("follows the host's log and ends the run here when the pull fails", async () => {
+    const request = dispatcher.requests[0]!;
+    // What kaname-host.sh leaves behind when `compose pull` fails: the
+    // reason, the verdict, and a log. It restored nothing was stopped,
+    // and this process was never replaced.
+    writeFileSync(
+      request.log_file,
+      "12:00:00 ==> applying 0.2.0 over 0.1.0\n12:00:01 --> pulling images\n12:00:02 !! could not pull the images for 0.2.0; nothing was stopped\n",
+    );
+    writeFileSync(resultFileFor(appliedRunId), "picked_up\npull_failed\nrolled_back\n");
+
+    await ctx.updates.pollHost();
+
+    const run = await readRun(appliedRunId);
+    expect(run.status).toBe("failed");
+    expect(run.error).toContain("could not be pulled");
+    // The host's own lines reached the run while it was being watched.
+    expect(run.log).toContain("--> pulling images");
+    expect(run.log).toContain("configuration restored");
+
+    const env = readFileSync(join(dataDir, ".env"), "utf8");
+    expect(env).toContain("KANAME_VERSION=0.1.0");
+    expect(env).not.toContain("KANAME_NEW_SECRET");
+    expect(await pendingRecord()).toBeNull();
+    // Verdict in, log spliced: the files have nothing left to say.
+    expect(existsSync(request.log_file)).toBe(false);
+    expect(existsSync(resultFileFor(appliedRunId))).toBe(false);
+  });
+
+  it("lets exactly one of two simultaneous clicks through", async () => {
+    const before = (await controlPlaneRuns()).length;
+    const payload = { to_version: "0.2.0", skip_backup_check: true };
+    const [first, second] = await Promise.all([
+      as("/api/v1/updates/control-plane", payload),
+      as("/api/v1/updates/control-plane", payload),
+    ]);
+
+    expect([first.statusCode, second.statusCode].sort()).toEqual([202, 409]);
+    const runs = await controlPlaneRuns();
+    expect(runs.length).toBe(before + 1);
+    appliedRunId = runs.find((row) => row.status === "running")!.id;
+  });
+
+  it("gives up when the host never picks the request up", async () => {
+    await waitUntil(async () => (await pendingRecord())?.run_id === appliedRunId);
+
+    // Two minutes of silence from the path unit.
+    await ctx.updates.pollHost(Date.now() + 3 * 60_000);
+
+    const run = await readRun(appliedRunId);
+    expect(run.status).toBe("needs_attention");
+    expect(run.error).toContain("never picked up");
+    expect(run.error).toContain("kaname-update.path");
+    expect(readFileSync(join(dataDir, ".env"), "utf8")).toContain("KANAME_VERSION=0.1.0");
+    expect(await pendingRecord()).toBeNull();
+    // The request is taken back so a unit that wakes up later does not
+    // apply an update nobody is waiting on.
+    expect(dispatcher.withdrawn).toBe(2);
   });
 });
 
 describe("finishing an update the previous process could not", () => {
-  it("marks it succeeded when the new version is what came back", async () => {
+  it("does not call it succeeded until the new build is answering", async () => {
     const run = await seedPendingRun("0.2.0", { migrationsBehind: 0 });
+    writeFileSync(join(dataDir, "updates", `${run}.log`), "12:00:01 --> pulling images\n");
+
     // The service reads its own version from config; standing in for
     // "0.2.0 booted" means telling it that is what it is running.
     await withVersion("0.2.0", () => ctx.updates.reconcile());
 
+    const booted = await readRun(run);
+    expect(booted.status).toBe("running");
+    expect(booted.log).toContain("--> pulling images");
+    expect((await pendingRecord())?.run_id).toBe(run);
+
+    // Not this build's to confirm.
+    await ctx.updates.confirmBooted();
+    expect((await readRun(run)).status).toBe("running");
+
+    await withVersion("0.2.0", () => ctx.updates.confirmBooted());
     const after = await readRun(run);
     expect(after.status).toBe("succeeded");
     expect(after.log).toContain("is up and answering");
+    expect(await pendingRecord()).toBeNull();
   });
 
   it("records a rollback when the old version came back untouched", async () => {
@@ -279,6 +487,41 @@ describe("finishing an update the previous process could not", () => {
     const after = await readRun(run);
     expect(after.status).toBe("rolled_back");
     expect(after.error).toContain("health check");
+  });
+
+  it("says why, in the host's words, and picks up the lines it missed", async () => {
+    const run = await seedPendingRun("0.2.0", { migrationsBehind: 0 });
+    const logFile = join(dataDir, "updates", `${run}.log`);
+    // At the moment the old build boots the helper is still inside its
+    // `compose up`: the reason is written, the verdict is not.
+    writeFileSync(logFile, "12:00:05 !! no answer from /health after 120s\n");
+    writeFileSync(resultFileFor(run), "picked_up\nhealth_failed\n");
+
+    await ctx.updates.reconcile();
+    const after = await readRun(run);
+    expect(after.status).toBe("rolled_back");
+    expect(after.error).toContain("/health");
+    expect(after.log).toContain("no answer from /health");
+
+    // ...and then it returns and finishes writing.
+    writeFileSync(logFile, `${readFileSync(logFile, "utf8")}12:01:30 !! rolled back to 0.1.0\n`);
+    writeFileSync(resultFileFor(run), "picked_up\nhealth_failed\nrolled_back\n");
+    await ctx.updates.pollHost();
+
+    expect((await readRun(run)).log).toContain("rolled back to 0.1.0");
+    expect(existsSync(logFile)).toBe(false);
+    expect(existsSync(resultFileFor(run))).toBe(false);
+  });
+
+  it("files a pull that failed before anything stopped as failed, not rolled back", async () => {
+    const run = await seedPendingRun("0.2.0", { migrationsBehind: 0 });
+    writeFileSync(resultFileFor(run), "picked_up\npull_failed\nrolled_back\n");
+
+    await ctx.updates.reconcile();
+    const after = await readRun(run);
+    expect(after.status).toBe("failed");
+    expect(after.error).toContain("could not be pulled");
+    await ctx.updates.pollHost();
   });
 
   it("needs attention when a migration ran and the old version came back", async () => {
@@ -307,6 +550,8 @@ describe("finishing an update the previous process could not", () => {
 });
 
 describe("the agent fleet", () => {
+  let queuedRunId: string;
+
   it("fans out one job and one tracked run per host", async () => {
     const [host] = await ctx.db
       .insert(servers)
@@ -327,6 +572,7 @@ describe("the agent fleet", () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]!.jobId).toBe(jobs[0]!.id);
     expect(runs[0]!.status).toBe("queued");
+    queuedRunId = runs[0]!.id;
   });
 
   it("refuses to pretend it updated a simulated host", async () => {
@@ -341,6 +587,27 @@ describe("the agent fleet", () => {
     });
     expect(res.statusCode).toBe(412);
     expect(JSON.parse(res.body).error.message).toContain("simulated");
+  });
+
+  it("settles a run whose job died with the control plane", async () => {
+    const stuck = await orphanedAgentRun("fleet-02", "0.1.0");
+    const swapped = await orphanedAgentRun("fleet-03", "0.2.0");
+
+    await ctx.updates.settleOrphanAgentRuns();
+
+    const gone = await readRun(stuck);
+    expect(gone.status).toBe("needs_attention");
+    expect(gone.error).toContain("restarted");
+    expect(gone.error).toContain("0.1.0");
+
+    // The hello frame carried the new version: the swap took, whatever
+    // happened to the handler that was waiting for it.
+    const confirmed = await readRun(swapped);
+    expect(confirmed.status).toBe("succeeded");
+    expect(confirmed.log).toContain("0.2.0");
+
+    // A job that is merely waiting for its host is not an orphan.
+    expect((await readRun(queuedRunId)).status).toBe("queued");
   });
 });
 
@@ -398,9 +665,9 @@ describe("the panel's own address", () => {
   it("says so rather than pretending when there is no host helper", async () => {
     dispatcher.installed = false;
     try {
-      expect(body<AddressSettings>(await as("/api/v1/settings/address", undefined, "GET")).managed).toBe(
-        false,
-      );
+      expect(
+        body<AddressSettings>(await as("/api/v1/settings/address", undefined, "GET")).managed,
+      ).toBe(false);
 
       const res = await as("/api/v1/settings/address", { domain: "panel.example.com" });
       expect(res.statusCode).toBe(412);
@@ -416,9 +683,13 @@ describe("the panel's own address", () => {
  * ------------------------------------------------------------------ */
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  await waitUntil(() => Promise.resolve(predicate()), timeoutMs);
+}
+
+async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("timed out waiting for the update sequence");
@@ -430,6 +701,28 @@ async function countMigrations(): Promise<number> {
   );
   const rows = (result as unknown as { rows?: { n: number }[] }).rows ?? [];
   return Number(rows[0]?.n ?? 0);
+}
+
+/** Where kaname-host.sh writes its verdict for a run. */
+function resultFileFor(runId: string): string {
+  return join(dataDir, "updates", `${runId}.result`);
+}
+
+async function pendingRecord(): Promise<{ run_id: string } | null> {
+  const rows = await ctx.db.select().from(settings).where(eq(settings.key, "updates.pending"));
+  return (rows[0]?.value as { run_id: string } | undefined) ?? null;
+}
+
+async function controlPlaneRuns() {
+  return ctx.db.select().from(updateRuns).where(eq(updateRuns.kind, "control_plane"));
+}
+
+async function skipAudits(): Promise<number> {
+  const rows = await ctx.db
+    .select({ action: auditEvents.action })
+    .from(auditEvents)
+    .where(eq(auditEvents.action, "update.backup_check_skipped"));
+  return rows.length;
 }
 
 /** Writes exactly what `executeControlPlane` leaves behind before it dies. */
@@ -446,6 +739,7 @@ async function seedPendingRun(
     breaking: false,
     actor: null,
   });
+  mkdirSync(join(dataDir, "updates"), { recursive: true });
 
   const pending = {
     run_id: run.id,
@@ -463,6 +757,44 @@ async function seedPendingRun(
     .values({ key: "updates.pending", value: pending })
     .onConflictDoUpdate({ target: settings.key, set: { value: pending } });
 
+  return run.id;
+}
+
+/**
+ * An agent rollout whose handler is gone: the job the worker was running
+ * has already been reaped as failed, and the run is still `running`.
+ */
+async function orphanedAgentRun(name: string, reportsVersion: string): Promise<string> {
+  const [host] = await ctx.db
+    .insert(servers)
+    .values({
+      name,
+      hostname: `${name}.example.com`,
+      arch: "amd64",
+      agentVersion: reportsVersion,
+    })
+    .returning({ id: servers.id });
+  const [job] = await ctx.db
+    .insert(jobs)
+    .values({
+      type: "agent.update",
+      status: "failed",
+      serverId: host!.id,
+      error: { code: "lease_expired", message: "the worker that held this job is gone" },
+      finishedAt: new Date(),
+    })
+    .returning({ id: jobs.id });
+  const run = await ctx.updates.createRun({
+    kind: "agent",
+    serverId: host!.id,
+    fromVersion: "0.1.0",
+    toVersion: "0.2.0",
+    trigger: "manual",
+    breaking: false,
+    actor: null,
+    jobId: job!.id,
+  });
+  await ctx.updates.setStatus(run.id, "running");
   return run.id;
 }
 

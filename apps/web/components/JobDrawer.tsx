@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { Ban, ChevronRight, ListChecks } from "lucide-react";
-import { TERMINAL_JOB_STATUSES, type Job, type JobLogLine } from "@kaname/contract";
+import { TERMINAL_JOB_STATUSES, type Job } from "@kaname/contract";
 import {
   Button,
   Drawer,
@@ -12,10 +12,12 @@ import {
   EmptyState,
   JobProgress,
   JobStatusPill,
+  LogViewer,
   MonoText,
   RelativeTime,
   Skeleton,
   cn,
+  type LogLine,
 } from "@kaname/ui";
 import { api, type ApiError } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
@@ -38,10 +40,14 @@ export function JobDrawer() {
   const drawer = useJobDrawer();
   const { open, setOpen, focusedJobId, focusJob, tracked, activeCount } = drawer;
 
-  const jobs = useList<Job>("jobs", { per_page: 40, sort: "created_at", order: "desc" }, {
-    enabled: open,
-    staleTime: 5_000,
-  });
+  const jobs = useList<Job>(
+    "jobs",
+    { per_page: 40, sort: "created_at", order: "desc" },
+    {
+      enabled: open,
+      staleTime: 5_000,
+    },
+  );
 
   /* Tracked jobs are pinned so a queue full of background work cannot
    * push the thing the operator just started off the top. */
@@ -57,13 +63,7 @@ export function JobDrawer() {
   }, [jobs.data, tracked]);
 
   return (
-    <Drawer
-      open={open}
-      onOpenChange={setOpen}
-      side="right"
-      size="md"
-      label="Job activity"
-    >
+    <Drawer open={open} onOpenChange={setOpen} side="right" size="md" label="Job activity">
       <DrawerHeader
         title="Job activity"
         description={
@@ -248,59 +248,55 @@ function JobRow({ job, expanded, onToggle, onNavigate }: JobRowProps) {
 
 /* ------------------------------------------------------------------ */
 
-const LEVEL_TONES: Record<JobLogLine["level"], string> = {
-  debug: "text-[var(--kn-text-3)]",
-  info: "text-[var(--kn-text-2)]",
-  warn: "text-[var(--kn-warn)]",
-  error: "text-[var(--kn-danger)]",
-};
-
+/**
+ * The same windowed viewer the job panels use: a long backup or build
+ * is thousands of lines, and rendering each as a list item inside a
+ * scroller is what made the drawer the heaviest thing on the page.
+ */
 function JobLog({ jobId, status }: { jobId: string; status: Job["status"] }) {
   const logs = useJobLogs(jobId);
-  const endRef = React.useRef<HTMLDivElement | null>(null);
-  const lines = logs.data ?? [];
+  const running = !TERMINAL.has(status);
 
-  /* Follow the tail while the job is moving; stop once it lands so the
-   * operator can read the failure that scrolled past. */
-  React.useEffect(() => {
-    if (TERMINAL.has(status)) return;
-    endRef.current?.scrollIntoView({ block: "nearest" });
-  }, [lines.length, status]);
+  const lines = React.useMemo<LogLine[]>(
+    () =>
+      (logs.data ?? []).map((line) => ({
+        id: `${jobId}-${line.seq}`,
+        ts: line.ts,
+        level: line.level,
+        message: line.message,
+      })),
+    [jobId, logs.data],
+  );
 
   return (
-    <div className="border-t border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] px-4 py-2">
-      {logs.isLoading && <Skeleton className="h-3 w-2/3" label="Loading job log" />}
+    <div className="border-t border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)]">
+      {logs.isLoading && (
+        <div className="px-4 py-2">
+          <Skeleton className="h-3 w-2/3" label="Loading job log" />
+        </div>
+      )}
 
       {logs.isError && (
-        <PageError
-          error={logs.error as ApiError}
-          onRetry={() => void logs.refetch()}
-          context="Job log"
-        />
-      )}
-
-      {!logs.isLoading && !logs.isError && lines.length === 0 && (
-        <p className="text-xs text-[var(--kn-text-3)]">
-          No log lines yet. The agent writes them as the job progresses.
-        </p>
-      )}
-
-      {lines.length > 0 && (
-        <div className="max-h-56 overflow-y-auto">
-          <ol className="kn-mono text-sm leading-5">
-            {lines.map((line) => (
-              <li key={`${line.seq}-${line.ts}`} className="flex gap-2">
-                <span className="shrink-0 text-[var(--kn-text-3)]">
-                  {line.ts.slice(11, 19)}
-                </span>
-                <span className={cn("min-w-0 whitespace-pre-wrap break-words", LEVEL_TONES[line.level])}>
-                  {line.message}
-                </span>
-              </li>
-            ))}
-          </ol>
-          <div ref={endRef} />
+        <div className="px-4 py-2">
+          <PageError
+            error={logs.error as ApiError}
+            onRetry={() => void logs.refetch()}
+            context="Job log"
+          />
         </div>
+      )}
+
+      {!logs.isLoading && !logs.isError && (
+        <LogViewer
+          lines={lines}
+          height={224}
+          emptyLabel={
+            running
+              ? "No log lines yet. The agent writes them as the job progresses."
+              : "This job emitted no output."
+          }
+          label="Job log"
+        />
       )}
     </div>
   );
@@ -315,9 +311,7 @@ export function JobActivityButton({ className }: { className?: string }) {
     <button
       type="button"
       onClick={() => drawer.setOpen(true)}
-      aria-label={
-        active > 0 ? `Job activity — ${active} running` : "Job activity"
-      }
+      aria-label={active > 0 ? `Job activity — ${active} running` : "Job activity"}
       className={cn(
         "relative inline-flex h-7 items-center gap-1.5 rounded-[var(--kn-r-sm)] px-2",
         "text-[var(--kn-text-2)] outline-none",

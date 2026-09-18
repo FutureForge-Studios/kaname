@@ -15,7 +15,7 @@ export default defineConfig({
   sourcemap: true,
   dts: false,
   splitting: false,
-  external: ["@node-rs/argon2", "@electric-sql/pglite", "pg", "pino", "pino-pretty"],
+  external: ["@node-rs/argon2", "@electric-sql/pglite", "pg", "pino", "pino-pretty", "nodemailer"],
   noExternal: [/^@kaname\//],
   banner: {
     js: "import { createRequire as __kanameCreateRequire } from 'node:module'; const require = __kanameCreateRequire(import.meta.url);",

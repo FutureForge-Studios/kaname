@@ -5,6 +5,7 @@ import { loadConfig, loadEnvFile } from "./config.js";
 import { createContext } from "./context.js";
 import { buildServer } from "./server.js";
 import { Reconciler } from "./services/reconciler.js";
+import { AlertEvaluator } from "./services/alerts.js";
 import { registerJobHandlers } from "./jobs/handlers.js";
 import { bootstrap } from "./bootstrap.js";
 
@@ -38,6 +39,11 @@ async function main(): Promise<void> {
   await ctx.ca.load();
   await bootstrap(ctx);
 
+  // Listens to the same bus the panel does, so anything worth a page in
+  // the UI can also be an email, a webhook or a Slack message. Started
+  // first: the update check below may have something to say.
+  ctx.notifications.start();
+
   // Before anything is served: an update started by the previous
   // process can only be judged by the one that came back.
   await ctx.updates.reconcile();
@@ -49,16 +55,46 @@ async function main(): Promise<void> {
   const reconciler = new Reconciler(ctx);
   reconciler.start();
 
+  // Rules are only promises until something checks them.
+  const alerts = new AlertEvaluator(ctx);
+  alerts.start();
+
   const app = await buildServer(ctx);
   await app.listen({ port: config.PORT, host: config.HOST });
   log.info({ port: config.PORT }, "control plane listening");
 
+  // Only now is an update that brought this build up a success: booting
+  // and answering are not the same thing, and a build that died between
+  // the two would otherwise have been filed as succeeded already.
+  await ctx.updates.confirmBooted();
+
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     log.info({ signal }, "shutting down");
+
+    // Compose gives a container ten seconds by default; whatever has
+    // not finished by then is lost to SIGKILL anyway, so exit on our own
+    // terms first and say so.
+    const deadline = setTimeout(() => {
+      log.error("shutdown did not finish in time; exiting");
+      process.exit(1);
+    }, 8_000);
+    deadline.unref?.();
+
     reconciler.stop();
+    alerts.stop();
     ctx.updates.stop();
-    ctx.hub.shutdown();
+    ctx.notifications.stop();
+    // Jobs first, while their agent sockets are still up: a handler that
+    // is interrupted can then be requeued or marked honestly, instead of
+    // every in-flight RPC being rejected as "connection lost".
     await ctx.worker.stop();
+    ctx.hub.shutdown();
+    // Tell every open event stream to reconnect rather than holding the
+    // HTTP server open.
+    ctx.events.closeAll();
     await app.close();
     await dbHandle.close();
     process.exit(0);

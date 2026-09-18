@@ -52,6 +52,7 @@ MODE="all-in-one"          # all-in-one | control-plane-only | agent-only
 REQ_VERSION="$KANAME_DEFAULT_VERSION"
 TOKEN=""
 CONTROL_PLANE=""
+PUBLIC_URL="${KANAME_PUBLIC_URL:-}"
 FORCE=0
 
 usage() {
@@ -63,6 +64,9 @@ kaname installer
   --token=<token>          Pairing token, printed by the panel when adding a server.
   --control-plane=<url>    Where the agent should dial, e.g. http://203.0.113.10
   --version=<version>      Release to install. Defaults to the one this script ships with.
+  --public-url=<url>       Address the panel is reached at, e.g. http://203.0.113.10 — for hosts
+                           whose own interface carries a private address (cloud NAT).
+                           KANAME_PUBLIC_URL in the environment does the same.
   --force                  Destroy an existing install first. Never the default.
   --help                   This.
 USAGE
@@ -83,12 +87,24 @@ while [ $# -gt 0 ]; do
     --control-plane=*) CONTROL_PLANE="${1#*=}" ;;
     --version) need "$1" "${2:-}"; REQ_VERSION="$2"; shift ;;
     --version=*) REQ_VERSION="${1#*=}" ;;
+    --public-url) need "$1" "${2:-}"; PUBLIC_URL="$2"; shift ;;
+    --public-url=*) PUBLIC_URL="${1#*=}" ;;
     --force) FORCE=1 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "kaname: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
+
+# The log lives under /etc, so this has to come before the log is opened
+# or a run without sudo dies on that mkdir instead of on this sentence.
+[ "$(id -u)" = "0" ] || { echo "kaname: run this as root (prefix the command with sudo)." >&2; exit 1; }
+
+case "$PUBLIC_URL" in
+  ""|http://*|https://*) ;;
+  *) echo "kaname: --public-url must start with http:// or https:// (got '$PUBLIC_URL')" >&2; exit 2 ;;
+esac
+PUBLIC_URL="${PUBLIC_URL%/}"
 
 # Everything said below goes to the terminal and to a log under the data
 # root, so a failed install can be read afterwards without scrolling back.
@@ -139,8 +155,21 @@ applied by a systemd unit on the host."
 
   command -v curl >/dev/null 2>&1 || die "curl is required and is not installed."
 
-  log "    Linux/$ARCH, systemd present"
+  # Read, not sourced: /etc/os-release defines VERSION, and sourcing it
+  # would overwrite the release this script is about to install.
+  OS_ID="$(sed -n 's/^ID=//p' /etc/os-release 2>/dev/null | tr -d '"')"
+  case "$OS_ID" in
+    debian|ubuntu|raspbian|rocky|almalinux|rhel|centos|fedora) ;;
+    '') warn "could not read /etc/os-release; continuing" ;;
+    *) warn "untested distribution '$OS_ID'; continuing" ;;
+  esac
+
+  log "    Linux/$ARCH${OS_ID:+ ($OS_ID)}, systemd present"
 }
+
+# Every download retries a few times and never hangs: a blip on the way
+# to GitHub or to the panel is not a reason to leave an install half-done.
+CURL="curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15"
 
 # 2. Docker
 ensure_docker() {
@@ -148,7 +177,7 @@ ensure_docker() {
 
   if ! command -v docker >/dev/null 2>&1; then
     log "    not installed; fetching the official installer from $KANAME_DOCKER_INSTALL_URL"
-    curl -fsSL "$KANAME_DOCKER_INSTALL_URL" -o /tmp/get-docker.sh ||
+    $CURL "$KANAME_DOCKER_INSTALL_URL" -o /tmp/get-docker.sh ||
       die "could not download the Docker installer from $KANAME_DOCKER_INSTALL_URL.
 Install Docker yourself and run this again: https://docs.docker.com/engine/install/"
     sh /tmp/get-docker.sh >>"$LOG_FILE" 2>&1 ||
@@ -239,6 +268,37 @@ The panel is served at that address, so there is nothing to point a browser at.
 Give this host an IPv4 address and run this again."
 }
 
+# On every major cloud the interface carries a private address and the
+# public one is NAT in front of it. Served at the private address, the
+# panel prints a URL nobody outside the VPC can open and hands every new
+# server a pairing command that dials it.
+private_ip() {
+  case "$1" in
+    10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|169.254.*) return 0 ;;
+    100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*) return 0 ;;
+  esac
+  return 1
+}
+
+# The address the panel is served at: --public-url when given, the
+# detected interface address otherwise. Sets PANEL_URL.
+resolve_public_url() {
+  if [ -n "$PUBLIC_URL" ]; then
+    PANEL_URL="$PUBLIC_URL"
+    log "    serving the panel at $PANEL_URL (from --public-url)"
+    return 0
+  fi
+  detect_ip
+  PANEL_URL="http://$IP"
+  log "    serving the panel at $PANEL_URL"
+  if private_ip "$IP"; then
+    warn "$IP is a private address. If this host sits behind cloud NAT, the panel"
+    warn "and every pairing command it prints will name an address nothing outside"
+    warn "the network can reach. Re-run with --public-url=http://<public-ip> to fix"
+    warn "that; a re-run is a repair and keeps everything else."
+  fi
+}
+
 # A release looks like 1.2.3, optionally with a pre-release suffix.
 # Anything else in KANAME_VERSION is not something a registry can serve,
 # and is worth failing on here rather than inside `docker compose pull`.
@@ -310,11 +370,19 @@ prepare_data_dir() {
   if [ -f "$DATA_DIR/.env" ]; then
     log "    keeping the existing secrets in $DATA_DIR/.env"
     reconcile_version
+    # A repair is how a wrong address gets corrected: the new URL lands
+    # in .env and the Caddyfile is regenerated from it below. The domain
+    # is left alone; that is set from inside the panel.
+    if [ -n "$PUBLIC_URL" ] && [ "$(env_value KANAME_PUBLIC_URL)" != "$PUBLIC_URL" ]; then
+      log "    changing the panel address to $PUBLIC_URL"
+      set_env_value KANAME_PUBLIC_URL "$PUBLIC_URL"
+      chmod 0660 "$DATA_DIR/.env"
+      chown "root:$KANAME_UID" "$DATA_DIR/.env"
+    fi
     return 0
   fi
 
-  detect_ip
-  log "    serving the panel at http://$IP"
+  resolve_public_url
   log "    generating secrets with openssl rand"
   MASTER_KEY="$(random_b64 32)"
   POSTGRES_PASSWORD="$(random_b64 24 | tr -d '/+=' | cut -c1-32)"
@@ -346,7 +414,7 @@ POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 # __Host- prefixed cookie is never stored by a browser over plain HTTP,
 # so secure cookies stay off until there is HTTPS to put them behind.
 KANAME_DOMAIN=
-KANAME_PUBLIC_URL=http://$IP
+KANAME_PUBLIC_URL=$PANEL_URL
 KANAME_SECURE_COOKIES=false
 
 # Consumed once, on first boot, to gate onboarding.
@@ -364,7 +432,7 @@ ENV
 fetch() {
   # $1 url, $2 destination
   log "    fetching $1"
-  curl -fsSL "$1" -o "$2.partial" || die "could not download $1"
+  $CURL "$1" -o "$2.partial" || die "could not download $1"
   mv "$2.partial" "$2"
 }
 
@@ -446,34 +514,56 @@ wait_for_api() {
   return 1
 }
 
-# 8. The agent
-install_agent() {
-  # $1 control plane url, $2 pairing token
-  step "installing the agent"
-
-  mkdir -p "$STATE_DIR"
-  chmod 0700 "$STATE_DIR"
-
+# 8. The agent. Three steps that are each safe to repeat, because a
+#    re-run has to be able to pick up wherever the last one stopped:
+#    after the download, after enrollment, or after the unit was lost.
+fetch_agent_binary() {
+  # $1 control plane url
   tmp="$(mktemp -d)"
   log "    fetching kanamed (linux/$ARCH) from $1"
-  curl -fsSL "$1/download/kanamed-linux-$ARCH" -o "$tmp/kanamed" ||
+  $CURL "$1/download/kanamed-linux-$ARCH" -o "$tmp/kanamed" ||
     die "could not download the agent from $1/download/kanamed-linux-$ARCH.
 The agent is served by the control plane itself, so this also means the
 control plane is not reachable from here."
-  chmod 0755 "$tmp/kanamed"
+
+  # The binary runs as root on this host and, until a domain is set,
+  # travelled over plain HTTP. The control plane publishes its digest
+  # beside it; nothing is installed until the two agree.
+  $CURL "$1/download/kanamed-linux-$ARCH.sha256" -o "$tmp/kanamed.sha256" ||
+    die "could not download the agent's checksum from $1/download/kanamed-linux-$ARCH.sha256."
+  expected="$(cut -d' ' -f1 "$tmp/kanamed.sha256")"
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$tmp/kanamed" | cut -d' ' -f1)"
+  else
+    actual="$(openssl dgst -sha256 -r "$tmp/kanamed" | cut -d' ' -f1)"
+  fi
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    die "the downloaded agent does not match the checksum the control plane published
+(expected ${expected:-nothing}, got $actual). Nothing was installed. A truncated
+download or something on the path between this host and $1 changed the file;
+run this again, and if it repeats, look at what sits between the two."
+  fi
+  log "    checksum verified"
 
   # Stopped first: replacing a running binary in place is what breaks a
   # re-run halfway through.
   systemctl stop kanamed >/dev/null 2>&1 || true
   install -m 0755 "$tmp/kanamed" "$BIN_DIR/kanamed"
   rm -rf "$tmp"
+}
 
+enroll_agent() {
+  # $1 control plane url, $2 pairing token
+  mkdir -p "$STATE_DIR"
+  chmod 0700 "$STATE_DIR"
   log "    enrolling with $1"
   "$BIN_DIR/kanamed" enroll --url "$1" --token "$2" --state-dir "$STATE_DIR" >>"$LOG_FILE" 2>&1 ||
     die "enrollment failed. See $LOG_FILE.
 A pairing token is single-use and expires in minutes; generate a fresh one
 in the panel under Infrastructure > Servers > Add server."
+}
 
+write_agent_unit() {
   cat >/etc/systemd/system/kanamed.service <<UNIT
 [Unit]
 Description=Kaname agent
@@ -510,8 +600,56 @@ WantedBy=multi-user.target
 UNIT
 
   systemctl daemon-reload
-  systemctl enable --now kanamed >>"$LOG_FILE" 2>&1
+}
+
+start_agent() {
+  systemctl enable --now kanamed >>"$LOG_FILE" 2>&1 ||
+    die "kanamed did not start. See $LOG_FILE, and:
+  systemctl status kanamed
+  journalctl -u kanamed -n 100"
   log "    kanamed installed and started"
+}
+
+install_agent() {
+  # $1 control plane url, $2 pairing token
+  step "installing the agent"
+  fetch_agent_binary "$1"
+  enroll_agent "$1" "$2"
+  write_agent_unit
+  start_agent
+}
+
+# The all-in-one repair. Which of the three steps are missing is read off
+# the disk, not off .env: a run that failed after the download, or a host
+# whose unit or identity was lost, is fixed by running this again.
+repair_local_agent() {
+  step "checking the agent on this host"
+  [ -x "$BIN_DIR/kanamed" ] || fetch_agent_binary "$KANAME_LOCAL_API"
+
+  if [ ! -f "$STATE_DIR/cert.pem" ]; then
+    if [ -n "$TOKEN" ]; then
+      enroll_agent "$KANAME_LOCAL_API" "$TOKEN"
+    elif setup_has_owner; then
+      die "this host is not enrolled, and the setup token can no longer pair it because
+an account already exists. Generate a pairing token in the panel under
+Infrastructure > Servers > Add server, then run this again with --token=<token>."
+    else
+      pair_local_agent
+    fi
+  else
+    log "    this host is already enrolled"
+  fi
+
+  write_agent_unit
+  # Restarted, not merely started: the binary or the unit may be new.
+  systemctl restart kanamed >>"$LOG_FILE" 2>&1 || start_agent
+  log "    kanamed is running"
+}
+
+# Public by necessity: the panel asks the same question before anyone
+# can be signed in.
+setup_has_owner() {
+  curl -fsS "$KANAME_LOCAL_API/api/v1/setup/state" 2>/dev/null | grep -q '"has_owner":true'
 }
 
 pair_local_agent() {
@@ -524,8 +662,14 @@ pair_local_agent() {
   response="$(curl -fsS -X POST "$KANAME_LOCAL_API/api/v1/setup/pair" \
     -H 'content-type: application/json' \
     -H "x-kaname-setup-token: $SETUP_TOKEN_VALUE" \
-    -d "{\"name\":\"$(hostname -s)\",\"hostname\":\"$(hostname -f 2>/dev/null || hostname)\"}" 2>>"$LOG_FILE")" ||
+    -d "{\"name\":\"$(hostname -s)\",\"hostname\":\"$(hostname -f 2>/dev/null || hostname)\"}" 2>>"$LOG_FILE")" || {
+    if setup_has_owner; then
+      die "the setup token cannot pair this host any more: an account already exists.
+Generate a pairing token in the panel under Infrastructure > Servers > Add server,
+then run this again with --token=<token>."
+    fi
     die "the control plane refused to issue a pairing token. See $LOG_FILE."
+  }
 
   # One field, one grep. Pulling in a JSON parser for this would be a
   # dependency nobody asked for.
@@ -619,12 +763,7 @@ if [ "$MODE" = "all-in-one" ]; then
   # Whether to pair is decided by whether this host is actually
   # enrolled, not by whether .env exists: a run that wrote .env and then
   # failed to pair must still pair on the next run.
-  if [ -f "$STATE_DIR/cert.pem" ]; then
-    log "    this host is already enrolled; restarting the agent"
-    systemctl restart kanamed >/dev/null 2>&1 || true
-  else
-    pair_local_agent
-  fi
+  repair_local_agent
   verify_agent
 fi
 

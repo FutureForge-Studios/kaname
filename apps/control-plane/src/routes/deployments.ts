@@ -52,6 +52,8 @@ const IN_FLIGHT = ["queued", "building", "deploying"] as const;
 
 const LOG_REPLAY_LIMIT = 5000;
 const KEEPALIVE_MS = 20_000;
+/** Bytes a reader may fall behind before it is dropped and told to retry. */
+const MAX_BUFFERED_BYTES = 1024 * 1024;
 
 export const deploymentSelection = {
   deployment: deployments,
@@ -132,8 +134,15 @@ export async function deploymentRoutes(app: FastifyInstance): Promise<void> {
       "X-Accel-Buffering": "no",
     });
     reply.raw.write(`retry: 3000\n\n`);
+    req.raw.socket.setKeepAlive(true, 30_000);
 
     const write = (event: string, data: unknown) => {
+      if (reply.raw.destroyed) return;
+      if (reply.raw.writableLength > MAX_BUFFERED_BYTES) {
+        req.log.warn({ buffered: reply.raw.writableLength }, "dropping slow deployment log reader");
+        req.raw.destroy();
+        return;
+      }
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
@@ -176,6 +185,10 @@ export async function deploymentRoutes(app: FastifyInstance): Promise<void> {
     const sub = req.ctx.events.subscribe({
       topics: new Set<EventTopic>(["jobs", "deployments"]),
       scope: new Set([row.server_id]),
+      close: () => {
+        close();
+        if (!reply.raw.destroyed) reply.raw.end();
+      },
       send: (event) => {
         const data = (event.data ?? {}) as Record<string, unknown>;
         if (event.topic === "deployments") {
@@ -208,7 +221,10 @@ export async function deploymentRoutes(app: FastifyInstance): Promise<void> {
       },
     });
 
-    const keepalive = setInterval(() => reply.raw.write(`: keepalive\n\n`), KEEPALIVE_MS);
+    const keepalive = setInterval(() => {
+      if (reply.raw.destroyed || reply.raw.writableNeedDrain) return;
+      reply.raw.write(`: keepalive\n\n`);
+    }, KEEPALIVE_MS);
     keepalive.unref?.();
 
     function close(): void {

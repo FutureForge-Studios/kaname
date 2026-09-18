@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
@@ -81,9 +83,49 @@ export async function registerDistributionRoutes(
     return reply
       .type("application/octet-stream")
       .header("content-length", info.size)
+      .header("x-kaname-sha256", await digestOf(path, info.mtimeMs))
       .header("content-disposition", `attachment; filename="kanamed-${target}"`)
       .send(createReadStream(path));
   });
+
+  /**
+   * The digest of the binary above, in `sha256sum -c` format. The
+   * enrollment one-liner fetches the binary over whatever the panel is
+   * served on — plain HTTP until a domain is set — so the installer
+   * checks this before it installs a root daemon.
+   */
+  app.get<{ Params: { target: string } }>(
+    "/download/kanamed-:target.sha256",
+    async (req, reply) => {
+      const target = req.params.target;
+      if (!TARGETS.has(target)) {
+        throw new ApiException("not_found", `No agent build for ${target}.`, {
+          detail: { available: [...TARGETS] },
+        });
+      }
+      const path = await findFile(roots, `kanamed-${target}`);
+      if (!path) throw new ApiException("not_found", `The ${target} agent binary is not bundled.`);
+      const info = await stat(path);
+      return reply
+        .type("text/plain; charset=utf-8")
+        .header("cache-control", "no-store")
+        .send(`${await digestOf(path, info.mtimeMs)}  kanamed-${target}\n`);
+    },
+  );
+}
+
+/** Hashed once per file version; the binaries do not change while the process runs. */
+const digests = new Map<string, string>();
+
+async function digestOf(path: string, mtimeMs: number): Promise<string> {
+  const key = `${path}@${mtimeMs}`;
+  const cached = digests.get(key);
+  if (cached) return cached;
+  const hash = createHash("sha256");
+  await pipeline(createReadStream(path), hash);
+  const hex = hash.digest("hex");
+  digests.set(key, hex);
+  return hex;
 }
 
 async function findFile(roots: string[], name: string): Promise<string | null> {

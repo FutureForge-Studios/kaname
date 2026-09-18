@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { emailAddress, isoDate, uuid } from "../primitives.js";
 import { updateCheckInterval, updateTier } from "./updates.js";
+import { setAddressInput, smtpSettingsInput } from "./platform.js";
 
 /* ------------------------------------------------------------------ *
  * First-run setup.
@@ -74,8 +75,15 @@ export const setupState = z.object({
   servers_connected: z.number().int(),
   /** True when the caller presented a valid setup token or a session. */
   authorized: z.boolean(),
-  /** True when the installer wrote a token that has not been claimed. */
+  /** True until an owner exists: every step before that needs the installer's token. */
   token_required: z.boolean(),
+  /**
+   * False once the token has expired unclaimed. It is still required —
+   * a restart of the control plane mints a fresh one.
+   */
+  token_live: z.boolean(),
+  /** A domain chosen on the preferences step, applied by the last one. */
+  pending_domain: z.string().nullable(),
 });
 export type SetupState = z.infer<typeof setupState>;
 
@@ -113,8 +121,25 @@ export const setupPreferencesInput = z.object({
       z.object({ kind: z.literal("webhook"), url: z.string().url() }),
     ])
     .default({ kind: "none" }),
+  /** The outgoing mail server an email channel needs. Optional here; Settings has it too. */
+  smtp: smtpSettingsInput.optional(),
+  /**
+   * Validated now, applied by the last step: the restart it costs should
+   * interrupt setup once, at the end, and never be spent on a typo.
+   */
+  panel_domain: setAddressInput.shape.domain.optional(),
 });
 export type SetupPreferencesInput = z.infer<typeof setupPreferencesInput>;
+
+/**
+ * What a password must not contain, derived once for both tiers so the
+ * meter in the browser and the verdict on the control plane cannot
+ * disagree about the same input.
+ */
+export function passwordContext(name: string, email: string): string[] {
+  const lower = email.trim().toLowerCase();
+  return [name, lower, lower.split("@")[0] ?? ""];
+}
 
 /**
  * Password strength, evaluated server-side. A regex that only runs in
