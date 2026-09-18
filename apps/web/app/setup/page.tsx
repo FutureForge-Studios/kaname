@@ -9,6 +9,7 @@ import {
   Globe,
   KeyRound,
   RefreshCw,
+  Send,
   Server,
   ShieldCheck,
   TriangleAlert,
@@ -18,13 +19,18 @@ import {
   SETUP_STEP_LABELS,
   UPDATE_TIER_LABELS,
   assessPassword,
+  passwordContext,
+  updateCheckInterval as updateCheckIntervalEnum,
   updateTier as updateTierEnum,
   type ComponentHealth,
   type PairingInstructions,
   type SetupHealth,
   type SetupState,
   type SetupStep,
+  type UpdateCheckInterval,
   type UpdateTier,
+  type NotificationTestResult,
+  type SmtpSecurity,
 } from "@kaname/contract";
 import {
   Button,
@@ -68,10 +74,6 @@ export default function SetupPage() {
 
   const [state, setState] = React.useState<SetupState | null>(null);
   const [error, setError] = React.useState<ApiError | null>(null);
-  // Held here rather than applied on the preferences step: naming the
-  // panel restarts the control plane, and setup should be interrupted
-  // by that once, at the end, not between two of its own screens.
-  const [domain, setDomain] = React.useState("");
 
   const load = React.useCallback(async () => {
     try {
@@ -86,9 +88,10 @@ export default function SetupPage() {
   }, [load]);
 
   // An instance somebody else finished while this tab was open is not
-  // ours to set up. Bounce rather than letting a step fail confusingly.
+  // ours to set up. Bounce rather than letting a step fail confusingly —
+  // into the panel if this tab holds the session, to sign-in otherwise.
   React.useEffect(() => {
-    if (state && !state.needs_onboarding) router.replace("/login");
+    if (state && !state.needs_onboarding) router.replace(state.authorized ? "/" : "/login");
   }, [router, state]);
 
   if (error && !state) {
@@ -135,7 +138,7 @@ export default function SetupPage() {
 
   return (
     <Frame step={step}>
-      {step === "welcome" && <WelcomeStep state={state} onAdvance={setState} />}
+      {step === "welcome" && <WelcomeStep state={state} onAdvance={setState} onStale={load} />}
       {step === "owner" && (
         <OwnerStep
           onAdvance={async (next) => {
@@ -144,14 +147,15 @@ export default function SetupPage() {
             await refresh();
             setState(next);
           }}
+          onStale={load}
         />
       )}
-      {step === "instance" && <InstanceStep onAdvance={setState} />}
-      {step === "server" && <ServerStep onAdvance={setState} />}
+      {step === "instance" && <InstanceStep onAdvance={setState} onStale={load} />}
+      {step === "server" && <ServerStep onAdvance={setState} onStale={load} />}
       {step === "preferences" && (
-        <PreferencesStep domain={domain} onDomainChange={setDomain} onAdvance={setState} />
+        <PreferencesStep domain={state.pending_domain ?? ""} onAdvance={setState} onStale={load} />
       )}
-      {step === "done" && <DoneStep state={state} domain={domain} />}
+      {step === "done" && <DoneStep state={state} onStale={load} />}
     </Frame>
   );
 }
@@ -235,8 +239,12 @@ function StepHeading({ title, hint }: { title: string; hint?: string }) {
   );
 }
 
-function StepError({ error }: { error: ApiError | null }) {
+function StepError({ error, exclude = [] }: { error: ApiError | null; exclude?: string[] }) {
   if (!error) return null;
+  // Field-level messages are already rendered under their inputs.
+  const onlyFieldErrors =
+    error.fieldEntries.length > 0 && error.fieldEntries.every(([key]) => exclude.includes(key));
+  if (onlyFieldErrors) return null;
   return (
     <div className="rounded-[var(--kn-r-sm)] border border-[var(--kn-danger)] bg-[var(--kn-danger-soft)] px-3 py-2">
       <InlineError message={error.message} icon={false} className="text-base" />
@@ -254,9 +262,11 @@ function StepError({ error }: { error: ApiError | null }) {
 function WelcomeStep({
   state,
   onAdvance,
+  onStale,
 }: {
   state: SetupState;
   onAdvance: (next: SetupState) => void;
+  onStale: () => void;
 }) {
   const [token, setToken] = React.useState("");
   const [health, setHealth] = React.useState<SetupHealth | null>(null);
@@ -295,7 +305,9 @@ function WelcomeStep({
       );
       void loadHealth();
     } catch (err) {
-      setError(toError(err));
+      const failure = toError(err);
+      setError(failure);
+      if (isStale(failure)) onStale();
     } finally {
       setPending(false);
     }
@@ -307,7 +319,9 @@ function WelcomeStep({
     try {
       onAdvance(await api.post<SetupState>("/setup/welcome", {}, { allowUnauthenticated: true }));
     } catch (err) {
-      setError(toError(err));
+      const failure = toError(err);
+      setError(failure);
+      if (isStale(failure)) onStale();
     } finally {
       setPending(false);
     }
@@ -346,7 +360,16 @@ function WelcomeStep({
             />
           </FormField>
 
-          {!error?.fields.token && <StepError error={error} />}
+          {!state.token_live && (
+            <p className="rounded-[var(--kn-r-sm)] border border-[var(--kn-warn)] bg-[var(--kn-warn-soft)] px-3 py-2 text-sm text-[var(--kn-text-2)]">
+              The installer&rsquo;s token has expired. Restart the control plane to mint a new one
+              &mdash; it is printed on every boot while no account exists &mdash; then reload this
+              page:{" "}
+              <code className="font-mono">docker compose -p kaname restart control-plane</code>
+            </p>
+          )}
+
+          <StepError error={error} exclude={["token"]} />
 
           <Button type="submit" variant="primary" size="md" loading={pending} fullWidth>
             Continue
@@ -458,7 +481,13 @@ function HealthRow({
  * 2. Owner
  * ------------------------------------------------------------------ */
 
-function OwnerStep({ onAdvance }: { onAdvance: (next: SetupState) => Promise<void> }) {
+function OwnerStep({
+  onAdvance,
+  onStale,
+}: {
+  onAdvance: (next: SetupState) => Promise<void>;
+  onStale: () => void;
+}) {
   const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -467,12 +496,12 @@ function OwnerStep({ onAdvance }: { onAdvance: (next: SetupState) => Promise<voi
   const [pending, setPending] = React.useState(false);
 
   /*
-   * Live feedback from the same function the control plane runs, so the
-   * hint and the verdict cannot disagree. The server still decides —
-   * this is a courtesy, not the check.
+   * Live feedback from the same function, over the same context, the
+   * control plane runs — so the hint and the verdict cannot disagree.
+   * The server still decides; this is a courtesy, not the check.
    */
   const assessment = React.useMemo(
-    () => (password ? assessPassword(password, [name, email]) : null),
+    () => (password ? assessPassword(password, passwordContext(name, email)) : null),
     [email, name, password],
   );
 
@@ -488,7 +517,9 @@ function OwnerStep({ onAdvance }: { onAdvance: (next: SetupState) => Promise<voi
       );
       await onAdvance(next);
     } catch (err) {
-      setError(toError(err));
+      const failure = toError(err);
+      setError(failure);
+      if (isStale(failure)) onStale();
     } finally {
       setPending(false);
     }
@@ -555,7 +586,7 @@ function OwnerStep({ onAdvance }: { onAdvance: (next: SetupState) => Promise<voi
           />
         </FormField>
 
-        {!error?.fields.password && <StepError error={error} />}
+        <StepError error={error} exclude={["name", "email", "password", "password_confirmation"]} />
 
         <Button type="submit" variant="primary" size="md" loading={pending} fullWidth>
           Create account
@@ -602,7 +633,13 @@ function PasswordMeter({ score, problems }: { score: number; problems: string[] 
  * 3. Instance name
  * ------------------------------------------------------------------ */
 
-function InstanceStep({ onAdvance }: { onAdvance: (next: SetupState) => void }) {
+function InstanceStep({
+  onAdvance,
+  onStale,
+}: {
+  onAdvance: (next: SetupState) => void;
+  onStale: () => void;
+}) {
   const [value, setValue] = React.useState("");
   const [error, setError] = React.useState<ApiError | null>(null);
   const [pending, setPending] = React.useState(false);
@@ -614,7 +651,9 @@ function InstanceStep({ onAdvance }: { onAdvance: (next: SetupState) => void }) 
     try {
       onAdvance(await api.post<SetupState>("/setup/instance", { instance_name: value.trim() }));
     } catch (err) {
-      setError(toError(err));
+      const failure = toError(err);
+      setError(failure);
+      if (isStale(failure)) onStale();
     } finally {
       setPending(false);
     }
@@ -678,12 +717,29 @@ interface SetupServer {
   agent_version: string | null;
 }
 
-function ServerStep({ onAdvance }: { onAdvance: (next: SetupState) => void }) {
+function ServerStep({
+  onAdvance,
+  onStale,
+}: {
+  onAdvance: (next: SetupState) => void;
+  onStale: () => void;
+}) {
   const [servers, setServers] = React.useState<SetupServer[] | null>(null);
   const [pairing, setPairing] = React.useState<PairingInstructions | null>(null);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [pending, setPending] = React.useState(false);
   const [name, setName] = React.useState("server-01");
+  // Ticks while a command is on screen, so its countdown is honest and
+  // "expired" is noticed here rather than by install.sh on the other box.
+  const [now, setNow] = React.useState(() => Date.now());
+
+  React.useEffect(() => {
+    if (!pairing) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [pairing]);
+
+  const expired = pairing !== null && Date.parse(pairing.expires_at) <= now;
 
   const load = React.useCallback(async () => {
     try {
@@ -732,7 +788,32 @@ function ServerStep({ onAdvance }: { onAdvance: (next: SetupState) => void }) {
       setPairing(await api.post<PairingInstructions>("/setup/server", { name: name.trim() }));
       void load();
     } catch (err) {
-      setError(toError(err));
+      const failure = toError(err);
+      setError(failure);
+      if (isStale(failure)) onStale();
+    } finally {
+      setPending(false);
+    }
+  };
+
+  /*
+   * A fresh command for a server that is registered but not connected:
+   * the previous token expired, or was minted in a tab that is gone.
+   * The route supersedes the old token itself; it just does not echo
+   * the name, which the row here already knows.
+   */
+  const regenerate = async (server: { id: string; name: string }) => {
+    setPending(true);
+    setError(null);
+    try {
+      const issued = await api.post<Omit<PairingInstructions, "server_name">>(
+        `/servers/${server.id}/enroll-token`,
+      );
+      setPairing({ ...issued, server_name: server.name });
+    } catch (err) {
+      const failure = toError(err);
+      setError(failure);
+      if (isStale(failure)) onStale();
     } finally {
       setPending(false);
     }
@@ -744,7 +825,9 @@ function ServerStep({ onAdvance }: { onAdvance: (next: SetupState) => void }) {
     try {
       onAdvance(await api.post<SetupState>("/setup/server/confirm"));
     } catch (err) {
-      setError(toError(err));
+      const failure = toError(err);
+      setError(failure);
+      if (isStale(failure)) onStale();
     } finally {
       setPending(false);
     }
@@ -764,7 +847,16 @@ function ServerStep({ onAdvance }: { onAdvance: (next: SetupState) => void }) {
       ))}
 
       {waiting.map((server) => (
-        <WaitingCard key={server.id} server={server} />
+        <WaitingCard
+          key={server.id}
+          server={server}
+          // Offered wherever this tab has no live command for the row:
+          // after a reload, or once the one it minted has expired.
+          onRegenerate={
+            pairing?.server_id === server.id && !expired ? undefined : () => void regenerate(server)
+          }
+          busy={pending}
+        />
       ))}
 
       {servers !== null && servers.length === 0 && !pairing && (
@@ -797,7 +889,13 @@ function ServerStep({ onAdvance }: { onAdvance: (next: SetupState) => void }) {
       {/* Once that server is on the socket, the command it needed is
           just clutter — and leaving a live token on screen is worse. */}
       {pairing && !connected.some((server) => server.id === pairing.server_id) && (
-        <PairingBlock pairing={pairing} />
+        <PairingBlock
+          pairing={pairing}
+          now={now}
+          expired={expired}
+          busy={pending}
+          onRegenerate={() => void regenerate({ id: pairing.server_id, name: pairing.server_name })}
+        />
       )}
 
       <div className="mt-4">
@@ -861,9 +959,18 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function WaitingCard({ server }: { server: SetupServer }) {
+function WaitingCard({
+  server,
+  onRegenerate,
+  busy = false,
+}: {
+  server: SetupServer;
+  /** Present when this tab has no live pairing command for the row. */
+  onRegenerate?: () => void;
+  busy?: boolean;
+}) {
   return (
-    <div className="flex items-center gap-2 rounded-[var(--kn-r-sm)] border border-dashed border-[var(--kn-border)] px-3 py-2.5">
+    <div className="flex flex-wrap items-center gap-2 rounded-[var(--kn-r-sm)] border border-dashed border-[var(--kn-border)] px-3 py-2.5">
       <span
         className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-[var(--kn-warn)]"
         aria-hidden
@@ -872,11 +979,35 @@ function WaitingCard({ server }: { server: SetupServer }) {
       <span className="text-sm text-[var(--kn-text-2)]" role="status">
         waiting for the agent to connect…
       </span>
+      {onRegenerate && (
+        <Button
+          className="ml-auto"
+          variant="secondary"
+          size="xs"
+          icon={RefreshCw}
+          loading={busy}
+          onClick={onRegenerate}
+        >
+          Generate a new command
+        </Button>
+      )}
     </div>
   );
 }
 
-function PairingBlock({ pairing }: { pairing: PairingInstructions }) {
+function PairingBlock({
+  pairing,
+  now,
+  expired,
+  busy,
+  onRegenerate,
+}: {
+  pairing: PairingInstructions;
+  now: number;
+  expired: boolean;
+  busy: boolean;
+  onRegenerate: () => void;
+}) {
   const { toast } = useToast();
   const [copied, setCopied] = React.useState(false);
 
@@ -890,7 +1021,28 @@ function PairingBlock({ pairing }: { pairing: PairingInstructions }) {
     }
   };
 
-  const minutes = Math.max(1, Math.round((Date.parse(pairing.expires_at) - Date.now()) / 60_000));
+  if (expired) {
+    return (
+      <div className="mt-3 flex flex-wrap items-center gap-3 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-bg)] p-3">
+        <p className="text-sm text-[var(--kn-text-2)]">
+          The command for <span className="text-[var(--kn-text)]">{pairing.server_name}</span> has
+          expired before it was used. Nothing on the server changed; mint another and run that
+          instead.
+        </p>
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={RefreshCw}
+          loading={busy}
+          onClick={onRegenerate}
+        >
+          Generate a new command
+        </Button>
+      </div>
+    );
+  }
+
+  const minutes = Math.max(1, Math.round((Date.parse(pairing.expires_at) - now) / 60_000));
 
   return (
     <div className="mt-3 flex flex-col gap-2">
@@ -923,18 +1075,48 @@ function PairingBlock({ pairing }: { pairing: PairingInstructions }) {
  * 5. Preferences — entirely skippable
  * ------------------------------------------------------------------ */
 
+interface SmtpDraft {
+  host: string;
+  port: number;
+  security: SmtpSecurity;
+  username: string;
+  password: string;
+  from_address: string;
+}
+
+const EMPTY_SMTP: SmtpDraft = {
+  host: "",
+  port: 587,
+  security: "starttls",
+  username: "",
+  password: "",
+  from_address: "",
+};
+
+const CHECK_INTERVAL_LABELS: Record<UpdateCheckInterval, string> = {
+  hourly: "Check every hour",
+  daily: "Check every day",
+  weekly: "Check every week",
+};
+
 function PreferencesStep({
   domain,
-  onDomainChange,
   onAdvance,
+  onStale,
 }: {
+  /** A domain saved on an earlier pass through this screen. */
   domain: string;
-  onDomainChange: (next: string) => void;
   onAdvance: (next: SetupState) => void;
+  onStale: () => void;
 }) {
   const [tier, setTier] = React.useState<UpdateTier>("notify");
+  const [checkInterval, setCheckInterval] = React.useState<UpdateCheckInterval>("daily");
   const [notify, setNotify] = React.useState(false);
   const [address, setAddress] = React.useState("");
+  const [addressProblem, setAddressProblem] = React.useState<string | null>(null);
+  const [smtp, setSmtp] = React.useState<SmtpDraft>(EMPTY_SMTP);
+  const [smtpTest, setSmtpTest] = React.useState<NotificationTestResult | null>(null);
+  const [testing, setTesting] = React.useState(false);
   const [acme, setAcme] = React.useState("");
   const [panel, setPanel] = React.useState<PanelAddress | null>(null);
   const [domainDraft, setDomainDraft] = React.useState(domain);
@@ -960,23 +1142,66 @@ function PreferencesStep({
     };
   }, []);
 
+  const wantsEmail = notify && address.trim().length > 0;
+  const smtpProvided = smtp.host.trim().length > 0;
+
+  const smtpBody = () => ({
+    host: smtp.host.trim(),
+    port: smtp.port,
+    security: smtp.security,
+    username: smtp.username.trim(),
+    // A sender was not asked for separately: the address that receives
+    // the mail is a fine default until Settings says otherwise.
+    from_address: smtp.from_address.trim() || address.trim(),
+    from_name: "Kaname",
+    ...(smtp.password ? { password: smtp.password } : {}),
+  });
+
+  const testSmtp = async () => {
+    setTesting(true);
+    setSmtpTest(null);
+    try {
+      setSmtpTest(
+        await api.post<NotificationTestResult>("/settings/notifications/smtp/test", {
+          to: address.trim(),
+          smtp: smtpBody(),
+        }),
+      );
+    } catch (err) {
+      setSmtpTest({ ok: false, error: toError(err).message, duration_ms: 0 });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const save = async (skip: boolean) => {
+    // A ticked box with nothing in it is a question, not a "no": sending
+    // `none` here would answer it silently and create no channel.
+    if (!skip && notify && address.trim().length === 0) {
+      setAddressProblem("Enter the address to notify, or untick the box.");
+      return;
+    }
+    setAddressProblem(null);
     setPending(true);
     setError(null);
     try {
       const next = await api.post<SetupState>("/setup/preferences", {
         update_tier: skip ? "notify" : tier,
-        update_interval: "daily",
+        // Skipping leaves the contract's default; "off" has no cadence.
+        ...(!skip && tier !== "off" ? { update_interval: checkInterval } : {}),
         ...(!skip && acme.trim() ? { acme_email: acme.trim() } : {}),
         notification:
-          !skip && notify && address.trim()
-            ? { kind: "email", address: address.trim() }
-            : { kind: "none" },
+          !skip && wantsEmail ? { kind: "email", address: address.trim() } : { kind: "none" },
+        ...(!skip && wantsEmail && smtpProvided ? { smtp: smtpBody() } : {}),
+        // Validated now, applied on the last screen — see the description
+        // on the field. Stored server-side so a reload does not lose it.
+        ...(!skip && nextDomain ? { panel_domain: nextDomain } : {}),
       });
-      onDomainChange(skip ? "" : nextDomain);
       onAdvance(next);
     } catch (err) {
-      setError(toError(err));
+      const failure = toError(err);
+      setError(failure);
+      if (isStale(failure)) onStale();
     } finally {
       setPending(false);
     }
@@ -994,20 +1219,34 @@ function PreferencesStep({
           <label className="text-sm font-medium text-[var(--kn-text)]" htmlFor="setup-tier">
             Updates
           </label>
-          <Select
-            id="setup-tier"
-            className="mt-1.5"
-            value={tier}
-            onChange={(event) => setTier(event.target.value as UpdateTier)}
-            options={updateTierEnum.options
-              // Applying everything unattended is a decision to make
-              // deliberately in Settings, not to click past on day one.
-              .filter((option) => option !== "auto_all")
-              .map((option) => ({
-                value: option,
-                label: UPDATE_TIER_LABELS[option].label,
-              }))}
-          />
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            <Select
+              id="setup-tier"
+              boxClassName="w-72"
+              value={tier}
+              onChange={(event) => setTier(event.target.value as UpdateTier)}
+              options={updateTierEnum.options
+                // Applying everything unattended is a decision to make
+                // deliberately in Settings, not to click past on day one.
+                .filter((option) => option !== "auto_all")
+                .map((option) => ({
+                  value: option,
+                  label: UPDATE_TIER_LABELS[option].label,
+                }))}
+            />
+            {tier !== "off" && (
+              <Select
+                aria-label="How often to check for updates"
+                boxClassName="w-44"
+                value={checkInterval}
+                onChange={(event) => setCheckInterval(event.target.value as UpdateCheckInterval)}
+                options={updateCheckIntervalEnum.options.map((option) => ({
+                  value: option,
+                  label: CHECK_INTERVAL_LABELS[option],
+                }))}
+              />
+            )}
+          </div>
           <p className="mt-1 text-xs text-[var(--kn-text-3)]">{UPDATE_TIER_LABELS[tier].detail}</p>
         </div>
 
@@ -1018,19 +1257,128 @@ function PreferencesStep({
             label="Email me when something needs attention"
           />
           {notify && (
-            <Input
+            <FormField
               className="mt-2"
-              boxClassName="w-72"
-              type="email"
-              mono
-              value={address}
-              onChange={(event) => setAddress(event.target.value)}
-              placeholder="ops@example.com"
-            />
+              label="Address"
+              error={error?.fields["notification.address"] ?? addressProblem ?? undefined}
+              required
+            >
+              <Input
+                boxClassName="w-72"
+                type="email"
+                mono
+                value={address}
+                onChange={(event) => {
+                  setAddress(event.target.value);
+                  setAddressProblem(null);
+                }}
+                placeholder="ops@example.com"
+              />
+            </FormField>
           )}
           <p className="mt-1 text-xs text-[var(--kn-text-3)]">
-            Failed jobs, a server going offline, a failed backup, a certificate about to expire.
+            Failed jobs, a server going offline, a failed backup, a certificate about to expire, an
+            update waiting for you.
           </p>
+
+          {notify && (
+            <div className="mt-3 flex flex-col gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] p-3">
+              <p className="text-sm text-[var(--kn-text)]">
+                Outgoing mail server{" "}
+                <span className="text-[var(--kn-text-3)]">
+                  — nothing is emailed until one is set. You can also do this later in Settings.
+                </span>
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  mono
+                  boxClassName="w-64"
+                  placeholder="smtp.example.com"
+                  spellCheck={false}
+                  autoComplete="off"
+                  value={smtp.host}
+                  onChange={(event) => setSmtp({ ...smtp, host: event.target.value })}
+                />
+                <Input
+                  mono
+                  type="number"
+                  inputMode="numeric"
+                  boxClassName="w-24"
+                  aria-label="SMTP port"
+                  value={String(smtp.port)}
+                  onChange={(event) =>
+                    setSmtp({
+                      ...smtp,
+                      port: Math.max(1, Math.min(65535, Number(event.target.value) || 0)),
+                    })
+                  }
+                />
+                <Select
+                  aria-label="Connection security"
+                  boxClassName="w-36"
+                  value={smtp.security}
+                  onChange={(event) =>
+                    setSmtp({ ...smtp, security: event.target.value as SmtpSecurity })
+                  }
+                  options={[
+                    { value: "starttls", label: "STARTTLS" },
+                    { value: "tls", label: "TLS" },
+                    { value: "none", label: "None" },
+                  ]}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  mono
+                  boxClassName="w-56"
+                  placeholder="username (optional)"
+                  spellCheck={false}
+                  autoComplete="off"
+                  value={smtp.username}
+                  onChange={(event) => setSmtp({ ...smtp, username: event.target.value })}
+                />
+                <Input
+                  mono
+                  type="password"
+                  boxClassName="w-56"
+                  placeholder="password"
+                  autoComplete="new-password"
+                  value={smtp.password}
+                  onChange={(event) => setSmtp({ ...smtp, password: event.target.value })}
+                />
+                <Input
+                  mono
+                  type="email"
+                  boxClassName="w-64"
+                  placeholder="sender (defaults to the address above)"
+                  spellCheck={false}
+                  autoComplete="off"
+                  value={smtp.from_address}
+                  onChange={(event) => setSmtp({ ...smtp, from_address: event.target.value })}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  icon={Send}
+                  loading={testing}
+                  disabled={!wantsEmail || !smtpProvided}
+                  onClick={() => void testSmtp()}
+                >
+                  Send a test email
+                </Button>
+                {smtpTest &&
+                  (smtpTest.ok ? (
+                    <span className="text-sm text-[var(--kn-ok)]">
+                      Delivered in {smtpTest.duration_ms} ms.
+                    </span>
+                  ) : (
+                    <span className="text-sm text-[var(--kn-danger)]">{smtpTest.error}</span>
+                  ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Offered only where there is nothing to lose: an instance that
@@ -1059,6 +1407,7 @@ function PreferencesStep({
         <FormField
           label="ACME contact address"
           hint="Only needed if you will issue certificates from this panel. Let's Encrypt uses it for expiry warnings."
+          error={error?.fields.acme_email}
         >
           <Input
             type="email"
@@ -1070,7 +1419,7 @@ function PreferencesStep({
           />
         </FormField>
 
-        <StepError error={error} />
+        <StepError error={error} exclude={["acme_email", "notification.address"]} />
 
         <div className="flex items-center gap-2">
           <Button
@@ -1096,12 +1445,15 @@ function PreferencesStep({
  * 6. Done
  * ------------------------------------------------------------------ */
 
-function DoneStep({ state, domain }: { state: SetupState; domain: string }) {
+function DoneStep({ state, onStale }: { state: SetupState; onStale: () => void }) {
   const router = useRouter();
   const [pending, setPending] = React.useState(false);
   const [completed, setCompleted] = React.useState(false);
   const [applied, setApplied] = React.useState<PanelAddressApplying | null>(null);
   const [error, setError] = React.useState<ApiError | null>(null);
+  // Read once: /setup/complete clears it on the server, and "Try again"
+  // after a failed apply still needs to know what to apply.
+  const [domain] = React.useState(state.pending_domain ?? "");
 
   const finish = async () => {
     setPending(true);
@@ -1121,7 +1473,9 @@ function DoneStep({ state, domain }: { state: SetupState; domain: string }) {
       }
       router.replace("/");
     } catch (err) {
-      setError(toError(err));
+      const failure = toError(err);
+      setError(failure);
+      if (isStale(failure)) onStale();
       setPending(false);
     }
   };
@@ -1152,15 +1506,31 @@ function DoneStep({ state, domain }: { state: SetupState; domain: string }) {
           request retries on its own.
         </p>
 
+        <p className="mt-2 text-sm text-[var(--kn-text-2)]">
+          A session belongs to the address it was opened on, so the new name will ask you to sign in
+          once. Signing in here keeps working too. If the name does not answer yet, wait a moment
+          and reload.
+        </p>
+
         <Button
           className="mt-4"
           variant="primary"
           size="md"
           iconRight={ArrowRight}
+          onClick={() => window.location.assign(applied.public_url)}
+          fullWidth
+        >
+          Open {applied.domain ?? applied.public_url}
+        </Button>
+
+        <Button
+          className="mt-2"
+          variant="ghost"
+          size="sm"
           onClick={() => router.replace("/")}
           fullWidth
         >
-          Open the Command Center
+          Stay on this address
         </Button>
 
         <MasterKeyNote />
@@ -1246,4 +1616,14 @@ function toError(err: unknown): ApiError {
   return isApiError(err)
     ? err
     : new ApiError({ code: "internal_error", message: String(err), status: 0 });
+}
+
+/**
+ * A refusal that means the state this tab rendered from is no longer
+ * true — the setup cookie or token lapsed, or somebody else finished —
+ * so the page re-reads it and the right screen comes back instead of a
+ * dead end with a form that cannot succeed.
+ */
+function isStale(error: ApiError): boolean {
+  return error.code === "unauthenticated" || error.code === "conflict";
 }
