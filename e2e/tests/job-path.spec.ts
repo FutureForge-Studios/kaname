@@ -82,9 +82,11 @@ test("restarting a unit runs as a job and lands on succeeded", async ({ page }) 
   /* The drawer opens focused on what it just started, so the job's log
    * is already on screen — and it is the worker naming the RPC it sent,
    * not the panel narrating what it hoped would happen. */
-  await expect(
-    job.getByRole("listitem").filter({ hasText: `service.restart ${UNIT}` }),
-  ).toBeVisible();
+  const log = job.getByRole("log");
+  await expect(log).toContainText(`service.restart ${UNIT}`);
+  /* And the stored log was fetched, not just appended live: a cap
+   * mismatch between the drawer and the API used to fail this silently. */
+  await expect(job.getByText(/validation_failed|could not be loaded/)).toHaveCount(0);
 
   /* Back to the table: the unit's uptime was reset by the far end, and
    * the cache learned it from the agent's reply rather than from a

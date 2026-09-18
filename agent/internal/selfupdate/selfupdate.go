@@ -54,18 +54,28 @@ func Download(ctx context.Context, client *http.Client, url, want, dst string) e
 		return fmt.Errorf("downloading %s: the server answered %s", url, response.Status)
 	}
 
-	file, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	// Not executable: nothing that lists or runs `*.new` next to the real
+	// binary may treat these bytes as a build until the digest has said
+	// they are one. Swap is what makes the verified file runnable.
+	file, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 
 	digest := sha256.New()
 	written, copyErr := io.Copy(io.MultiWriter(file, digest), io.LimitReader(response.Body, MaxBinaryBytes+1))
+	// Flushed before the digest is trusted, so the bytes it covered are
+	// the bytes on disk when Swap renames the file into place.
+	syncErr := file.Sync()
 	closeErr := file.Close()
 
 	if copyErr != nil {
 		os.Remove(dst)
 		return fmt.Errorf("downloading %s: %w", url, copyErr)
+	}
+	if syncErr != nil {
+		os.Remove(dst)
+		return syncErr
 	}
 	if closeErr != nil {
 		os.Remove(dst)

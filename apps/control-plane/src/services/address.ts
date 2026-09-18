@@ -61,8 +61,11 @@ export async function applyAddress(
   setEnv(envFile, {
     KANAME_DOMAIN: next,
     KANAME_PUBLIC_URL: publicUrl,
-    // A __Host- prefixed cookie is never stored over plain HTTP, so an
-    // IP-only install has to accept a plain one or nobody can sign in.
+    // "auto" is settled per request: a request over the new name gets a
+    // Secure `__Host-` cookie, one over the IP a plain cookie, so both
+    // origins keep signing in while the certificate is provisioned. An
+    // IP-only install says "false" outright, since nothing could ever
+    // arrive over HTTPS.
     KANAME_SECURE_COOKIES: next ? "auto" : "false",
   });
 

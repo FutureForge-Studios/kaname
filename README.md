@@ -91,28 +91,36 @@ curl -fsSL https://raw.githubusercontent.com/FutureForge-Studios/kaname/main/ins
 
 ### What it does, in order
 
-1. **Open the log.** `/etc/kaname/logs/` is created before any check runs — so a non-root
-   invocation dies on that `mkdir`, not on the friendly root check below.
-2. **Preflight.** OS, architecture, systemd, root, `curl`. Fails loudly and names what is missing
-   rather than half-proceeding.
-3. **Docker.** Installs it if absent; verifies the server version is 24+ and that the Compose
+1. **Root check.** Before anything else, including opening the log — a run without `sudo` gets
+   one sentence saying so, not a permission error from `mkdir`.
+2. **Open the log.** `/etc/kaname/logs/` is created before any other check runs.
+3. **Preflight.** Distribution ID (a distribution not on the tested list warns and continues),
+   architecture, systemd, `curl`. Fails loudly and names what is missing rather than
+   half-proceeding.
+4. **Docker.** Installs it if absent; verifies the server version is 24+ and that the Compose
    plugin is there.
-4. **Existing install?** A re-run is a reconfigure-and-repair, never a wipe.
-5. **Secrets and address.** Finds this server's primary IPv4 address with `ip route get` — no
-   external service is contacted — and generates `KANAME_MASTER_KEY`, the Postgres password and the
-   setup token with `openssl rand` (or `/dev/urandom` if openssl is absent). No placeholder or
-   example credential exists anywhere in the installer or the images.
-6. **Deployment files.** Fetches `infra/docker-compose.yml` and `infra/kaname-host.sh`, printing
-   each URL first, then generates the Caddyfile from `.env`.
-7. **Update units.** Writes the two `kaname-update` systemd units and enables the path watcher.
-8. **Deploy.** Pulls the pinned images and brings the project up with `--wait`.
-9. **Pair.** Unless `--control-plane-only`, enrols a local `kanamed` over loopback. Whether to pair
-   is decided by whether this host is _actually enrolled_, so a run that failed at pairing is fixed
-   by running the installer again.
-10. **Verify.** Waits for `/health`, and — in the default mode — for `/health` to report at least
+5. **Existing install?** A re-run is a reconfigure-and-repair, never a wipe.
+6. **Secrets and address.** Finds this server's primary IPv4 address with `ip route get` — no
+   external service is contacted. If that address is private (cloud NAT puts the public one in
+   front of the interface), it warns and tells you to re-run with `--public-url`, which also
+   works as a repair on an install that already exists. Generates `KANAME_MASTER_KEY`, the Postgres
+   password and the setup token with `openssl rand` (or `/dev/urandom` if openssl is absent). No
+   placeholder or example credential exists anywhere in the installer or the images.
+7. **Deployment files.** Fetches `infra/docker-compose.yml` and `infra/kaname-host.sh`, printing
+   each URL first, then generates the Caddyfile from `.env`. Every download retries and times
+   out rather than hanging.
+8. **Update units.** Writes the two `kaname-update` systemd units and enables the path watcher.
+9. **Deploy.** Pulls the pinned images and brings the project up with `--wait`.
+10. **Pair.** Unless `--control-plane-only`, downloads `kanamed` from the control plane it just
+    started, checks it against the SHA-256 the control plane publishes beside it, and enrols it
+    over loopback. Which of those steps still need doing is read off the disk, so a run that
+    failed after the download, or a host whose unit or identity was lost, is fixed by running the
+    installer again. Once an account exists the setup token can no longer pair, and the installer
+    says to re-run with a `--token` from the panel instead.
+11. **Verify.** Waits for `/health`, and — in the default mode — for `/health` to report at least
     one connected agent. If either fails it prints what broke and the command to investigate, and
     does not claim success.
-11. **Print** the URL, the setup token, and where the secrets live.
+12. **Print** the URL, the setup token, and where the secrets live.
 
 Everything is logged to the terminal and to `/etc/kaname/logs/install-<timestamp>.log`.
 
@@ -135,21 +143,22 @@ Docker check entirely.
 
 ### Flags
 
-Seven, and none of them required.
+Eight, and none of them required.
 
-| Flag                    | Default |                                                                        |
-| ----------------------- | ------- | ---------------------------------------------------------------------- |
-| `--control-plane-only`  | off     | Install the control plane; pair no agent here.                         |
-| `--agent-only`          | off     | Install only the agent. Requires `--token` and `--control-plane`.      |
-| `--token=<token>`       | —       | Pairing token from **Infrastructure → Servers → Add server**.          |
-| `--control-plane=<url>` | —       | Where the agent dials.                                                 |
-| `--version=<version>`   | `0.1.0` | Release to install.                                                    |
-| `--force`               | off     | Destroy an existing install first, after listing what it will destroy. |
-| `--help`                |         | Usage. `-h` also works.                                                |
+| Flag                    | Default  |                                                                                                          |
+| ----------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
+| `--control-plane-only`  | off      | Install the control plane; pair no agent here.                                                           |
+| `--agent-only`          | off      | Install only the agent. Requires `--token` and `--control-plane`.                                        |
+| `--token=<token>`       | —        | Pairing token from **Infrastructure → Servers → Add server**. Also re-pairs an all-in-one host.          |
+| `--control-plane=<url>` | —        | Where the agent dials.                                                                                   |
+| `--public-url=<url>`    | detected | Where the panel is reached, e.g. `http://203.0.113.10`, for hosts whose interface has a private address. |
+| `--version=<version>`   | `0.1.0`  | Release to install.                                                                                      |
+| `--force`               | off      | Destroy an existing install first, after listing what it will destroy.                                   |
+| `--help`                |          | Usage. `-h` also works.                                                                                  |
 
-Every value flag accepts both `--flag value` and `--flag=value`. `KANAME_SOURCE_URL` and
-`KANAME_REGISTRY` are environment-overridable, which is how you point the installer at a fork or a
-private registry.
+Every value flag accepts both `--flag value` and `--flag=value`. `KANAME_SOURCE_URL`,
+`KANAME_REGISTRY` and `KANAME_PUBLIC_URL` are environment-overridable, which is how you point the
+installer at a fork or a private registry, or at the address a NAT puts in front of the box.
 
 ### What lands on disk
 
@@ -225,6 +234,10 @@ login form.
 **on that machine**, sends a CSR, and receives a client certificate with `CN = <server id>`; the
 private key never leaves the box. It then dials back out over `wss://` and appears as connected.
 
+The binary the one-liner installs is served by the control plane itself, with its SHA-256
+published beside it at `/download/kanamed-<target>.sha256`; the installer refuses to install one
+that does not match, which matters while the panel is still on plain HTTP.
+
 Nothing was opened inbound. No SSH credential was stored anywhere. Revoking a server invalidates
 its certificate and drops the socket immediately. Certificates are valid 90 days and **do not
 auto-rotate** — a host has to be re-enrolled by hand after that.
@@ -243,12 +256,42 @@ to be issued.
 
 Setting a domain **adds** a site rather than moving one. Caddy's configuration is regenerated with
 both the `:80` block and the new name, so the IP address you are currently looking at keeps working
-while the certificate is provisioned, and secure cookies switch on. There is no window where the
-panel is unreachable at the address you arrived by, and clearing the domain returns you to the IP.
+— sign-in included — while the certificate is provisioned. Cookies are chosen per request: a
+request over the new name gets a Secure `__Host-` cookie, one over the IP keeps a plain cookie, so a
+session belongs to the address it was opened on and the new name asks you to sign in once. There is
+no window where the panel is unreachable at the address you arrived by, and clearing the domain
+returns you to the IP.
 
 The control plane writes the change into `.env` and queues it for the same host-side unit that
 applies updates — a container cannot regenerate the proxy in front of it and restart itself. The
 panel blinks for a few seconds while that happens.
+
+## Getting notified
+
+Nothing in the panel needs to be watched to be noticed. **Administration → Settings →
+Notifications** holds the channels — an email address, a webhook URL, or a Slack incoming
+webhook — and the events each one wants: a failed job, a server going offline (and coming back),
+a failed unit, a certificate inside its last two weeks, a failed backup, a threat from one
+address, an alert, a failed deployment, a release becoming available, and an update finishing,
+being rolled back, or the check for one failing.
+
+Email needs an outgoing mail server, set in the same place (or on the last step of onboarding):
+host, port, STARTTLS/TLS, credentials and a sender. The password is stored encrypted like every
+other credential Kaname holds and is never shown again; the settings only say whether one is set.
+**Send test email** and each channel's **Send test** try the real thing and report exactly what
+the far end answered, and every channel shows when it last delivered or why it last failed.
+
+Alert rules under **Monitoring** are evaluated every minute against the raw samples: a rule fires
+when its condition has held for its whole duration (the worst sample in the window is what is
+compared, so one quiet second cannot hide a sustained breach and one spike cannot fake one) and
+resolves when the latest sample is back inside the line. A rule's own channel list narrows who is
+told.
+
+Webhooks receive a JSON body and, when the channel has a signing secret, `X-Kaname-Timestamp` and
+`X-Kaname-Signature: sha256=<HMAC-SHA256 of "<timestamp>.<body>">`. Delivery is deliberately
+quiet: a server has to stay gone for the offline window before anyone hears about it, repeats are
+collapsed (one message an hour for the same threat, one per threshold for a certificate, one per
+release), and a channel that fails records the error rather than retrying into a queue.
 
 ## Keeping it current
 
@@ -272,15 +315,40 @@ failure mode for software that runs other people's infrastructure.
 An update first insists on a backup that succeeded in the last 24 hours — skippable, and the skip
 is written to the audit trail — then snapshots `<data-dir>/.env`, adds only the configuration keys
 the release declares it needs, pins the new images, and hands the restart to the host-side unit.
-If the new build does not answer its health check, that unit puts the snapshot back and restarts
-the previous version. The next boot judges what happened: a clean revert is filed as
-`rolled_back`, but if migrations from the new version had already run it is filed as
+Only one can be in flight: a second click, or the scheduler firing during a manual apply, is
+answered with a conflict naming the run that is already running. If anything fails before the
+handover, the snapshot is put back and the run says so.
+
+While the host unit works, the panel shows its progress live — the pull, the restart, the health
+wait — and says that it will be unreachable for about a minute; it reconnects on its own when the
+control plane answers again. The unit writes a verdict beside its log (`picked_up`, then
+`pull_failed`, `restart_failed` or `health_failed` if something went wrong, then `succeeded`,
+`rolled_back` or `rollback_failed`), so a pull that fails before anything is stopped ends the run
+as failed within seconds instead of leaving it "running" until the next reboot, and a unit that
+never picks the request up is reported as such within two minutes. If the new build does not
+answer its health check, that unit puts the snapshot back and restarts the previous version. A run
+is filed as `succeeded` only once the new build is actually serving — not when it merely started
+its migrations. The next boot judges the rest: a clean revert is filed as `rolled_back` with the
+reason the unit recorded, but if migrations from the new version had already run it is filed as
 `needs_attention` and says so, rather than quietly reporting a successful rollback onto a schema
 the old build does not know.
 
+What a release declares about itself lives in [`release.json`](release.json) at the repository
+root — `breaking`, `destructive` (a migration that rewrites data), `security`, `adds_config` (the
+configuration keys the new build needs) and `min_upgrade_from` — and the release workflow reads it
+from the tag being published, so the facts the hard rule and the config merge depend on are
+written by whoever wrote the change, not remembered at tag time. CI refuses a pull request that
+adds a migration without touching that file, and the workflow resets it to defaults after every
+release. The last manifest fetched is kept with the policy, so "update available" survives a
+restart (and a rollback), a check that fails retries with backoff instead of waiting a whole
+interval, and a scheduled apply the control plane had to refuse — no recent backup, say — is shown
+on the Updates page with the reason rather than logged where nobody looks.
+
 Agent updates are ordinary jobs, tracked per host. An agent that does not dial back in at the new
 version within five minutes is filed as `needs_attention` and stays visible until a person
-acknowledges it.
+acknowledges it; one whose update was interrupted by a control-plane restart is settled the same
+way rather than left "running". Prerelease versions order the way semver says (`rc.10` after
+`rc.9`), and an agent whose version cannot be parsed is shown as unknown, never as up to date.
 
 ---
 
@@ -426,20 +494,21 @@ simulated provider. The installer likewise has no automated test beyond shellche
 - Deployments record state but build, clone and copy nothing.
 - FTP is panel-side only. The agent has no FTP verb, so no account is ever created, changed or
   removed on the host.
-- Adding a mail domain records it but provisions nothing.
+- Adding a mail domain records it and marks it active after reading the host's DKIM key; no
+  Postfix or Dovecot configuration is written for it yet.
 - DNS is implemented for Cloudflare and manual zones only, despite the wider provider list.
-- Notification channels are stored but nothing sends to them — an available update or a failed job
-  shows up in the panel, not in your inbox.
 - sshd configuration changes arm a rollback timer on the agent with no way to confirm them, so a
   change made with the default window silently reverts.
-- The job drawer links to a job-detail page that does not exist.
 - Agent certificates are valid 90 days and do not auto-rotate.
-- Terminal recordings are never pruned.
+- Terminal recordings are never pruned. (Finished jobs and their logs, expired sessions and spent
+  tokens are — after `JOB_RETENTION_DAYS` and `SESSION_RETENTION_DAYS`.)
 
 **What is real**, and covered by the test suites plus an end-to-end Playwright run over four live
 simulated agents: the three-tier boundary, enrollment and the RPC protocol, the job queue and its
 worker, RBAC with per-server scoping, the audit chain, the mail DNS-authentication engine, the
-terminal, onboarding, and the update system's decision logic.
+terminal, onboarding, notification delivery (email, signed webhooks and Slack, with the throttling
+that keeps them readable), stream flow control in both directions, and the update system's
+decision logic.
 
 ## Licence
 

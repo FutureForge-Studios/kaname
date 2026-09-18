@@ -103,6 +103,33 @@ export const releaseManifest = z.object({
 });
 export type ReleaseManifest = z.infer<typeof releaseManifest>;
 
+/**
+ * The facts about the NEXT release, committed as `release.json` at the
+ * repository root and consumed by the release workflow. A tag message
+ * can only carry one word; the migration flags and the declared config
+ * keys are what the hard rule and the config merge run on, so they live
+ * in a file that is reviewed with the change that made them true.
+ */
+export const releaseFacts = z.object({
+  breaking: z.boolean().default(false),
+  destructive: z.boolean().default(false),
+  security: z.boolean().default(false),
+  adds_config: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/)).default([]),
+  min_upgrade_from: semver.nullable().default(null),
+  summary: z.string().max(500).default(""),
+});
+export type ReleaseFacts = z.infer<typeof releaseFacts>;
+
+/** What `release.json` is reset to once a release has consumed it. */
+export const DEFAULT_RELEASE_FACTS: ReleaseFacts = {
+  breaking: false,
+  destructive: false,
+  security: false,
+  adds_config: [],
+  min_upgrade_from: null,
+  summary: "",
+};
+
 /* ------------------------------------------------------------------ *
  * Runtime state
  * ------------------------------------------------------------------ */
@@ -175,7 +202,17 @@ export const updateOverview = z.object({
     manifest_url: z.string(),
     last_checked_at: isoDate.nullable(),
     last_check_error: z.string().nullable(),
+    /** Retry time after a failed check, the schedule otherwise. */
     next_check_at: isoDate.nullable(),
+    /**
+     * Why the scheduler's last unattended apply was refused. Without it
+     * an instance set to apply itself that cannot — no recent backup,
+     * host helper gone — looks exactly like one that has not got round
+     * to it yet.
+     */
+    last_apply_error: z
+      .object({ version: z.string(), message: z.string(), at: isoDate })
+      .nullable(),
   }),
 });
 export type UpdateOverview = z.infer<typeof updateOverview>;
@@ -238,18 +275,49 @@ export function parseVersion(value: string): ParsedVersion | null {
   };
 }
 
-/** -1, 0 or 1. A pre-release sorts below its own release. */
+/**
+ * -1, 0 or 1. A pre-release sorts below its own release, and a version
+ * that does not parse ("dev", "unknown", "") sorts below everything: an
+ * agent reporting no real version is the one most in need of an update,
+ * not one that is up to date.
+ */
 export function compareVersions(a: string, b: string): number {
   const left = parseVersion(a);
   const right = parseVersion(b);
-  if (!left || !right) return 0;
+  if (!left && !right) return 0;
+  if (!left) return -1;
+  if (!right) return 1;
   for (const key of ["major", "minor", "patch"] as const) {
     if (left[key] !== right[key]) return left[key] < right[key] ? -1 : 1;
   }
   if (left.prerelease === right.prerelease) return 0;
   if (left.prerelease === null) return 1;
   if (right.prerelease === null) return -1;
-  return left.prerelease < right.prerelease ? -1 : 1;
+  return comparePrerelease(left.prerelease, right.prerelease);
+}
+
+/**
+ * Semver §11: dot-separated identifiers, compared one by one. Numeric
+ * identifiers compare as numbers — which is what makes rc.10 newer than
+ * rc.9 — and sort below alphanumeric ones; a shorter list that is a
+ * prefix of the other sorts lower (1.0.0-alpha < 1.0.0-alpha.1).
+ */
+function comparePrerelease(a: string, b: string): number {
+  const left = a.split(".");
+  const right = b.split(".");
+  const length = Math.min(left.length, right.length);
+  for (let i = 0; i < length; i++) {
+    const x = left[i]!;
+    const y = right[i]!;
+    if (x === y) continue;
+    const xNumeric = /^\d+$/.test(x);
+    const yNumeric = /^\d+$/.test(y);
+    if (xNumeric && yNumeric) return Number(x) < Number(y) ? -1 : 1;
+    if (xNumeric !== yNumeric) return xNumeric ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  if (left.length === right.length) return 0;
+  return left.length < right.length ? -1 : 1;
 }
 
 export type VersionStep = "none" | "patch" | "minor" | "major";

@@ -33,6 +33,9 @@ export interface Principal {
   mfaSatisfied: boolean;
 }
 
+/** How often a session or key gets its "last seen" stamp refreshed. */
+const RECENCY_WRITE_MS = 60_000;
+
 export class AuthService {
   constructor(
     private readonly db: Database,
@@ -110,11 +113,18 @@ export class AuthService {
     const row = rows[0];
     if (!row || row.user.status !== "active") return null;
 
-    // Best-effort recency tracking; a failure here must not block a request.
-    void this.db
-      .update(sessions)
-      .set({ lastSeenAt: new Date() })
-      .where(eq(sessions.id, row.session.id));
+    // Best-effort recency tracking; a failure here must not block a
+    // request, and a page load is dozens of requests, so it is written
+    // at most once a minute per session.
+    if (Date.now() - row.session.lastSeenAt.getTime() > RECENCY_WRITE_MS) {
+      this.db
+        .update(sessions)
+        .set({ lastSeenAt: new Date() })
+        .where(eq(sessions.id, row.session.id))
+        .catch(() => {
+          /* recency is decoration; the request already succeeded */
+        });
+    }
 
     return {
       kind: "user",
@@ -145,7 +155,15 @@ export class AuthService {
     if (key.expiresAt && key.expiresAt < new Date()) return null;
     if (!constantTimeEquals(key.secretHash, hashToken(secret))) return null;
 
-    void this.db.update(apiKeys).set({ lastUsedAt: new Date() }).where(eq(apiKeys.id, key.id));
+    if (!key.lastUsedAt || Date.now() - key.lastUsedAt.getTime() > RECENCY_WRITE_MS) {
+      this.db
+        .update(apiKeys)
+        .set({ lastUsedAt: new Date() })
+        .where(eq(apiKeys.id, key.id))
+        .catch(() => {
+          /* see above */
+        });
+    }
 
     // An API key can never carry more than the grants it was issued.
     const grants: RoleGrant[] = key.scopes.map((permission) => ({

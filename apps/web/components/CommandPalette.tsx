@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
   Clock,
@@ -124,7 +124,10 @@ function readRecents(): RecentEntry[] {
 function pushRecent(entry: RecentEntry): void {
   if (typeof window === "undefined") return;
   try {
-    const next = [entry, ...readRecents().filter((r) => r.href !== entry.href)].slice(0, MAX_RECENT);
+    const next = [entry, ...readRecents().filter((r) => r.href !== entry.href)].slice(
+      0,
+      MAX_RECENT,
+    );
     window.localStorage.setItem(RECENT_KEY, JSON.stringify(next));
   } catch {
     /* A private window without storage still gets a working palette. */
@@ -191,6 +194,10 @@ function CommandPalette({ open, onOpenChange, seed }: CommandPaletteProps) {
       api.get<SearchResponse>("/search", { params: { q: debounced, limit: 24 }, signal }),
     enabled: open && debounced.length > 0,
     staleTime: 15_000,
+    // Every debounced prefix is its own key; keep them only briefly, and
+    // hold the previous result on screen so the list does not flash.
+    gcTime: 30_000,
+    placeholderData: keepPreviousData,
     retry: false,
   });
 
@@ -492,9 +499,7 @@ function PaletteRow({ id, item, active, onHover }: PaletteRowProps) {
       <span className="ml-auto flex shrink-0 items-center gap-2">
         {item.meta && <span className="text-xs text-[var(--kn-text-3)]">{item.meta}</span>}
         {item.kbd && <Kbd keys={item.kbd} size="xs" />}
-        {active && (
-          <ArrowRight size={12} className="text-[var(--kn-accent-400)]" aria-hidden />
-        )}
+        {active && <ArrowRight size={12} className="text-[var(--kn-accent-400)]" aria-hidden />}
       </span>
     </div>
   );

@@ -1,6 +1,7 @@
 "use client";
 
-import { useQueries, useQuery, type UseQueryResult } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
+import { useToast } from "@kaname/ui";
 import type {
   CreateMailAliasInput,
   CreateMailForwarderInput,
@@ -29,6 +30,7 @@ import {
 import {
   DETAIL_STALE_TIME,
   LIST_STALE_TIME,
+  invalidateFamilies,
   queryKeys,
   useList,
   useMutationWithJob,
@@ -138,14 +140,20 @@ export interface DeleteMailboxVars {
 }
 
 export function useDeleteMailboxes() {
+  const client = useQueryClient();
+  const { toast } = useToast();
+
   return useMutationWithJob<DeleteMailboxVars>({
     mutationFn: async ({ mailboxes, deleteMaildir }) => {
       const jobs: Job[] = [];
       for (const mailbox of mailboxes) {
-        const { job } = await deleteWithBody<{ job: Job }>(`/mailboxes/${mailbox.id}`, {
+        // A mailbox whose create never reached the host is removed on the
+        // spot when the agent is away: there is no job because there is
+        // nothing on the host to undo.
+        const { job } = await deleteWithBody<{ job: Job | null }>(`/mailboxes/${mailbox.id}`, {
           delete_maildir: deleteMaildir,
         });
-        jobs.push(job);
+        if (job) jobs.push(job);
       }
       return { jobs, correlation_id: jobs[0]?.correlation_id ?? "" };
     },
@@ -154,6 +162,20 @@ export function useDeleteMailboxes() {
       mailboxes.length > 1
         ? `Delete ${mailboxes.length} mailboxes`
         : `Delete ${mailboxes[0]?.address ?? "mailbox"}`,
+    onQueued: (jobs, { mailboxes }) => {
+      const removed = mailboxes.length - jobs.length;
+      if (removed === 0) return;
+      // Nothing queued means nothing will invalidate these lists later.
+      invalidateFamilies(client, MAILBOX_FAMILIES);
+      toast({
+        variant: "info",
+        title:
+          removed === 1 && mailboxes.length === 1
+            ? `Removed ${mailboxes[0]!.address}`
+            : `Removed ${removed} mailbox record${removed === 1 ? "" : "s"}`,
+        description: "It never finished provisioning, so there was nothing on the host to remove.",
+      });
+    },
   });
 }
 

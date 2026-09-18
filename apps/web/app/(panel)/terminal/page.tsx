@@ -92,6 +92,9 @@ export default function TerminalPage() {
   const selection = useServerSelection({ permission: "terminal.session:exec" });
 
   const [posixUser, setPosixUser] = React.useState("root");
+  /* True from Connect until Disconnect; the pane is mounted while it is. */
+  const [wanted, setWanted] = React.useState(false);
+  /* The ticket the pane actually redeemed, for the recording notice. */
   const [session, setSession] = React.useState<TerminalSessionTicket | null>(null);
   /* Bumped only by an explicit connect or reconnect. */
   const [generation, setGeneration] = React.useState(0);
@@ -103,27 +106,24 @@ export default function TerminalPage() {
   const [noMatch, setNoMatch] = React.useState(false);
 
   const controller = React.useRef<TerminalController | null>(null);
-  const latestTicket = React.useRef<TerminalSessionTicket | null>(null);
   const searchRef = React.useRef<HTMLInputElement | null>(null);
 
   const allowed = can("terminal.session:exec", selection.serverId);
 
-  const open = useResourceMutation<void, TerminalSessionTicket>({
-    mutationFn: () =>
-      api.post<TerminalSessionTicket>("/terminal/sessions", {
-        server_id: selection.serverId,
-        cols: geometry.cols,
-        rows: geometry.rows,
-        ...(posixUser && posixUser !== "root" ? { user: posixUser } : {}),
-      }),
-    invalidates: ["terminal-sessions"],
-    onDone: (ticket) => {
-      setDetail(null);
-      setStatus("connecting");
-      setSession(ticket);
-      setGeneration((n) => n + 1);
-    },
-  });
+  /*
+   * Connect is a local state change: mounting the pane is what mints the
+   * ticket. Minting one here as well would leave an unredeemed ticket —
+   * and an audit entry for a session that never happened — on every
+   * click, because a ticket is spent on redemption (KD-013) and the pane
+   * has to mint its own for every socket it opens.
+   */
+  const connectNow = React.useCallback(() => {
+    setDetail(null);
+    setStatus("connecting");
+    setSession(null);
+    setWanted(true);
+    setGeneration((n) => n + 1);
+  }, []);
 
   /*
    * The pane mints its own ticket for every socket it opens. A ticket is
@@ -143,16 +143,18 @@ export default function TerminalPage() {
         },
         { signal },
       );
-      latestTicket.current = ticket;
       return ticket;
     },
     [selection.serverId, geometry.cols, geometry.rows, posixUser],
   );
 
   const disconnect = React.useCallback(() => {
+    setWanted(false);
     setSession(null);
     setStatus("closed");
     setDetail(null);
+    // The pane is unmounting; nothing should keep its 10k-line buffer alive.
+    controller.current = null;
   }, []);
 
   /* A ticket is single-use, so reconnecting means minting a new one. */
@@ -193,7 +195,7 @@ export default function TerminalPage() {
     }
   }, [toast]);
 
-  const live = session !== null && status !== "closed" && status !== "error";
+  const live = wanted && status !== "closed" && status !== "error";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -203,7 +205,7 @@ export default function TerminalPage() {
           selection.server ? `${selection.server.hostname} · ${posixUser}` : "no host selected"
         }
         actions={
-          session && (
+          wanted && (
             <>
               <Badge tone={STATUS_TONES[status]} size="sm">
                 {STATUS_LABELS[status]}
@@ -226,14 +228,14 @@ export default function TerminalPage() {
             aria-label="POSIX user to run as"
             title="The POSIX user the shell runs as. Audited either way."
             value={posixUser}
-            disabled={session !== null}
+            disabled={wanted}
             spellCheck={false}
             autoComplete="off"
             boxClassName="w-28"
             onChange={(event) => setPosixUser(event.target.value)}
           />
 
-          {session ? (
+          {wanted ? (
             <>
               <Button variant="secondary" size="sm" icon={Unplug} onClick={disconnect}>
                 Disconnect
@@ -242,7 +244,7 @@ export default function TerminalPage() {
                 variant="secondary"
                 size="sm"
                 icon={PlugZap}
-                loading={open.isPending}
+                loading={status === "connecting"}
                 onClick={reconnect}
               >
                 Reconnect
@@ -253,9 +255,8 @@ export default function TerminalPage() {
               variant="primary"
               size="sm"
               icon={Plug}
-              loading={open.isPending}
               disabled={!selection.serverId || !allowed}
-              onClick={() => open.mutate()}
+              onClick={connectNow}
             >
               Connect
             </Button>
@@ -322,15 +323,11 @@ export default function TerminalPage() {
           </div>
         </div>
 
-        {open.isError && (
-          <PageError error={open.error} onRetry={() => open.mutate()} context="Terminal session" />
-        )}
-
         {session && (
           <RecordingNotice recorded={session.recorded} serverName={session.server_name} />
         )}
 
-        {(status === "closed" || status === "error") && session && detail && (
+        {(status === "closed" || status === "error") && wanted && detail && (
           <div
             role="status"
             className={cn(
@@ -341,23 +338,18 @@ export default function TerminalPage() {
             )}
           >
             <span className="text-[var(--kn-text)]">The session ended: {detail}.</span>
-            <Button
-              variant="secondary"
-              size="xs"
-              icon={PlugZap}
-              loading={open.isPending}
-              onClick={reconnect}
-            >
+            <Button variant="secondary" size="xs" icon={PlugZap} onClick={reconnect}>
               Reconnect
             </Button>
           </div>
         )}
 
         <div className="h-[420px] min-h-0 w-full lg:h-[560px] 2xl:h-[672px]">
-          {session ? (
+          {wanted ? (
             <TerminalPane
               key={generation}
               connect={mintSession}
+              onSession={(next) => setSession(next as TerminalSessionTicket)}
               onReady={(next) => {
                 controller.current = next;
               }}
@@ -382,13 +374,7 @@ export default function TerminalPage() {
                 action={
                   selection.serverId &&
                   allowed && (
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      icon={Plug}
-                      loading={open.isPending}
-                      onClick={() => open.mutate()}
-                    >
+                    <Button variant="primary" size="sm" icon={Plug} onClick={connectNow}>
                       Connect to {selection.server?.name}
                     </Button>
                   )

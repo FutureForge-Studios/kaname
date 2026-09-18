@@ -4,7 +4,7 @@ import * as React from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { ToastProvider } from "@kaname/ui";
 import { isApiError } from "@/lib/api";
-import { connectEventStream, type StreamMessage } from "@/lib/events";
+import { connectEventStream, type EventStreamStatus, type StreamMessage } from "@/lib/events";
 import {
   JobDrawerProvider,
   LIST_STALE_TIME,
@@ -119,7 +119,14 @@ function EventBridge() {
     };
 
     const onMessage = (message: StreamMessage) => {
-      if (message.topic === "jobs") drawerRef.current.note(message);
+      if (message.topic === "jobs") {
+        drawerRef.current.note(message);
+        // A log line or a progress tick changes nothing any list shows.
+        // Refetching /jobs and /dashboard for each of them — several
+        // times a second during a backup — was the panel's own worst
+        // load on the control plane.
+        if (message.type === "job.log" || message.type === "job.progress") return;
+      }
 
       for (const family of familiesForEvent(message)) pending.add(family);
       if (eventTouchesDashboard(message)) dashboardDirty = true;
@@ -127,7 +134,16 @@ function EventBridge() {
       if (timer === 0) timer = window.setTimeout(flush, FLUSH_MS);
     };
 
-    const disconnect = connectEventStream({ onMessage });
+    // A stream that dropped and came back missed every event in between
+    // — typically because the control plane was replaced. Nothing that
+    // was published then will be replayed, so everything is refetched.
+    let previous: EventStreamStatus = "connecting";
+    const onStatusChange = (status: EventStreamStatus) => {
+      if (previous === "reconnecting" && status === "open") void client.invalidateQueries();
+      previous = status;
+    };
+
+    const disconnect = connectEventStream({ onMessage, onStatusChange });
 
     return () => {
       disconnect();

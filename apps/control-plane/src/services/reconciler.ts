@@ -1,5 +1,5 @@
 import { and, eq, isNull, lt, sql } from "@kaname/db";
-import { alerts, containers, serverMetrics, servers, services } from "@kaname/db/schema";
+import { alerts, containers, serverMetrics, servers, services, settings } from "@kaname/db/schema";
 import type { HealthState, MetricsSample, ThreatObservation } from "@kaname/contract";
 import type { AppContext } from "../context.js";
 
@@ -15,6 +15,7 @@ import type { AppContext } from "../context.js";
 export class Reconciler {
   private timer: NodeJS.Timeout | null = null;
   private rollupTimer: NodeJS.Timeout | null = null;
+  private orphanTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly ctx: AppContext) {}
 
@@ -62,11 +63,23 @@ export class Reconciler {
     this.timer.unref?.();
     this.rollupTimer = setInterval(() => void this.rollupAndPrune(), 5 * 60_000);
     this.rollupTimer.unref?.();
+    // An agent update whose job died with its lease — or timed out
+    // unclaimed — has nobody left to settle its run. Boot catches the
+    // ones from before; this catches the ones that expire while up.
+    this.orphanTimer = setInterval(
+      () =>
+        void this.ctx.updates
+          .settleOrphanAgentRuns()
+          .catch((err) => log.error({ err }, "settling orphaned agent update runs failed")),
+      60_000,
+    );
+    this.orphanTimer.unref?.();
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     if (this.rollupTimer) clearInterval(this.rollupTimer);
+    if (this.orphanTimer) clearInterval(this.orphanTimer);
   }
 
   /* --------------------------- agent events -------------------------- */
@@ -280,6 +293,7 @@ export class Reconciler {
   private async sweep(): Promise<void> {
     const { db, config, hub, events } = this.ctx;
     const connected = new Set(hub.connectedServerIds());
+    const offlineAfterMs = (await this.offlineAfterSeconds()) * 1000;
 
     const rows = await db
       .select({
@@ -298,7 +312,7 @@ export class Reconciler {
       else if (!row.enrolledAt) next = "never_enrolled";
       else if (connected.has(row.id)) {
         const age = row.lastSeenAt ? now - row.lastSeenAt.getTime() : 0;
-        next = age > config.AGENT_OFFLINE_AFTER_SECONDS * 1000 ? "degraded" : "connected";
+        next = age > offlineAfterMs ? "degraded" : "connected";
       } else next = "disconnected";
 
       if (next !== row.connection) {
@@ -320,6 +334,16 @@ export class Reconciler {
       .update(servers)
       .set({ health: "unknown" })
       .where(and(eq(servers.connection, "disconnected"), sql`${servers.health} <> 'unknown'`));
+  }
+
+  /** The window from Settings > Agents; the env value is only the default it was seeded from. */
+  private async offlineAfterSeconds(): Promise<number> {
+    const { db, config } = this.ctx;
+    const rows = await db.select().from(settings).where(eq(settings.key, "agents"));
+    const stored = (rows[0]?.value ?? {}) as { offline_after_seconds?: unknown };
+    return typeof stored.offline_after_seconds === "number" && stored.offline_after_seconds > 0
+      ? stored.offline_after_seconds
+      : config.AGENT_OFFLINE_AFTER_SECONDS;
   }
 
   /** Rolls raw samples into 5-minute buckets and applies retention. */
@@ -358,6 +382,65 @@ export class Reconciler {
     } catch (err) {
       log.error({ err }, "metric rollup failed");
     }
+
+    await this.housekeeping();
+  }
+
+  /**
+   * Everything else that only ever grew. Every mutation is a job and
+   * every streamed line is a job_logs row; every login is a session row;
+   * every terminal open is a ticket whether or not it was redeemed.
+   * Metrics had retention from the start — these did not.
+   */
+  private async housekeeping(): Promise<void> {
+    const { db, config, log } = this.ctx;
+    const jobs = sql.raw(`interval '${config.JOB_RETENTION_DAYS} days'`);
+    const sessions = sql.raw(`interval '${config.SESSION_RETENTION_DAYS} days'`);
+    const counts: Record<string, number> = {};
+
+    const run = async (name: string, query: ReturnType<typeof sql>) => {
+      try {
+        const result = (await db.execute(query)) as { rowCount?: number | null; rows?: unknown[] };
+        const n = result.rowCount ?? result.rows?.length ?? 0;
+        if (n > 0) counts[name] = n;
+      } catch (err) {
+        log.error({ err, table: name }, "housekeeping failed");
+      }
+    };
+
+    // Deployments, backup runs and certificates reference jobs with
+    // "set null"; job_logs cascade. Nothing else holds a job.
+    await run(
+      "jobs",
+      sql`delete from jobs
+          where status in ('succeeded', 'failed', 'cancelled', 'timed_out')
+            and finished_at is not null and finished_at < now() - ${jobs}`,
+    );
+    await run(
+      "sessions",
+      sql`delete from sessions
+          where expires_at < now() - ${sessions}
+             or (revoked_at is not null and revoked_at < now() - ${sessions})`,
+    );
+    await run(
+      "terminal_sessions",
+      sql`delete from terminal_sessions
+          where started_at is null and expires_at < now() - interval '1 day'`,
+    );
+    await run(
+      "enrollment_tokens",
+      sql`delete from enrollment_tokens
+          where (used_at is not null or expires_at < now())
+            and created_at < now() - interval '7 days'`,
+    );
+    await run(
+      "setup_tokens",
+      sql`delete from setup_tokens
+          where (used_at is not null or (expires_at is not null and expires_at < now()))
+            and created_at < now() - interval '7 days'`,
+    );
+
+    if (Object.keys(counts).length > 0) log.info(counts, "housekeeping pruned rows");
   }
 }
 

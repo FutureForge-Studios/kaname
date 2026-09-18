@@ -22,6 +22,10 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
     trustProxy: true,
     bodyLimit: 32 * 1024 * 1024,
     genReqId: () => crypto.randomUUID(),
+    // The panel holds /events open for as long as a tab is open. Fastify's
+    // default only closes idle keep-alive sockets on close(), so a shutdown
+    // would wait on that stream forever and end in Docker's SIGKILL.
+    forceCloseConnections: true,
   });
 
   await app.register(helmet, {

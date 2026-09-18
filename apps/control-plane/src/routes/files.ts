@@ -33,7 +33,13 @@ import {
 import { accepted, helpers, item, parseBody, parseQuery } from "../http/plugin.js";
 import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
 import { ApiException, agentOffline, badRequest, conflict, fromAgentError } from "../lib/errors.js";
-import { enqueueServerJob, loadConnectedServer, loadServer, type ServerRow } from "./_shared.js";
+import {
+  drained,
+  enqueueServerJob,
+  loadConnectedServer,
+  loadServer,
+  type ServerRow,
+} from "./_shared.js";
 
 /* ------------------------------------------------------------------ *
  * File manager.
@@ -55,6 +61,18 @@ const LIVE_TIMEOUT_MS = 15_000;
 /** fs.read pulls up to 8 MiB inline for the editor. */
 const READ_TIMEOUT_MS = 60_000;
 const TRANSFER_TIMEOUT_MS = 60 * 60_000;
+/**
+ * Raw bytes per upload chunk. base64 turns 3 bytes into 4, so this keeps
+ * every frame's payload at exactly MAX_CHUNK_BYTES, the same split the
+ * agent uses when it sends.
+ */
+const UPLOAD_CHUNK_BYTES = (MAX_CHUNK_BYTES / 4) * 3;
+/**
+ * Uploads hold a multipart body open for the whole transfer and share
+ * one agent socket; past this many per host they only slow each other.
+ */
+const MAX_UPLOADS_PER_SERVER = 2;
+const activeUploads = new Map<string, number>();
 
 /** Directories sort before files no matter which column is chosen. */
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -304,7 +322,11 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
       "fs.download",
       { path: q.path },
       (data, encoding) => {
-        reply.raw.write(Buffer.from(data, encoding === "base64" ? "base64" : "utf8"));
+        if (reply.raw.destroyed || reply.raw.writableEnded) return undefined;
+        const ok = reply.raw.write(Buffer.from(data, encoding === "base64" ? "base64" : "utf8"));
+        // false means the browser is behind. Waiting here holds the next
+        // chunk, and with it the agent, so the file never piles up in heap.
+        return ok ? undefined : drained(reply.raw);
       },
       { timeoutMs: TRANSFER_TIMEOUT_MS },
     );
@@ -336,71 +358,90 @@ export async function fileRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    const part = await req.file();
-    if (!part) {
-      throw badRequest("The request contained no file part.", { file: "required" });
-    }
-
-    const destination = joinUploadPath(q.path, part.filename);
-
-    const handle = req.ctx.hub.stream(
-      server.id,
-      "fs.upload",
-      { path: destination, size: q.size, mode: q.mode, overwrite: q.overwrite },
-      () => undefined,
-      { timeoutMs: TRANSFER_TIMEOUT_MS },
-    );
-
-    let sent = 0;
+    // The slot is taken before the body is touched, so a refused request
+    // never reads a multipart stream it is about to abandon.
+    acquireUploadSlot(server);
     try {
-      for await (const chunk of part.file) {
-        const buffer = chunk as Buffer;
-        for (let offset = 0; offset < buffer.length; offset += MAX_CHUNK_BYTES) {
-          handle.send(
-            buffer.subarray(offset, offset + MAX_CHUNK_BYTES).toString("base64"),
-            "base64",
-          );
-        }
-        sent += buffer.length;
+      const part = await req.file();
+      if (!part) {
+        throw badRequest("The request contained no file part.", { file: "required" });
       }
-    } catch (err) {
-      handle.cancel("upload aborted");
-      throw translateAgentError(server, err);
-    }
 
-    if (sent !== q.size) {
-      handle.cancel("declared size did not match the body");
-      throw badRequest(
-        `The upload declared ${q.size} bytes but the body carried ${sent}. The agent needs the exact size to know where the file ends.`,
-        { size: `expected ${sent}` },
+      const destination = joinUploadPath(q.path, part.filename);
+
+      const handle = req.ctx.hub.stream(
+        server.id,
+        "fs.upload",
+        { path: destination, size: q.size, mode: q.mode, overwrite: q.overwrite },
+        () => undefined,
+        { timeoutMs: TRANSFER_TIMEOUT_MS },
       );
+
+      let sent = 0;
+      try {
+        for await (const chunk of part.file) {
+          const buffer = chunk as Buffer;
+          for (let offset = 0; offset < buffer.length; offset += UPLOAD_CHUNK_BYTES) {
+            // Resolves only once the agent has room, which pauses the
+            // multipart stream instead of encoding the whole body up front.
+            await handle.send(
+              buffer.subarray(offset, offset + UPLOAD_CHUNK_BYTES).toString("base64"),
+              "base64",
+            );
+          }
+          sent += buffer.length;
+        }
+      } catch (err) {
+        handle.cancel("upload aborted");
+        // A send fails because the stream closed; when the agent closed
+        // it, its own refusal is the reason worth showing, and `done`
+        // carries that.
+        const cause =
+          err instanceof AgentRpcError
+            ? await handle.done.then(
+                () => err,
+                (reason: unknown) => reason,
+              )
+            : err;
+        throw translateAgentError(server, cause);
+      }
+
+      if (sent !== q.size) {
+        handle.cancel("declared size did not match the body");
+        throw badRequest(
+          `The upload declared ${q.size} bytes but the body carried ${sent}. The agent needs the exact size to know where the file ends.`,
+          { size: `expected ${sent}` },
+        );
+      }
+
+      let entry: FileEntry;
+      try {
+        entry = await handle.done;
+      } catch (err) {
+        throw translateAgentError(server, err);
+      }
+
+      await req.ctx.audit.record({
+        actor: h.actor(),
+        action: "fs.upload",
+        targetType: "path",
+        targetId: destination,
+        targetLabel: destination,
+        serverId: server.id,
+        metadata: { size: sent, mime: part.mimetype, overwrite: q.overwrite },
+      });
+      req.ctx.events.publish(
+        "servers",
+        "file.uploaded",
+        { server_id: server.id, path: destination, size: sent },
+        server.id,
+      );
+
+      const row: FileRow = { ...entry, server_id: server.id, server_name: server.name };
+      return item(reply, row, 201);
+    } finally {
+      releaseUploadSlot(server.id);
     }
-
-    let entry: FileEntry;
-    try {
-      entry = await handle.done;
-    } catch (err) {
-      throw translateAgentError(server, err);
-    }
-
-    await req.ctx.audit.record({
-      actor: h.actor(),
-      action: "fs.upload",
-      targetType: "path",
-      targetId: destination,
-      targetLabel: destination,
-      serverId: server.id,
-      metadata: { size: sent, mime: part.mimetype, overwrite: q.overwrite },
-    });
-    req.ctx.events.publish(
-      "servers",
-      "file.uploaded",
-      { server_id: server.id, path: destination, size: sent },
-      server.id,
-    );
-
-    const row: FileRow = { ...entry, server_id: server.id, server_name: server.name };
-    return item(reply, row, 201);
   });
 }
 
@@ -424,6 +465,31 @@ const PROTECTED_PATHS = new Set([
   "/usr",
   "/var",
 ]);
+
+function acquireUploadSlot(server: ServerRow): void {
+  const running = activeUploads.get(server.id) ?? 0;
+  if (running >= MAX_UPLOADS_PER_SERVER) {
+    throw new ApiException(
+      "rate_limited",
+      `${server.name} already has ${MAX_UPLOADS_PER_SERVER} uploads in progress.`,
+      {
+        detail: { limit: MAX_UPLOADS_PER_SERVER },
+        remediation: {
+          summary:
+            "Uploads to one host share its agent connection, so more of them at once only slow each other down. Wait for one to finish, then retry.",
+          actions: [{ label: "Browse files", href: `/files?server_id=${server.id}` }],
+        },
+      },
+    );
+  }
+  activeUploads.set(server.id, running + 1);
+}
+
+function releaseUploadSlot(serverId: string): void {
+  const running = activeUploads.get(serverId) ?? 0;
+  if (running <= 1) activeUploads.delete(serverId);
+  else activeUploads.set(serverId, running - 1);
+}
 
 /** Every file mutation is a job, so "we do not know yet" stays resumable (KD-008). */
 async function submit(

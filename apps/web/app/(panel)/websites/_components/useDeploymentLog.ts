@@ -22,6 +22,8 @@ import { API_BASE } from "@/lib/api";
 
 /** A long build is thousands of lines; a runaway one must not be unbounded. */
 const MAX_LINES = 20_000;
+/** npm and Docker print hundreds of lines a second; React gets them per frame, not per line. */
+const FLUSH_MS = 100;
 
 export type DeploymentLogState = "connecting" | "streaming" | "ended" | "expired" | "error";
 
@@ -68,10 +70,25 @@ export function useDeploymentLog(deploymentId: string | null, enabled: boolean):
     const source = new EventSource(`${API_BASE}/deployments/${deploymentId}/log`);
     let seq = 0;
     let closed = false;
+    let pending: LogLine[] = [];
+    let flushTimer = 0;
+
+    const flush = (): void => {
+      flushTimer = 0;
+      if (pending.length === 0) return;
+      const batch = pending;
+      pending = [];
+      setLines((previous) => {
+        const next = previous.concat(batch);
+        return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
+      });
+    };
 
     const close = (): void => {
       if (closed) return;
       closed = true;
+      if (flushTimer !== 0) window.clearTimeout(flushTimer);
+      flush();
       source.close();
     };
 
@@ -81,18 +98,13 @@ export function useDeploymentLog(deploymentId: string | null, enabled: boolean):
       const data = parse<LogEventData>((event as MessageEvent<string>).data);
       if (!data) return;
       seq += 1;
-      const line: LogLine = {
+      pending.push({
         id: `${deploymentId}-${seq}`,
         ts: data.ts,
         level: data.level ?? "info",
         message: data.message ?? "",
-      };
-      setState("streaming");
-      setLines((previous) =>
-        previous.length >= MAX_LINES
-          ? [...previous.slice(previous.length - MAX_LINES + 1), line]
-          : [...previous, line],
-      );
+      });
+      if (flushTimer === 0) flushTimer = window.setTimeout(flush, FLUSH_MS);
     });
 
     source.addEventListener("progress", (event) => {

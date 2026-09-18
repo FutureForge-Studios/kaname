@@ -307,15 +307,29 @@ func (s simMail) DeleteMailbox(_ context.Context, p providers.MailboxDeleteParam
 	return nil
 }
 
+// kickedDir is where the sim records a `doveadm kick`, so a test can
+// read back through the file manager that the sessions were revoked
+// rather than take the job log's word for it.
+const kickedDir = "/run/dovecot/kaname-kicked"
+
 // SetMailboxPassword accepts the change and keeps nothing: a simulated
 // host has no business holding anything that looks like a credential.
 func (s simMail) SetMailboxPassword(_ context.Context, p providers.MailboxPasswordParams) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.findMailboxLocked(p.Address) == nil {
+	box := s.findMailboxLocked(p.Address)
+	s.mu.Unlock()
+	if box == nil {
 		return fmt.Errorf("mailbox %s: %w", p.Address, providers.ErrNotFound)
 	}
+	if !p.RevokeSessions {
+		return nil
+	}
+
+	s.fs.mu.Lock()
+	defer s.fs.mu.Unlock()
+	s.fs.dirAs(kickedDir, "0750", "dovecot", uidFor("dovecot"))
+	s.fs.fileAs(kickedDir+"/"+strings.ToLower(p.Address), stamp(time.Now().UTC())+"\n",
+		"0640", "dovecot", uidFor("dovecot"))
 	return nil
 }
 

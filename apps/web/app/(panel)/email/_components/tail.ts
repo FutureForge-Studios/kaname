@@ -33,6 +33,11 @@ export interface MailLogTailOptions {
   onStatusChange?: (status: MailTailStatus) => void;
   /** The stream failed in a way retrying will not fix. */
   onError?: (error: ApiError) => void;
+  /**
+   * A follow was reopened after lines had arrived. The host does not
+   * replay what it wrote in between, so the viewer can say so.
+   */
+  onGap?: () => void;
 }
 
 const DEFAULT_RETRY_MS = 3000;
@@ -49,6 +54,12 @@ class MailLogTail {
   private retryMs = DEFAULT_RETRY_MS;
   private attempt = 0;
   private stopped = false;
+  /** Set once a follow has opened, so a reconnect does not replay the backlog. */
+  private everOpened = false;
+  /** Lines delivered so far; a reconnect after any of them is a gap. */
+  private seen = 0;
+  /** The control plane's per-follow cap was reached: reopen at once, not a failure. */
+  private rotated = false;
   private state: MailTailStatus = "closed";
 
   constructor(private readonly options: MailLogTailOptions) {}
@@ -80,7 +91,10 @@ class MailLogTail {
     const query = encodeParams({
       server_id: this.options.serverId,
       q: this.options.q,
-      lines: this.options.lines,
+      // The host sends `lines` of backlog before following. After a
+      // dropped socket the viewer already has that backlog, so ask for
+      // the minimum instead of appending it a second time.
+      lines: this.everOpened ? 1 : this.options.lines,
     });
     return `${API_BASE}/mail-logs/tail?${query}`;
   }
@@ -114,17 +128,30 @@ class MailLogTail {
       }
 
       this.attempt = 0;
+      const reopened = this.everOpened;
+      this.everOpened = true;
       this.setStatus("open");
+      if (reopened && this.seen > 0) this.options.onGap?.();
       await this.read(response.body);
     } catch {
       /* Aborts are our own stop(); anything else is a dropped socket. */
     }
 
-    if (!controller.signal.aborted) this.scheduleReconnect();
+    if (controller.signal.aborted) return;
+    if (this.rotated) {
+      // The stream ended because the control plane rotates a follow every
+      // half hour, and said so. Nothing failed, so there is no backoff.
+      this.rotated = false;
+      this.setStatus("reconnecting");
+      void this.connect();
+      return;
+    }
+    this.scheduleReconnect();
   }
 
   private fail(error: ApiError): void {
     this.stopped = true;
+    this.controller?.abort();
     this.controller = null;
     this.setStatus("closed");
     this.options.onError?.(error);
@@ -192,6 +219,12 @@ class MailLogTail {
       return;
     }
 
+    if (event === "rotate") {
+      this.rotated = true;
+      return;
+    }
+
+    this.seen += 1;
     this.options.onLine(payload as MailLogLine);
   }
 

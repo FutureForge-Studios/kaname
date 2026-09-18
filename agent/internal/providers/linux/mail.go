@@ -209,7 +209,22 @@ func (o mailOps) SetMailboxPassword(ctx context.Context, p providers.MailboxPass
 		return err
 	}
 	accounts[index].Hash = hash
-	return o.commitAccounts(ctx, accounts)
+	if err := o.commitAccounts(ctx, accounts); err != nil {
+		return err
+	}
+	if !p.RevokeSessions {
+		return nil
+	}
+
+	// The new hash only bites at the next login; a client that is already
+	// authenticated keeps its session until it is kicked. doveadm exits
+	// 68 (EX_NOHOST, "not found") when no connection matched, which for
+	// a reset is the outcome wanted rather than a failure.
+	_, err = runWith(ctx, execOptions{Name: "doveadm", Args: []string{"kick", strings.ToLower(p.Address)}, Env: cLocale()})
+	if err != nil && !isExitCode(err, 68) {
+		return err
+	}
+	return nil
 }
 
 /* -------------------------- aliases and forwarding -------------------- */
@@ -897,7 +912,9 @@ func lookup(ctx context.Context, resolver *net.Resolver, recordType, name string
 		}), nil
 
 	case "PTR":
-		names, err := resolver.LookupAddr(ctx, name)
+		// The caller asks the way DNS does, by the in-addr.arpa or
+		// ip6.arpa name; the stdlib wants the address itself.
+		names, err := resolver.LookupAddr(ctx, ptrTarget(name))
 		if err != nil {
 			return nil, err
 		}
@@ -940,6 +957,39 @@ func buildResolver(address string) (*net.Resolver, string, error) {
 			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, target)
 		},
 	}, address, nil
+}
+
+// ptrTarget turns a reverse-zone name back into the address it stands
+// for, and leaves anything else (a bare address) alone.
+func ptrTarget(name string) string {
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	if v4, ok := strings.CutSuffix(name, ".in-addr.arpa"); ok {
+		parts := strings.Split(v4, ".")
+		if len(parts) != 4 {
+			return name
+		}
+		for i, j := 0, len(parts)-1; i < j; i, j = i+1, j-1 {
+			parts[i], parts[j] = parts[j], parts[i]
+		}
+		return strings.Join(parts, ".")
+	}
+	if v6, ok := strings.CutSuffix(name, ".ip6.arpa"); ok {
+		nibbles := strings.Split(v6, ".")
+		if len(nibbles) != 32 {
+			return name
+		}
+		var b strings.Builder
+		for i := len(nibbles) - 1; i >= 0; i-- {
+			b.WriteString(nibbles[i])
+			if i%4 == 0 && i > 0 {
+				b.WriteByte(':')
+			}
+		}
+		if ip := net.ParseIP(b.String()); ip != nil {
+			return ip.String()
+		}
+	}
+	return name
 }
 
 func checkResolver(address string) error {

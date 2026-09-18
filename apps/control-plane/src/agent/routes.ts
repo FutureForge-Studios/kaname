@@ -171,6 +171,13 @@ export async function registerAgentRoutes(app: FastifyInstance, ctx: AppContext)
       return;
     }
 
+    // The agent writes its hello the moment the upgrade completes, and
+    // `ws` starts emitting messages right away. Nothing is listening until
+    // the hub registers this socket, so a frame that lands during the
+    // checks below would be lost — and a hub that never hears a hello now
+    // drops the connection. Hold the frames until there is a reader.
+    socket.pause();
+
     const rows = await db.select().from(servers).where(eq(servers.id, serverId)).limit(1);
     const server = rows[0];
     if (!server || server.revokedAt) {
@@ -187,6 +194,7 @@ export async function registerAgentRoutes(app: FastifyInstance, ctx: AppContext)
 
     log.info({ serverId, name: server.name }, "agent connected");
     ctx.hub.register(serverId, socket as never, req.ip ?? null);
+    socket.resume();
   });
 
   /* ------------------------------ health ----------------------------- */

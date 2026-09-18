@@ -23,6 +23,12 @@ export const MAX_CHUNK_BYTES = 256 * 1024;
 /** Heartbeat cadence and the multiple of it after which a peer is dead. */
 export const PING_INTERVAL_MS = 15_000;
 export const PING_TIMEOUT_MULTIPLIER = 3;
+/**
+ * The longest deadline a request may carry. The agent clamps anything
+ * larger to this, so a control-plane timer beyond it would outlive the
+ * request it is guarding.
+ */
+export const MAX_DEADLINE_MS = 6 * 60 * 60 * 1000;
 
 export const agentErrorCode = z.enum([
   "unknown_method",
@@ -73,11 +79,7 @@ export const requestFrame = z.object({
   id: z.string().min(1).max(64),
   method: z.string().min(1).max(64),
   params: z.unknown().optional(),
-  deadline_ms: z
-    .number()
-    .int()
-    .min(100)
-    .max(6 * 60 * 60 * 1000),
+  deadline_ms: z.number().int().min(100).max(MAX_DEADLINE_MS),
   /** Set when the request opens a bidirectional stream (upload, PTY). */
   stream: z.boolean().optional(),
 });
