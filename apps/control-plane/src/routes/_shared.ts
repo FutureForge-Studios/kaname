@@ -1,3 +1,4 @@
+import type { ServerResponse } from "node:http";
 import type { FastifyRequest } from "fastify";
 import { and, eq, inArray, sql, type SQL } from "@kaname/db";
 import type { PgColumn } from "drizzle-orm/pg-core";
@@ -168,4 +169,26 @@ export function combine(...clauses: (SQL | null | undefined)[]): SQL | undefined
   if (present.length === 0) return undefined;
   if (present.length === 1) return present[0];
   return and(...present);
+}
+
+/**
+ * Resolves once a response that reported a full write buffer can take
+ * more, or immediately when it never filled up or is already gone. The
+ * streaming routes await this before acknowledging the agent's next
+ * chunk, which is what keeps a slow browser from making the control
+ * plane buffer a whole download.
+ */
+export function drained(res: ServerResponse): Promise<void> {
+  if (res.destroyed || res.writableEnded || !res.writableNeedDrain) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      res.off("drain", done);
+      res.off("close", done);
+      res.off("error", done);
+      resolve();
+    };
+    res.on("drain", done);
+    res.on("close", done);
+    res.on("error", done);
+  });
 }

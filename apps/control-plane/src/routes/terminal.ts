@@ -10,7 +10,7 @@ import {
   type TerminalSessionRecord,
   type TerminalSessionTicket,
 } from "@kaname/contract";
-import { ptyResizeParams } from "@kaname/contract/agent";
+import { MAX_DEADLINE_MS, ptyResizeParams } from "@kaname/contract/agent";
 import { z } from "zod";
 import {
   helpers,
@@ -42,6 +42,9 @@ const RECORDING_FLUSH_MS = 500;
 const RECORDING_FLUSH_FRAMES = 64;
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+/** Output waits once the browser socket holds this much unsent; the agent's PTY waits with it. */
+const OUTPUT_HIGH_WATER_BYTES = 1024 * 1024;
+const OUTPUT_POLL_MS = 20;
 
 const SORTABLE_SESSIONS = {
   started_at: terminalSessions.startedAt,
@@ -394,14 +397,24 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
         user: session.posixUser,
         term: "xterm-256color",
       },
-      (data, encoding) => {
+      async (data, encoding) => {
         const buf = encoding === "base64" ? Buffer.from(data, "base64") : Buffer.from(data, "utf8");
         bytesOut += buf.length;
         record("out", buf);
-        if (socket.readyState === socket.OPEN) socket.send(buf);
+        if (socket.readyState !== socket.OPEN) return;
+        socket.send(buf);
+        // ws has no drain event for its send queue, so a browser that has
+        // stopped reading shows up here; waiting holds the PTY output too.
+        while (
+          socket.bufferedAmount > OUTPUT_HIGH_WATER_BYTES &&
+          socket.readyState === socket.OPEN
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, OUTPUT_POLL_MS));
+        }
       },
-      // A shell stays open as long as the operator wants it open.
-      { timeoutMs: 0x7fffffff },
+      // A shell stays open as long as the operator wants it open, up to
+      // the six hours the agent itself allows a request.
+      { timeoutMs: MAX_DEADLINE_MS },
     );
 
     const finish = async (reason: string, code = 1000): Promise<void> => {

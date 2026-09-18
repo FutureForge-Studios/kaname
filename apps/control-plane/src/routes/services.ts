@@ -37,6 +37,7 @@ import {
 } from "../lib/errors.js";
 import {
   combine,
+  drained,
   enqueueFanOut,
   enqueueServerJob,
   loadConnectedServer,
@@ -277,7 +278,9 @@ export async function serviceRoutes(app: FastifyInstance): Promise<void> {
       server.id,
       "service.logs",
       params,
-      (data) => collected.push(...toRecords(data, service.unit)),
+      (data) => {
+        collected.push(...toRecords(data, service.unit));
+      },
       { timeoutMs: READ_TIMEOUT_MS },
     );
     const result = await agentRead(server, () => handle.done);
@@ -352,17 +355,21 @@ function followLogs(
   reply.raw.write(`retry: 3000\n\n`);
 
   let live = true;
-  const write = (event: string, data: unknown) => {
-    if (!live) return;
-    reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  /** Returns false when the client is behind and the caller should wait. */
+  const write = (event: string, data: unknown): boolean => {
+    if (!live || reply.raw.destroyed) return true;
+    return reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
 
   const handle = req.ctx.hub.stream(
     server.id,
     "service.logs",
     params,
-    (data) => {
-      for (const record of toRecords(data, source)) write("log", record);
+    async (data) => {
+      for (const record of toRecords(data, source)) {
+        // A browser that is behind holds the next record, and the agent with it.
+        if (!write("log", record)) await drained(reply.raw);
+      }
     },
     { timeoutMs: FOLLOW_TIMEOUT_MS },
   );
