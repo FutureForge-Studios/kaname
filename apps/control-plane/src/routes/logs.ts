@@ -13,12 +13,14 @@ import {
   type LogSourceKind,
   type LogSourceRow,
 } from "@kaname/contract";
+import { MAX_DEADLINE_MS } from "@kaname/contract/agent";
 import type { z } from "zod";
 import { helpers, list, offset, paginate, parseQuery } from "../http/plugin.js";
 import { ApiException, fromAgentError } from "../lib/errors.js";
-import { AgentRpcError } from "../agent/hub.js";
+import { AgentRpcError, type ChunkConsumer } from "../agent/hub.js";
 import {
   combine,
+  drained,
   loadConnectedServer,
   scopeFilter,
   sortColumn,
@@ -143,9 +145,10 @@ export async function logRoutes(app: FastifyInstance): Promise<void> {
     reply.raw.write(`retry: 3000\n\n`);
 
     let seq = 0;
-    const write = (event: string, data: unknown, id?: string) => {
-      if (reply.raw.writableEnded) return;
-      reply.raw.write(
+    /** Returns false when the client is behind and the caller should wait. */
+    const write = (event: string, data: unknown, id?: string): boolean => {
+      if (reply.raw.writableEnded || reply.raw.destroyed) return true;
+      return reply.raw.write(
         `${id ? `id: ${id}\n` : ""}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`,
       );
     };
@@ -164,10 +167,12 @@ export async function logRoutes(app: FastifyInstance): Promise<void> {
       recordDecoder(source, (record) => {
         seq += 1;
         const row = toRow(server, source, record, seq);
-        write("log", row, row.id);
+        // A browser that is behind holds the next record, and the agent with it.
+        return write("log", row, row.id) ? undefined : drained(reply.raw);
       }),
-      // No timeout: a follow is expected to stay open until the client leaves.
-      { timeoutMs: 0x7fffffff },
+      // A follow stays open until the client leaves, up to the six hours
+      // the agent itself allows a request.
+      { timeoutMs: MAX_DEADLINE_MS },
     );
 
     const keepalive = setInterval(() => {
@@ -304,11 +309,13 @@ async function defaultSources(req: FastifyRequest, server: ServerRow): Promise<s
  */
 function recordDecoder(
   source: string,
-  onRecord: (record: LogRecord) => void,
-): (data: string, encoding: "utf8" | "base64") => void {
+  onRecord: (record: LogRecord) => void | Promise<void>,
+): ChunkConsumer {
   let pending = "";
 
-  return (data, encoding) => {
+  // The hub hands chunks over one at a time, so the carry-over is never
+  // touched by two calls at once even though this one may wait.
+  return async (data, encoding) => {
     pending += encoding === "base64" ? Buffer.from(data, "base64").toString("utf8") : data;
     const lines = pending.split("\n");
     pending = lines.pop() ?? "";
@@ -316,7 +323,7 @@ function recordDecoder(
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
-      onRecord(parseRecord(trimmed, source));
+      await onRecord(parseRecord(trimmed, source));
     }
   };
 }

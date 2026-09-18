@@ -8,6 +8,7 @@ import { JobWorker } from "./jobs/worker.js";
 import { AuditService } from "./services/audit.js";
 import { AuthService } from "./services/auth.js";
 import { EventBus } from "./services/events.js";
+import { NotificationService, type NotificationServiceDeps } from "./services/notifications.js";
 import { UpdateService, type UpdateServiceDeps } from "./services/updates.js";
 
 /* ------------------------------------------------------------------ *
@@ -31,6 +32,7 @@ export interface AppContext {
   audit: AuditService;
   auth: AuthService;
   updates: UpdateService;
+  notifications: NotificationService;
 }
 
 export function createContext(
@@ -40,6 +42,7 @@ export function createContext(
     dbHandle: DbHandle;
   },
   updateDeps: UpdateServiceDeps = {},
+  notificationDeps: NotificationServiceDeps = {},
 ): AppContext {
   const { config, log, dbHandle } = deps;
   const db = dbHandle.db;
@@ -77,7 +80,9 @@ export function createContext(
     audit,
     auth,
     updates: null as unknown as UpdateService,
+    notifications: null as unknown as NotificationService,
   };
   ctx.updates = new UpdateService(ctx, updateDeps);
+  ctx.notifications = new NotificationService(ctx, notificationDeps);
   return ctx;
 }

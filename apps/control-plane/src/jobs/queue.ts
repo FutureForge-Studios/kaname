@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, lte, or, sql, type Database } from "@kaname/db";
 import { jobLogs, jobs, servers } from "@kaname/db/schema";
 import { JOB_SPECS, type Job, type JobStatus, type JobType } from "@kaname/contract";
+import { redact } from "../lib/crypto.js";
 
 /* ------------------------------------------------------------------ *
  * The job queue (KD-003, KD-008).
@@ -127,7 +128,7 @@ export class JobQueue {
   }
 
   /** Return jobs whose worker died to the queue. Run on an interval. */
-  async reapExpiredLeases(): Promise<number> {
+  async reapExpiredLeases(): Promise<ReapedJob[]> {
     const result = await this.db.execute(sql`
       update jobs set
         status = case when attempt >= max_attempts then 'failed' else 'queued' end,
@@ -139,13 +140,13 @@ export class JobQueue {
         lease_owner = null,
         updated_at = now()
       where status = 'running' and lease_until < now()
-      returning id;
+      returning id, type, server_id, status, error;
     `);
-    return rowCount(result);
+    return reapedRows(result);
   }
 
   /** Fail jobs that outlived their expiry without ever running. */
-  async expireStale(): Promise<number> {
+  async expireStale(): Promise<ReapedJob[]> {
     const result = await this.db.execute(sql`
       update jobs set
         status = 'timed_out',
@@ -153,9 +154,9 @@ export class JobQueue {
         finished_at = now(),
         updated_at = now()
       where status = 'queued' and expires_at is not null and expires_at < now()
-      returning id;
+      returning id, type, server_id, status, error;
     `);
-    return rowCount(result);
+    return reapedRows(result);
   }
 
   async complete(jobId: string, result: unknown): Promise<void> {
@@ -164,6 +165,7 @@ export class JobQueue {
       .set({
         status: "succeeded",
         result: result ?? null,
+        params: await this.finishedParams(jobId),
         progress: 100,
         finishedAt: new Date(),
         leaseUntil: null,
@@ -172,6 +174,22 @@ export class JobQueue {
         durationMs: sql`extract(epoch from (now() - coalesce(started_at, created_at))) * 1000`,
       })
       .where(eq(jobs.id, jobId));
+  }
+
+  /**
+   * A finished job's params are kept for the drawer and the audit trail,
+   * but a mailbox password or a rollback token has no business outliving
+   * the RPC it was for — every backup of this table would carry it. The
+   * same key pattern the audit trail redacts by is applied here, only once
+   * the job can no longer be retried and so no longer needs the value.
+   */
+  private async finishedParams(jobId: string): Promise<Record<string, unknown>> {
+    const rows = await this.db
+      .select({ params: jobs.params })
+      .from(jobs)
+      .where(eq(jobs.id, jobId))
+      .limit(1);
+    return redact((rows[0]?.params as Record<string, unknown> | undefined) ?? {});
   }
 
   async fail(
@@ -199,6 +217,7 @@ export class JobQueue {
       .set({
         status: "failed",
         error,
+        params: await this.finishedParams(jobId),
         finishedAt: new Date(),
         leaseUntil: null,
         leaseOwner: null,
@@ -209,6 +228,26 @@ export class JobQueue {
   }
 
   /** Park a job because its host is unreachable. Does not consume an attempt. */
+  /**
+   * Returns a running job to the queue without charging it an attempt:
+   * the worker, not the host, stopped it. The lease is released so the
+   * next worker (usually the same process after its restart) claims it.
+   */
+  async interrupt(jobId: string, retryInMs = 5_000): Promise<void> {
+    await this.db.execute(sql`
+      update jobs set
+        status = 'queued',
+        attempt = greatest(attempt - 1, 0),
+        blocked_reason = null,
+        lease_until = null,
+        lease_owner = null,
+        started_at = null,
+        run_after = now() + ${sql.raw(`interval '${Math.max(0, Math.floor(retryInMs))} milliseconds'`)},
+        updated_at = now()
+      where id = ${jobId} and status = 'running';
+    `);
+  }
+
   async block(jobId: string, reason: string, retryInMs = 15_000): Promise<void> {
     await this.db
       .update(jobs)
@@ -341,6 +380,26 @@ function toClaimedJob(row: Record<string, unknown>): ClaimedJob {
 function firstRow(result: unknown): Record<string, unknown> | null {
   const rows = (result as { rows?: unknown[] })?.rows ?? (result as unknown[]);
   return Array.isArray(rows) && rows.length > 0 ? (rows[0] as Record<string, unknown>) : null;
+}
+
+/** What maintenance touched, so the worker can publish it like any other transition. */
+export interface ReapedJob {
+  id: string;
+  type: JobType;
+  server_id: string | null;
+  status: JobStatus;
+  error: { code: string; message: string } | null;
+}
+
+function reapedRows(result: unknown): ReapedJob[] {
+  const rows = ((result as { rows?: unknown[] }).rows ?? []) as Record<string, unknown>[];
+  return rows.map((row) => ({
+    id: String(row.id),
+    type: row.type as JobType,
+    server_id: (row.server_id as string | null) ?? null,
+    status: row.status as JobStatus,
+    error: (row.error as ReapedJob["error"]) ?? null,
+  }));
 }
 
 function rowCount(result: unknown): number {

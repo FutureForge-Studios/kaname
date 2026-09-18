@@ -107,7 +107,8 @@ describe("job queue", () => {
     // Simulate the worker dying mid-job.
     await handle.db.execute(sql`update jobs set lease_until = now() - interval '1 minute';`);
     const reaped = await queue.reapExpiredLeases();
-    expect(reaped).toBe(1);
+    expect(reaped).toHaveLength(1);
+    expect(reaped[0]).toMatchObject({ id: claimed!.id, status: "queued", server_id: serverId });
 
     const again = await queue.claim("worker-2", 60, [serverId]);
     expect(again!.id).toBe(claimed!.id);
@@ -141,7 +142,10 @@ describe("job queue", () => {
     const job = await queue.enqueue({ type: "service.restart", serverId, expiresInMs: -1000 });
     expect(await queue.claim("worker-1", 60, [serverId])).toBeNull();
 
-    expect(await queue.expireStale()).toBe(1);
+    const expired = await queue.expireStale();
+    expect(expired).toHaveLength(1);
+    expect(expired[0]).toMatchObject({ id: job.id, status: "timed_out" });
+    expect(expired[0]!.error?.code).toBe("expired");
     expect((await queue.get(job.id))!.status).toBe("timed_out");
   });
 

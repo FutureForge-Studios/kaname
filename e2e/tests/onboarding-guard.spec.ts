@@ -15,7 +15,8 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 test("an anonymous visitor cannot walk back into setup", async ({ page }) => {
   await page.goto("/setup");
-  await expect(page).toHaveURL(/\/login$/);
+  /* The way back is kept: signing in returns to the wizard, not to "/". */
+  await expect(page).toHaveURL(/\/login\?next=%2Fsetup$/);
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
   /* And the API says the same thing to the same caller. */

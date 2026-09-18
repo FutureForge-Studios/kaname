@@ -3,6 +3,7 @@ import {
   bytes,
   domainName,
   emailAddress,
+  ipAddress,
   isoDate,
   listQuery,
   percent,
@@ -18,6 +19,13 @@ export type MailStatus = z.infer<typeof mailStatus>;
 
 /** Long because a mailbox credential is pasted into a client once and then lives for years. */
 const mailPassword = z.string().min(16).max(256);
+
+/**
+ * Dovecot and Postfix match addresses case-insensitively, so the panel
+ * folds them at the boundary: two rows differing only in case would be
+ * one account on the host, and the second create would fail there.
+ */
+const lowerEmail = emailAddress.transform((value) => value.toLowerCase());
 
 /* ------------------------------------------------------------------ *
  * Mail domains
@@ -110,7 +118,8 @@ export const createMailboxInput = z.object({
     .string()
     .min(1)
     .max(64)
-    .regex(/^[A-Za-z0-9._%+-]+$/, "must be a valid local part"),
+    .regex(/^[A-Za-z0-9._%+-]+$/, "must be a valid local part")
+    .transform((value) => value.toLowerCase()),
   password: mailPassword,
   display_name: z.string().max(128).optional(),
   quota_bytes: bytes.default(0),
@@ -160,8 +169,8 @@ export type MailAlias = z.infer<typeof mailAlias>;
 
 export const createMailAliasInput = z.object({
   mail_domain_id: uuid,
-  address: emailAddress,
-  destinations: z.array(emailAddress).min(1).max(100),
+  address: lowerEmail,
+  destinations: z.array(lowerEmail).min(1).max(100),
   enabled: z.boolean().default(true),
 });
 export type CreateMailAliasInput = z.infer<typeof createMailAliasInput>;
@@ -194,8 +203,8 @@ export type MailForwarder = z.infer<typeof mailForwarder>;
 
 export const createMailForwarderInput = z.object({
   mail_domain_id: uuid,
-  source: emailAddress,
-  destination: emailAddress,
+  source: lowerEmail,
+  destination: lowerEmail,
   keep_copy: z.boolean().default(true),
   enabled: z.boolean().default(true),
 });
@@ -257,7 +266,8 @@ export const runMailAuthCheckInput = z.object({
   mail_domain_id: uuid,
   /** Omit to run the whole list. */
   checks: z.array(mailAuthCheck).min(1).optional(),
-  resolver: z.string().max(64).optional(),
+  /** A nameserver address to ask instead of the host's own resolver. */
+  resolver: ipAddress.optional(),
 });
 export type RunMailAuthCheckInput = z.infer<typeof runMailAuthCheckInput>;
 

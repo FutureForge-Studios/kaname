@@ -28,12 +28,16 @@ RUN pnpm --filter @kaname/control-plane build
 # carried only an arm64 agent would be wrong; both are cross-compiled
 # here whatever the image itself ends up running on.
 FROM --platform=$BUILDPLATFORM golang:1.23-alpine AS agent
+ARG KANAME_VERSION=0.1.0
 WORKDIR /agent
 COPY agent/go.mod agent/go.sum ./
 RUN go mod download
 COPY agent/ ./
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/kanamed-linux-amd64 ./cmd/kanamed \
- && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /out/kanamed-linux-arm64 ./cmd/kanamed
+# Stamped with the release, the same way release.yml stamps the assets:
+# the control plane compares this string against the manifest to decide
+# whether an agent update landed.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${KANAME_VERSION}" -o /out/kanamed-linux-amd64 ./cmd/kanamed \
+ && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=${KANAME_VERSION}" -o /out/kanamed-linux-arm64 ./cmd/kanamed
 
 FROM base AS runtime
 ARG KANAME_VERSION=0.1.0
@@ -52,6 +56,11 @@ COPY --from=build /app/packages/db/src/hardening.sql ./dist/hardening.sql
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=agent /out/ ./public/
 COPY install.sh ./public/install.sh
+# The tag's install.sh still pins the previous release (release.yml only
+# moves the constant on main after the images exist), so the copy this
+# panel serves is pointed at the version it is. Prereleases are left
+# alone, mirroring release.yml.
+RUN case "${KANAME_VERSION}" in *-*) ;; *) sed -i -E "s/^KANAME_DEFAULT_VERSION=\"[^\"]*\"/KANAME_DEFAULT_VERSION=\"${KANAME_VERSION}\"/" ./public/install.sh ;; esac
 
 USER kaname
 EXPOSE 4000

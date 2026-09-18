@@ -24,6 +24,12 @@ const query = z.object({
 });
 
 const KEEPALIVE_MS = 20_000;
+/**
+ * Bytes a subscriber may fall behind before it is dropped. A peer that
+ * vanished without a FIN never drains; letting it reconnect with
+ * Last-Event-ID costs a bounded replay instead of an unbounded buffer.
+ */
+const MAX_BUFFERED_BYTES = 1024 * 1024;
 
 export async function eventRoutes(app: FastifyInstance): Promise<void> {
   app.get("/events", async (req, reply) => {
@@ -44,6 +50,9 @@ export async function eventRoutes(app: FastifyInstance): Promise<void> {
       "X-Accel-Buffering": "no",
     });
     reply.raw.write(`retry: 3000\n\n`);
+    // Node does not enable TCP keepalive on accepted sockets; without it a
+    // suspended laptop or a NAT timeout is a subscriber that never leaves.
+    req.raw.socket.setKeepAlive(true, 30_000);
 
     const topicSet = new Set(topics);
     const write = (payload: {
@@ -53,6 +62,12 @@ export async function eventRoutes(app: FastifyInstance): Promise<void> {
       ts: string;
       data: unknown;
     }) => {
+      if (reply.raw.destroyed) return;
+      if (reply.raw.writableLength > MAX_BUFFERED_BYTES) {
+        req.log.warn({ buffered: reply.raw.writableLength }, "dropping slow event subscriber");
+        req.raw.destroy();
+        return;
+      }
       reply.raw.write(
         `id: ${payload.id}\nevent: ${payload.topic}\ndata: ${JSON.stringify(payload)}\n\n`,
       );
@@ -60,9 +75,15 @@ export async function eventRoutes(app: FastifyInstance): Promise<void> {
 
     // Replay anything missed across a reconnect before going live.
     const lastEventId = (req.headers["last-event-id"] as string | undefined) ?? null;
-    for (const missed of req.ctx.events.replaySince(lastEventId, topicSet)) {
+    for (const missed of req.ctx.events.replaySince(lastEventId, topicSet, scope)) {
       write(missed);
     }
+
+    const keepalive = setInterval(() => {
+      if (reply.raw.destroyed || reply.raw.writableNeedDrain) return;
+      reply.raw.write(`: keepalive\n\n`);
+    }, KEEPALIVE_MS);
+    keepalive.unref?.();
 
     const sub = req.ctx.events.subscribe({
       topics: topicSet,
@@ -75,10 +96,11 @@ export async function eventRoutes(app: FastifyInstance): Promise<void> {
           ts: event.ts,
           data: event.data,
         }),
+      close: () => {
+        clearInterval(keepalive);
+        if (!reply.raw.destroyed) reply.raw.end();
+      },
     });
-
-    const keepalive = setInterval(() => reply.raw.write(`: keepalive\n\n`), KEEPALIVE_MS);
-    keepalive.unref?.();
 
     const close = () => {
       clearInterval(keepalive);

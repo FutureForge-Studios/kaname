@@ -801,6 +801,9 @@ type MailboxDeleteParams struct {
 type MailboxPasswordParams struct {
 	Address  string `json:"address"`
 	Password string `json:"password"`
+	// RevokeSessions also disconnects every authenticated IMAP/POP
+	// session: a new hash on its own leaves an open client reading.
+	RevokeSessions bool `json:"revoke_sessions"`
 }
 
 type MailAlias struct {

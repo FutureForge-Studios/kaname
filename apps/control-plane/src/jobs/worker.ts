@@ -115,8 +115,25 @@ export class JobWorker {
     try {
       const reaped = await this.deps.queue.reapExpiredLeases();
       const expired = await this.deps.queue.expireStale();
-      if (reaped || expired) {
-        this.deps.log.info({ reaped, expired }, "job maintenance");
+      if (reaped.length > 0 || expired.length > 0) {
+        this.deps.log.info({ reaped: reaped.length, expired: expired.length }, "job maintenance");
+      }
+      // A job that died with its worker is as failed as one that threw;
+      // the drawer, the dashboard and the notifier learn about it the
+      // same way.
+      for (const job of [...reaped, ...expired]) {
+        const type =
+          job.status === "failed"
+            ? "job.failed"
+            : job.status === "timed_out"
+              ? "job.timed_out"
+              : "job.queued";
+        this.deps.events.publish(
+          "jobs",
+          type,
+          { job_id: job.id, job_type: job.type, server_id: job.server_id, error: job.error },
+          job.server_id,
+        );
       }
     } catch (err) {
       this.deps.log.error({ err }, "job maintenance failed");
@@ -200,6 +217,32 @@ export class JobWorker {
     if (err instanceof AgentOfflineError) {
       await this.deps.queue.block(job.id, "agent_offline");
       this.publish(job, "job.blocked", { reason: "agent_offline" });
+      return;
+    }
+
+    // The control plane is restarting (an update, a compose up). The RPC
+    // was cut off by us, not by the host, so the outcome is unknown: an
+    // idempotent job simply runs again with its attempt handed back; a
+    // non-idempotent one is failed with a reason that says to look
+    // before retrying, rather than "cancelled" as if someone chose to.
+    if (this.stopped) {
+      if (spec.idempotent) {
+        await this.deps.queue.interrupt(job.id);
+        this.deps.log.info(
+          { jobId: job.id, type: job.type },
+          "job requeued: control plane restarting",
+        );
+        this.publish(job, "job.queued", { interrupted: true });
+        return;
+      }
+      const error = {
+        code: "interrupted",
+        message:
+          "The control plane restarted while this job was running. Check the host before retrying.",
+      };
+      await this.deps.queue.log(job.id, "error", error.message);
+      await this.deps.queue.fail(job.id, error, { retry: false, retryDelayMs: 0 });
+      this.publish(job, "job.failed", { error });
       return;
     }
 

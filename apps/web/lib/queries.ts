@@ -74,7 +74,12 @@ export const queryKeys = {
   session: () => [ROOT, "session"] as const,
   dashboard: () => [ROOT, "dashboard"] as const,
   job: (id: string) => [ROOT, "jobs", "detail", id] as const,
-  jobLogs: (id: string) => [ROOT, "jobs", "logs", id] as const,
+  /**
+   * Deliberately outside the `jobs` family: a lifecycle event refreshes
+   * the job list, but the log is appended by the SSE bridge and must not
+   * be refetched (and truncated to the first page) on every transition.
+   */
+  jobLogs: (id: string) => [ROOT, "job-logs", id] as const,
   search: (q: string) => [ROOT, "search", q] as const,
 };
 
@@ -158,13 +163,22 @@ export function useJob(id: string | null | undefined): UseQueryResult<Job, ApiEr
   });
 }
 
+/** Lines kept per job in the browser. The server keeps the rest. */
+export const MAX_JOB_LOG_LINES = 2000;
+
 export function useJobLogs(id: string | null | undefined): UseQueryResult<JobLogLine[], ApiError> {
   return useQuery<JobLogLine[], ApiError>({
     queryKey: queryKeys.jobLogs(id ?? "none"),
     queryFn: ({ signal }) =>
-      api.get<JobLogLine[]>(`/jobs/${id}/logs`, { params: { per_page: 500 }, signal }),
+      api.get<JobLogLine[]>(`/jobs/${id}/logs`, {
+        params: { per_page: MAX_JOB_LOG_LINES },
+        signal,
+      }),
     enabled: Boolean(id),
     staleTime: 0,
+    // A finished job's log is a few thousand strings nobody is reading
+    // once the drawer row collapses; a minute is long enough to reopen it.
+    gcTime: 60_000,
   });
 }
 
@@ -305,6 +319,8 @@ export interface JobDrawerValue {
 
 const TERMINAL_EVENTS = new Set(["job.succeeded", "job.failed", "job.cancelled", "job.timed_out"]);
 const MAX_TRACKED = 50;
+/** A chatty job emits a line every few milliseconds; the cache is written once per flush. */
+const LOG_FLUSH_MS = 250;
 
 const JobDrawerContext = React.createContext<JobDrawerValue | null>(null);
 
@@ -328,6 +344,43 @@ export function JobDrawerProvider({ children }: { children: React.ReactNode }) {
   const trackedRef = React.useRef<TrackedJob[]>(tracked);
   trackedRef.current = tracked;
 
+  /*
+   * Log lines are buffered per job and applied in one cache write per
+   * flush, and only for jobs something is actually displaying: an admin
+   * sees every job on every host, and creating a cache entry for each of
+   * them would hold every line of a fleet-wide fan-out for the GC window.
+   */
+  const pendingLogs = React.useRef(new Map<string, JobLogLine[]>());
+  const flushTimer = React.useRef(0);
+
+  const flushLogs = React.useCallback(() => {
+    flushTimer.current = 0;
+    const batches = pendingLogs.current;
+    pendingLogs.current = new Map();
+    for (const [jobId, batch] of batches) {
+      const key = queryKeys.jobLogs(jobId);
+      const query = client.getQueryCache().find({ queryKey: key });
+      if (!query || query.getObserversCount() === 0) continue;
+      client.setQueryData<JobLogLine[]>(key, (previous) => {
+        const lines = previous ?? [];
+        let seq = lines[lines.length - 1]?.seq ?? 0;
+        const appended = batch.map((line) => ({ ...line, seq: ++seq }));
+        const next =
+          lines.length + appended.length > MAX_JOB_LOG_LINES
+            ? [...lines, ...appended].slice(-MAX_JOB_LOG_LINES)
+            : [...lines, ...appended];
+        return next;
+      });
+    }
+  }, [client]);
+
+  React.useEffect(
+    () => () => {
+      if (flushTimer.current !== 0) window.clearTimeout(flushTimer.current);
+    },
+    [],
+  );
+
   const track = React.useCallback((job: Job, invalidates: readonly ResourceFamily[] = []) => {
     setTracked((prev) => {
       const rest = prev.filter((entry) => entry.job.id !== job.id);
@@ -348,22 +401,26 @@ export function JobDrawerProvider({ children }: { children: React.ReactNode }) {
       const jobId = data.job_id;
       if (!jobId) return;
 
-      if (message.type === "job.log" && data.message) {
+      if (message.type === "job.log") {
+        if (!data.message) return;
         // Appending beats refetching: the drawer is usually watching a
         // job that is emitting a line every few hundred milliseconds.
-        client.setQueryData<JobLogLine[]>(queryKeys.jobLogs(jobId), (previous) => {
-          const lines = previous ?? [];
-          const last = lines[lines.length - 1];
-          return [
-            ...lines,
-            {
-              seq: (last?.seq ?? 0) + 1,
-              ts: message.ts,
-              level: data.level ?? "info",
-              message: data.message ?? "",
-            },
-          ];
-        });
+        const batch = pendingLogs.current.get(jobId) ?? [];
+        batch.push({ seq: 0, ts: message.ts, level: data.level ?? "info", message: data.message });
+        pendingLogs.current.set(jobId, batch);
+        if (flushTimer.current === 0)
+          flushTimer.current = window.setTimeout(flushLogs, LOG_FLUSH_MS);
+        return;
+      }
+
+      if (message.type === "job.progress") {
+        // Progress is a number on a row already in the cache; a refetch
+        // per percent would be the load the event exists to avoid.
+        if (typeof data.progress === "number") {
+          client.setQueryData<Job>(queryKeys.job(jobId), (previous) =>
+            previous ? { ...previous, progress: data.progress ?? null } : previous,
+          );
+        }
         return;
       }
 
@@ -424,7 +481,7 @@ export function JobDrawerProvider({ children }: { children: React.ReactNode }) {
         });
       })();
     },
-    [client, toast],
+    [client, flushLogs, toast],
   );
 
   const value = React.useMemo<JobDrawerValue>(

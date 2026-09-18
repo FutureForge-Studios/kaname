@@ -1,9 +1,11 @@
 "use client";
 
 import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpCircle,
   CircleAlert,
+  CircleCheck,
   Download,
   ExternalLink,
   RefreshCw,
@@ -11,6 +13,7 @@ import {
 } from "lucide-react";
 import {
   UPDATE_TIER_LABELS,
+  parseVersion,
   type AgentVersionRow,
   type UpdateOverview,
   type UpdateRun,
@@ -34,6 +37,7 @@ import {
   RelativeTime,
   SectionCard,
   Skeleton,
+  Spinner,
   cn,
   type DataTableColumn,
   type LogLine,
@@ -42,7 +46,13 @@ import {
 import { PageError } from "@/components/PageError";
 import { api } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
-import { useCan, useList, useResource, useResourceMutation } from "@/lib/queries";
+import {
+  invalidateFamilies,
+  useCan,
+  useList,
+  useResource,
+  useResourceMutation,
+} from "@/lib/queries";
 
 /* ------------------------------------------------------------------ *
  * Updates.
@@ -83,6 +93,11 @@ export default function UpdatesPage() {
   const overview = useResource<UpdateOverview>("updates", "overview", { path: "/updates" });
   const runs = useList<UpdateRun>("update-runs", { per_page: 25 }, { path: "/updates/runs" });
 
+  // While the host is replacing the control plane, a refetch that fails
+  // is the expected shape of things, not an error to swap the page for:
+  // the last good overview stays up and says what is happening.
+  const restarting = overview.data?.control_plane.run?.status === "running";
+
   const check = useResourceMutation<void, UpdateOverview>({
     mutationFn: () => api.post<UpdateOverview>("/updates/check"),
     invalidates: ["updates", "update-runs"],
@@ -121,7 +136,7 @@ export default function UpdatesPage() {
       />
 
       <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
-        {overview.isError && (
+        {overview.isError && !restarting && (
           <PageError
             error={overview.error}
             onRetry={() => void overview.refetch()}
@@ -164,6 +179,7 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
   const cp = overview.control_plane;
   const [confirming, setConfirming] = React.useState(false);
   const [skipBackup, setSkipBackup] = React.useState(false);
+  const justFinished = useRestartWatch(cp.run);
 
   const apply = useResourceMutation<{ confirm: boolean; skipBackup: boolean }, UpdateRun>({
     mutationFn: (vars) =>
@@ -260,6 +276,28 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
       {overview.settings.last_check_error && (
         <Notice tone="warn" icon={CircleAlert}>
           The last check failed: {overview.settings.last_check_error}
+          {overview.settings.next_check_at && overview.settings.tier !== "off" && (
+            <>
+              {" "}
+              Retrying <RelativeTime value={overview.settings.next_check_at} />.
+            </>
+          )}
+        </Notice>
+      )}
+
+      {overview.settings.last_apply_error && (
+        <Notice tone="warn" icon={CircleAlert}>
+          Scheduled apply of {overview.settings.last_apply_error.version} was refused{" "}
+          <RelativeTime value={overview.settings.last_apply_error.at} />:{" "}
+          {overview.settings.last_apply_error.message}
+          {overview.settings.last_apply_error.message.includes("backup") && (
+            <>
+              {" "}
+              <a className="text-[var(--kn-accent-400)] hover:underline" href="/backups">
+                Backups
+              </a>
+            </>
+          )}
         </Notice>
       )}
 
@@ -269,8 +307,16 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
         </Notice>
       )}
 
-      {cp.run && cp.run.status !== "succeeded" && (
-        <Notice tone={cp.run.status === "running" ? "info" : "danger"} icon={CircleAlert}>
+      {cp.run?.status === "running" && <UpdateInProgress run={cp.run} />}
+
+      {justFinished && cp.run?.status === "succeeded" && (
+        <Notice tone="info" icon={CircleCheck}>
+          Updated to {cp.run.to_version}. The control plane is back and answering.
+        </Notice>
+      )}
+
+      {cp.run && cp.run.status !== "succeeded" && cp.run.status !== "running" && (
+        <Notice tone="danger" icon={CircleAlert}>
           The last control-plane update ({cp.run.from_version} to {cp.run.to_version}){" "}
           {STATUS_LABEL[cp.run.status]}
           {cp.run.error ? `: ${cp.run.error}` : "."}
@@ -334,6 +380,101 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
       </ConfirmDialog>
     </SectionCard>
   );
+}
+
+/**
+ * What the operator sees between "Update to X" and the new build
+ * answering. The host's pull and restart lines arrive in the run as
+ * they are written, and the 502 the proxy answers while the control
+ * plane is being recreated is named here as the expected thing.
+ */
+function UpdateInProgress({ run }: { run: UpdateRun }) {
+  const elapsed = useElapsed(run.started_at ?? run.created_at);
+  const lines = React.useMemo(() => toLogLines(run.log), [run.log]);
+
+  return (
+    <div className="mt-3 flex flex-col gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)] px-3 py-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <Spinner size={14} label="Updating" />
+        <span className="text-[var(--kn-text)]">
+          Updating {run.from_version} → {run.to_version}
+        </span>
+        <span className="text-[var(--kn-text-3)]">{formatDuration(elapsed)} elapsed</span>
+      </div>
+      <p className="text-[var(--kn-text-2)]">
+        The panel will be unreachable for about a minute while the host restarts it. If the new
+        version does not answer, the previous one is put back automatically.
+      </p>
+      <LogViewer
+        lines={lines}
+        height={200}
+        label={`Output of update ${run.to_version}`}
+        emptyLabel="Waiting for the host updater."
+        defaultShowTimestamps={false}
+        defaultWrap
+      />
+    </div>
+  );
+}
+
+/**
+ * While a control-plane update runs, asks /health every few seconds
+ * and refetches the page when the answer changes — the control plane
+ * coming back, or coming back as a different version. The SSE stream
+ * does the same on reconnect; this is for the tab whose stream has not
+ * noticed yet. Returns true once a run watched here has finished.
+ */
+function useRestartWatch(run: UpdateRun | null): boolean {
+  const client = useQueryClient();
+  const running = run?.status === "running" ? run.id : null;
+  const [watched, setWatched] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (!running) return;
+    setWatched(running);
+
+    let last: { up: boolean; version: string | null } | null = null;
+    const poll = async () => {
+      let next: { up: boolean; version: string | null };
+      try {
+        const res = await fetch("/health", { cache: "no-store" });
+        const data = res.ok ? ((await res.json()) as { version?: string }) : null;
+        next = { up: res.ok, version: data?.version ?? null };
+      } catch {
+        next = { up: false, version: null };
+      }
+      if (last && (next.up !== last.up || next.version !== last.version)) {
+        invalidateFamilies(client, ["updates", "update-runs"]);
+      }
+      last = next;
+    };
+
+    const timer = window.setInterval(() => void poll(), 3000);
+    return () => window.clearInterval(timer);
+  }, [client, running]);
+
+  return watched !== null && run?.id === watched && run.status !== "running";
+}
+
+function useElapsed(since: string): number {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return Math.max(0, now - Date.parse(since));
+}
+
+/** The updater marks its own lines: `==>` is a phase, `!!` is something that went wrong. */
+function toLogLines(text: string): LogLine[] {
+  return text
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((message, index) => ({
+      id: String(index),
+      message,
+      level: message.startsWith("!!") ? "error" : message.startsWith("==>") ? "notice" : "info",
+    }));
 }
 
 function Notice({
@@ -411,6 +552,10 @@ function AgentTable({ overview, readOnly }: { overview: UpdateOverview; readOnly
         row.up_to_date ? (
           <Badge tone="ok" size="sm">
             up to date
+          </Badge>
+        ) : row.agent_version && parseVersion(row.agent_version) === null ? (
+          <Badge tone="neutral" size="sm">
+            unknown version
           </Badge>
         ) : (
           <Badge tone="warn" size="sm">
@@ -612,19 +757,7 @@ function RunDrawer({ runId, onClose }: { runId: string | null; onClose: () => vo
     path: `/updates/runs/${runId ?? ""}`,
   });
 
-  const lines: LogLine[] = React.useMemo(() => {
-    const text = run.data?.log ?? "";
-    return text
-      .split("\n")
-      .filter((line) => line.length > 0)
-      .map((message, index) => ({
-        id: String(index),
-        message,
-        // The updater marks its own lines: `==>` is a phase, `!!` is
-        // something that went wrong.
-        level: message.startsWith("!!") ? "error" : message.startsWith("==>") ? "notice" : "info",
-      }));
-  }, [run.data?.log]);
+  const lines = React.useMemo(() => toLogLines(run.data?.log ?? ""), [run.data?.log]);
 
   return (
     <Drawer open={Boolean(runId)} onOpenChange={(open) => !open && onClose()} size="lg">

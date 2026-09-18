@@ -16,7 +16,10 @@
 # control plane has already done everything reversible before handing
 # over — it snapshotted .env and wrote the new values into it. This
 # script pulls, restarts, checks, and puts the snapshot back if the new
-# build does not answer.
+# build does not answer. Everything it does is written to the request's
+# log file, and every turn it takes to <data-dir>/updates/<run>.result,
+# which is how the control plane — the one still running, or the one
+# that boots next — finds out what happened.
 # ==================================================================
 set -eu
 
@@ -160,54 +163,118 @@ field() {
   tr ',' '\n' <"$QUEUE" | grep "\"$1\"" | head -n 1 | cut -d'"' -f4
 }
 
+# The verdict, for the control plane. It judges a run by what it finds
+# when it boots, but a rollback that never restarted it (the pull failed
+# before anything stopped) would otherwise leave the run "running" for
+# ever — and even when it does boot, the reason is only known here. One
+# word per line, appended in order: `picked_up`, then a reason if
+# something failed, then the final verdict. The verdict is always the
+# last thing written before this script exits.
+record_outcome() {
+  [ -n "${RUN_ID:-}" ] || return 0
+  outcome="$DATA_DIR/updates/$RUN_ID.result"
+  {
+    if [ -f "$outcome" ]; then cat "$outcome"; fi
+    printf '%s\n' "$1"
+  } >"$outcome.partial"
+  chmod 0640 "$outcome.partial"
+  chown "root:$KANAME_UID" "$outcome.partial" 2>/dev/null || true
+  mv "$outcome.partial" "$outcome"
+}
+
+restore_env() {
+  cp "$SNAPSHOT_DIR/.env" "$DATA_DIR/.env"
+  chmod 0660 "$DATA_DIR/.env"
+  chown "root:$KANAME_UID" "$DATA_DIR/.env"
+}
+
+# Takes the reason: pull_failed, restart_failed or health_failed. It is
+# recorded before anything is restarted, because the old build boots
+# INSIDE the `compose up` below and reads the file at once.
 rollback() {
-  say "!! $TO_VERSION did not come up"
-  if [ -f "$SNAPSHOT_DIR/.env" ]; then
-    say "--> restoring the configuration from $SNAPSHOT_DIR"
-    cp "$SNAPSHOT_DIR/.env" "$DATA_DIR/.env"
-    chmod 0660 "$DATA_DIR/.env"
-    chown "root:$KANAME_UID" "$DATA_DIR/.env"
-    if compose up -d --wait control-plane web >>"$LOG_FILE" 2>&1; then
-      say "!! rolled back to $FROM_VERSION"
-    else
-      say "!! the rollback to $FROM_VERSION did not come up either — this needs a person"
-    fi
-  else
+  # Whatever arrives now is too late to change course; a second TERM
+  # must not start a second rollback inside this one.
+  trap '' TERM INT
+  record_outcome "$1"
+
+  if [ ! -f "$SNAPSHOT_DIR/.env" ]; then
     say "!! no snapshot at $SNAPSHOT_DIR; leaving the deployment as it is"
+    record_outcome rollback_failed
+    exit 1
+  fi
+
+  say "--> restoring the configuration from $SNAPSHOT_DIR"
+  restore_env
+
+  if [ "$1" = pull_failed ]; then
+    # Nothing was stopped: the running build is the one .env names again,
+    # and it is watching this file. Restarting it would only cost a
+    # minute of downtime for an update that never started.
+    say "!! nothing was stopped; $FROM_VERSION keeps running"
+    record_outcome rolled_back
+    exit 1
+  fi
+
+  say "!! $TO_VERSION did not come up"
+  if compose up -d --force-recreate --wait --wait-timeout 300 control-plane web >>"$LOG_FILE" 2>&1; then
+    say "!! rolled back to $FROM_VERSION"
+    record_outcome rolled_back
+  else
+    say "!! the rollback to $FROM_VERSION did not come up either — this needs a person"
+    record_outcome rollback_failed
   fi
   exit 1
+}
+
+# systemd's TimeoutStartSec ends a hung pull or restart with SIGTERM.
+# Without this, that would end the health check and the rollback with
+# it, leaving .env pointing at images nobody verified.
+interrupted() {
+  say "!! interrupted while ${PHASE:-starting}; rolling back"
+  case "${PHASE:-}" in
+    pulling) rollback pull_failed ;;
+    verifying) rollback health_failed ;;
+    *) rollback restart_failed ;;
+  esac
 }
 
 do_update() {
   [ -n "$RUN_ID" ] || die "an update request with no run id"
 
+  trap interrupted TERM INT
   say "==> applying $TO_VERSION over $FROM_VERSION (run $RUN_ID)"
 
   # 1. Pull first. Nothing is stopped yet, so a pull that fails costs
   #    nothing but the time it took.
+  PHASE=pulling
   say "--> pulling images"
   if ! compose pull control-plane web >>"$LOG_FILE" 2>&1; then
-    say "!! could not pull the images for $TO_VERSION; nothing was stopped"
-    rollback
+    say "!! could not pull the images for $TO_VERSION"
+    rollback pull_failed
   fi
 
-  # 2. Restart. Compose waits for the health checks the project declares.
+  # 2. Restart. Compose waits for the health checks the project declares;
+  #    bounded, so a build that never becomes healthy is a rollback
+  #    rather than a unit that sits there until systemd kills it.
+  PHASE=restarting
   say "--> restarting"
-  if ! compose up -d --wait control-plane web >>"$LOG_FILE" 2>&1; then
-    rollback
+  if ! compose up -d --wait --wait-timeout 300 control-plane web >>"$LOG_FILE" 2>&1; then
+    rollback restart_failed
   fi
 
   # 3. Verify against the running control plane rather than trusting the
   #    container's own health check.
+  PHASE=verifying
   say "--> waiting for the control plane to answer"
   if answering; then
     say ""
     say "==> $TO_VERSION is up and answering"
+    record_outcome succeeded
     exit 0
   fi
 
   say "!! no answer from $LOCAL_API/health after ${HEALTH_TIMEOUT}s"
-  rollback
+  rollback health_failed
 }
 
 do_reconfigure() {
@@ -219,7 +286,7 @@ do_reconfigure() {
   # Caddy for the site blocks, and the other two because the public URL
   # and the cookie policy are read once, at boot.
   say "--> recreating the proxy, the control plane and the panel"
-  if ! compose up -d --force-recreate --wait caddy control-plane web >>"$LOG_FILE" 2>&1; then
+  if ! compose up -d --force-recreate --wait --wait-timeout 300 caddy control-plane web >>"$LOG_FILE" 2>&1; then
     say "!! the deployment did not come back up; the previous address is gone from .env"
     exit 1
   fi
@@ -253,13 +320,19 @@ apply() {
   mkdir -p "$(dirname "$LOG_FILE")"
   : >"$LOG_FILE"
   # Handed to the uid that reads it back: the control plane splices this
-# into the update run the operator is watching.
-chmod 0640 "$LOG_FILE"
-chown "root:$KANAME_UID" "$LOG_FILE" 2>/dev/null || true
+  # into the update run the operator is watching.
+  chmod 0640 "$LOG_FILE"
+  chown "root:$KANAME_UID" "$LOG_FILE" 2>/dev/null || true
 
   # The request is consumed immediately, so a crash below cannot leave a
-  # path unit re-triggering this in a loop.
+  # path unit re-triggering this in a loop. Saying so is what tells the
+  # control plane the difference between "working on it" and "the unit
+  # never fired".
   rm -f "$QUEUE"
+  if [ -n "$RUN_ID" ]; then
+    rm -f "$DATA_DIR/updates/$RUN_ID.result"
+    record_outcome picked_up
+  fi
 
   case "$KIND" in
     update) do_update ;;
