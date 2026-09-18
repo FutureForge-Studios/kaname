@@ -786,12 +786,17 @@ export const AGENT_METHODS = {
     summary: "Delete a mailbox.",
   }),
   "mail.mailbox.password": m({
-    params: z.object({ address: z.string().email(), password: z.string().min(12).max(256) }),
+    params: z.object({
+      address: z.string().email(),
+      password: z.string().min(12).max(256),
+      /** Also close every authenticated IMAP/POP session; a new hash alone does not. */
+      revoke_sessions: z.boolean().default(false),
+    }),
     result: ok,
     stream: "none",
     requires: ["mail"],
     readOnly: false,
-    summary: "Set a mailbox password.",
+    summary: "Set a mailbox password, optionally signing out its open sessions.",
   }),
   "mail.alias.apply": m({
     params: z.object({

@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import { MAIL_AUTH_CHECK_META } from "@kaname/contract";
 import { createDb, type Database } from "./index.js";
 import * as s from "./schema/index.js";
 
@@ -543,128 +544,146 @@ export async function seedDemo(db: Database): Promise<void> {
 
   // The interesting part: one domain whose mail DNS is broken exactly the
   // way real ones are — proxied MX host and no host-level SPF.
+  //
+  // Every row below is written the way MailAuthChecker would write it for
+  // this scenario: titles come from MAIL_AUTH_CHECK_META, records are zone-
+  // file shaped (name, TTL 3600, class, type, value — tab separated) and
+  // the copyable values are the engine's, so the demo and the engine
+  // cannot drift and the e2e spec asserts what a real run produces.
+  const mailHost = "mail.futureforge.dev";
+  const mailIp = "198.51.100.42";
+  const proxyIp = "104.21.34.12";
+  const checkedAt = new Date(now - 20 * 60_000);
+  const resolverUsed = "host:mail-01";
+  const zoneRecord = (name: string, type: string, value: string) =>
+    `${name}.\t3600\tIN\t${type}\t${value}`;
+  const dkimValue =
+    "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0xM3RkFtb3VudE9mS2V5RGF0YUZvclNlZWQ";
+  const dmarcActual = "v=DMARC1; p=quarantine; rua=mailto:dmarc@futureforge.dev; pct=50";
+  const proxyRecord = `${zoneRecord(mailHost, "A", mailIp)}   ; DNS only, never proxied`;
+
   await db.insert(s.mailAuthChecks).values([
     {
       mailDomainId: mailDomain!.id,
       check: "mx",
       status: "pass",
-      title: "MX records",
-      detail: "futureforge.dev delivers to mail.futureforge.dev with priority 10.",
-      expected: "10 mail.futureforge.dev.",
-      actual: "10 mail.futureforge.dev.",
-      resolverUsed: "1.1.1.1",
-      checkedAt: new Date(now - 20 * 60_000),
+      title: MAIL_AUTH_CHECK_META.mx.title,
+      detail: `futureforge.dev delivers to ${mailHost} at preference 10, which resolves to ${proxyIp}.`,
+      expected: zoneRecord("futureforge.dev", "MX", `10 ${mailHost}.`),
+      actual: `10 ${mailHost}`,
+      resolverUsed,
+      durationMs: 41,
+      checkedAt,
     },
     {
       mailDomainId: mailDomain!.id,
       check: "proxy_exposure",
       status: "fail",
-      title: "Mail host is behind a proxy",
-      detail:
-        "mail.futureforge.dev resolves to 104.21.34.12, which is inside Cloudflare's proxy range. SMTP is not proxied, so mail will not reach this host, and SPF cannot see your real sending IP.",
-      expected: "198.51.100.42 (the mail server's own address), DNS-only",
-      actual: "104.21.34.12 (Cloudflare proxy)",
+      title: MAIL_AUTH_CHECK_META.proxy_exposure.title,
+      detail: `${mailHost} resolves to ${proxyIp}, which belongs to Cloudflare's proxy network. Two separate things break. First, Cloudflare proxies HTTP and HTTPS only: a sending server that opens port 25 to that address reaches nothing, so inbound mail for futureforge.dev fails and outbound connections are refused by receivers doing a callback. Second, the addresses published are the proxy's, not mail-01's — so an SPF record authorising "a" or "mx" for this name authorises tens of thousands of Cloudflare machines while ${mailIp} is not authorised at all, which is a spoofing hole and a delivery failure in the same record.`,
+      expected: proxyRecord,
+      actual: `${proxyIp} (Cloudflare)`,
       remediation: {
-        summary:
-          "Set the mail.futureforge.dev record to DNS-only (grey cloud) in Cloudflare. A proxied or wildcard-proxied record breaks SMTP delivery and hides your sending IP from SPF.",
+        summary: `Turn the proxy off for this record: click the orange cloud next to the record in the Cloudflare dashboard so it goes DNS-only. The record must resolve to ${mailIp} directly for SMTP to reach the host, and for SPF to authorise the right address.`,
         actions: [
+          { label: "Copy record", copy: proxyRecord },
           { label: "Open DNS", href: "/websites/dns" },
-          {
-            label: "Copy record",
-            copy: "mail.futureforge.dev.\t300\tIN\tA\t198.51.100.42",
-          },
         ],
       },
-      resolverUsed: "1.1.1.1",
-      checkedAt: new Date(now - 20 * 60_000),
+      resolverUsed,
+      durationMs: 58,
+      checkedAt,
     },
     {
       mailDomainId: mailDomain!.id,
       check: "host_spf",
       status: "fail",
-      title: "Mail host has no SPF record of its own",
-      detail:
-        "mail.futureforge.dev sends mail using its own HELO name, so it needs its own SPF TXT record. The record on the apex does not cover it.",
-      expected: 'mail.futureforge.dev. IN TXT "v=spf1 a -all"',
-      actual: "no TXT record",
+      title: MAIL_AUTH_CHECK_META.host_spf.title,
+      detail: `${mailHost} publishes no SPF record of its own, separate from the one on futureforge.dev. This matters for a specific class of message: a bounce or delivery-status notification leaves with an empty envelope sender, so the receiver has no MAIL FROM domain to evaluate and falls back to the HELO identity — which is ${mailHost}, not futureforge.dev. With nothing published there the HELO check returns "none", and receivers that require an authenticated identity (Outlook.com most visibly) treat those messages as unauthenticated no matter how correct futureforge.dev's own SPF is.`,
+      expected: zoneRecord(mailHost, "TXT", '"v=spf1 a -all"'),
+      actual: null,
       remediation: {
-        summary:
-          "Add an SPF TXT record on the mail hostname itself, separate from the one on futureforge.dev. Receivers check the HELO name as well as the envelope sender.",
+        summary: `Add a TXT record on the mail hostname itself. "a" authorises whatever ${mailHost} resolves to, so it stays correct if the server's address changes; "-all" refuses everything else. This is a second record, not a replacement for the one on futureforge.dev.`,
         actions: [
-          {
-            label: "Copy record",
-            copy: 'mail.futureforge.dev. 3600 IN TXT "v=spf1 a -all"',
-          },
+          { label: "Copy record", copy: "v=spf1 a -all" },
+          { label: "Open DNS", href: "/websites/dns" },
         ],
       },
-      resolverUsed: "1.1.1.1",
-      checkedAt: new Date(now - 20 * 60_000),
+      resolverUsed,
+      durationMs: 37,
+      checkedAt,
     },
     {
       mailDomainId: mailDomain!.id,
       check: "spf",
       status: "pass",
-      title: "SPF",
-      detail: "One SPF record, 4 DNS lookups, ends in -all.",
-      expected: '"v=spf1 mx a:mail.futureforge.dev -all"',
-      actual: '"v=spf1 mx a:mail.futureforge.dev -all"',
-      resolverUsed: "1.1.1.1",
-      checkedAt: new Date(now - 20 * 60_000),
+      title: MAIL_AUTH_CHECK_META.spf.title,
+      detail:
+        'futureforge.dev publishes one SPF record ending in "-all", evaluated in 2 of the 10 permitted DNS lookups.',
+      expected: zoneRecord("futureforge.dev", "TXT", `"v=spf1 ip4:${mailIp} -all"`),
+      actual: `v=spf1 mx a:${mailHost} -all`,
+      resolverUsed,
+      durationMs: 88,
+      checkedAt,
     },
     {
       mailDomainId: mailDomain!.id,
       check: "dkim",
       status: "pass",
-      title: "DKIM",
-      detail: "Selector kaname matches the key held by mail-01.",
-      expected: "2048-bit RSA key at kaname._domainkey.futureforge.dev",
-      actual: "2048-bit RSA key, matches host",
-      resolverUsed: "1.1.1.1",
-      checkedAt: new Date(now - 20 * 60_000),
+      title: MAIL_AUTH_CHECK_META.dkim.title,
+      detail:
+        "kaname._domainkey.futureforge.dev publishes the same 2048-bit key that mail-01 signs with, so signatures verify at the receiver.",
+      expected: zoneRecord("kaname._domainkey.futureforge.dev", "TXT", `"${dkimValue}"`),
+      actual: dkimValue,
+      resolverUsed,
+      durationMs: 64,
+      checkedAt,
     },
     {
       mailDomainId: mailDomain!.id,
       check: "dmarc",
       status: "warn",
-      title: "DMARC is monitoring only",
+      title: MAIL_AUTH_CHECK_META.dmarc.title,
       detail:
-        "p=none means receivers are told to take no action on failures. Reports are being collected.",
-      expected: "p=quarantine once reports look clean",
-      actual: '"v=DMARC1; p=none; rua=mailto:dmarc@futureforge.dev"',
+        'The policy is "p=quarantine" but "pct=50", so it is applied to only 50% of failing mail. That is the right setting while ramping up, and the wrong one to leave in place — the remaining 50% of spoofed mail is delivered untouched.',
+      expected: zoneRecord(
+        "_dmarc.futureforge.dev",
+        "TXT",
+        '"v=DMARC1; p=none; rua=mailto:dmarc@futureforge.dev; fo=1; adkim=r; aspf=r"',
+      ),
+      actual: dmarcActual,
       remediation: {
         summary:
-          "You have been on p=none for 30 days with clean reports. Move to p=quarantine, then p=reject.",
-        actions: [
-          {
-            label: "Copy record",
-            copy: '_dmarc.futureforge.dev. 3600 IN TXT "v=DMARC1; p=quarantine; rua=mailto:dmarc@futureforge.dev; pct=100"',
-          },
-        ],
+          "Remove the pct tag (it defaults to 100) once the reports show no legitimate sender failing.",
+        actions: [{ label: "Open DNS", href: "/websites/dns" }],
       },
-      resolverUsed: "1.1.1.1",
-      checkedAt: new Date(now - 20 * 60_000),
+      resolverUsed,
+      durationMs: 44,
+      checkedAt,
     },
     {
       mailDomainId: mailDomain!.id,
       check: "ptr",
       status: "pass",
-      title: "Reverse DNS",
-      detail: "198.51.100.42 resolves to mail.futureforge.dev, matching the HELO name.",
-      expected: "mail.futureforge.dev",
-      actual: "mail.futureforge.dev",
-      resolverUsed: "1.1.1.1",
-      checkedAt: new Date(now - 20 * 60_000),
+      title: MAIL_AUTH_CHECK_META.ptr.title,
+      detail: `${mailIp} reverses to ${mailHost} and that name resolves back to ${mailIp}, so forward-confirmed reverse DNS holds.`,
+      expected: `42.100.51.198.in-addr.arpa.\t3600\tIN\tPTR\t${mailHost}.`,
+      actual: mailHost,
+      resolverUsed,
+      durationMs: 52,
+      checkedAt,
     },
     {
       mailDomainId: mailDomain!.id,
       check: "tls",
       status: "pass",
-      title: "STARTTLS",
-      detail: "STARTTLS offered, certificate covers mail.futureforge.dev, expires in 62 days.",
-      expected: "valid certificate covering the HELO name",
-      actual: "valid, 62 days remaining",
-      resolverUsed: "direct",
-      checkedAt: new Date(now - 20 * 60_000),
+      title: MAIL_AUTH_CHECK_META.tls.title,
+      detail: `${mailHost} covers ${mailHost} and is valid for another 62 days, so STARTTLS presents a name the receiver can verify.`,
+      expected: null,
+      actual: `${mailHost} (expires ${new Date(now + 62 * 86_400_000).toISOString().slice(0, 10)})`,
+      resolverUsed,
+      durationMs: 9,
+      checkedAt,
     },
   ]);
 

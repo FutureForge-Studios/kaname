@@ -9,6 +9,7 @@ import {
   firewallState,
   ftpAccounts,
   ipBlocks,
+  mailDomains,
   mailboxes,
   restorePoints,
   servers,
@@ -17,7 +18,9 @@ import {
   sshConfigs,
   updateRuns,
 } from "@kaname/db/schema";
-import type { AgentMethod, JobType, MethodParams } from "@kaname/contract";
+import type { AgentMethod, JobType, MailAuthCheck, MethodParams } from "@kaname/contract";
+import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
+import { MailAuthChecker } from "../services/mail-auth.js";
 import type { JobContext, JobHandler, JobWorker } from "./worker.js";
 
 /* ------------------------------------------------------------------ *
@@ -36,6 +39,11 @@ function requireServer(ctx: JobContext): string {
 
 function params<T>(ctx: JobContext): T {
   return ctx.job.params as T;
+}
+
+/** The agent answered with this error code, as opposed to being unreachable. */
+function agentSaid(err: unknown, code: string): boolean {
+  return err instanceof AgentRpcError && err.agentError.code === code;
 }
 
 /** The common shape: call one method with the job's params, return the result. */
@@ -65,7 +73,6 @@ function streaming<M extends AgentMethod>(method: M): JobHandler {
       },
       { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
     );
-    ctx.signal.addEventListener("abort", () => handle.cancel(), { once: true });
     return handle.done;
   };
 }
@@ -247,7 +254,6 @@ const agentUpdate: JobHandler = async (ctx) => {
     },
     { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
   );
-  ctx.signal.addEventListener("abort", () => handle.cancel(), { once: true });
 
   let result: unknown;
   try {
@@ -551,10 +557,26 @@ export function registerJobHandlers(worker: JobWorker): void {
       const serverId = requireServer(ctx);
       const p = params<{ mailbox_id: string } & MethodParams<"mail.mailbox.create">>(ctx);
       const { mailbox_id, ...rest } = p;
-      await ctx.hub.call(serverId, "mail.mailbox.create", rest, {
-        timeoutMs: ctx.job.timeoutMs,
-        signal: ctx.signal,
-      });
+      try {
+        await ctx.hub.call(serverId, "mail.mailbox.create", rest, {
+          timeoutMs: ctx.job.timeoutMs,
+          signal: ctx.signal,
+        });
+      } catch (err) {
+        // The row was inserted as "provisioning" before this ran. Left
+        // there, it blocks the address for ever: a retry is refused as a
+        // duplicate and a delete has nothing on the host to remove.
+        if (agentSaid(err, "conflict")) {
+          await ctx.log_("warn", `${rest.address} already existed on the host; adopted it`);
+        } else {
+          if (err instanceof AgentOfflineError) throw err;
+          await ctx.db
+            .update(mailboxes)
+            .set({ status: "error", updatedAt: new Date() })
+            .where(eq(mailboxes.id, mailbox_id));
+          throw err;
+        }
+      }
       await ctx.db
         .update(mailboxes)
         .set({ status: "active", lastSyncedAt: new Date(), updatedAt: new Date() })
@@ -565,19 +587,118 @@ export function registerJobHandlers(worker: JobWorker): void {
     "mail.mailbox.delete": async (ctx) => {
       const serverId = requireServer(ctx);
       const p = params<{ mailbox_id: string; address: string; delete_maildir: boolean }>(ctx);
-      await ctx.hub.call(
-        serverId,
-        "mail.mailbox.delete",
-        { address: p.address, delete_maildir: p.delete_maildir },
-        { signal: ctx.signal },
-      );
+      try {
+        await ctx.hub.call(
+          serverId,
+          "mail.mailbox.delete",
+          { address: p.address, delete_maildir: p.delete_maildir },
+          { signal: ctx.signal },
+        );
+      } catch (err) {
+        // A mailbox whose create never landed has no account to remove;
+        // the record is still the operator's to delete.
+        if (!agentSaid(err, "not_found")) throw err;
+        await ctx.log_("warn", `${p.address} is not present on the host; removed the record`);
+      }
       await ctx.db.delete(mailboxes).where(eq(mailboxes.id, p.mailbox_id));
       return { ok: true };
     },
-    "mail.mailbox.reset_password": passthrough("mail.mailbox.password"),
+    "mail.mailbox.reset_password": async (ctx) => {
+      const serverId = requireServer(ctx);
+      const p = params<MethodParams<"mail.mailbox.password">>(ctx);
+      const revoke = p.revoke_sessions === true;
+      await ctx.hub.call(
+        serverId,
+        "mail.mailbox.password",
+        { address: p.address, password: p.password, revoke_sessions: revoke },
+        { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
+      );
+      // The log is where an operator resetting a compromised mailbox
+      // reads whether the attacker's open session was actually closed.
+      await ctx.log_(
+        "info",
+        revoke
+          ? `password set for ${p.address}; open IMAP and POP sessions revoked`
+          : `password set for ${p.address}; open sessions left open`,
+      );
+      return { ok: true, sessions_revoked: revoke };
+    },
     "mail.alias.apply": passthrough("mail.alias.apply"),
     "mail.forwarder.apply": passthrough("mail.forwarder.apply"),
-    "mail.domain.provision": async (ctx) => params(ctx),
+    "mail.auth.check": async (ctx) => {
+      const serverId = requireServer(ctx);
+      const p = params<{ mail_domain_id: string; checks?: MailAuthCheck[]; resolver?: string }>(
+        ctx,
+      );
+      const checker = new MailAuthChecker({ db: ctx.db, hub: ctx.hub, log: ctx.log });
+      await ctx.log_("info", `checking ${p.mail_domain_id} via ${p.resolver ?? "the host"}`);
+      const report = await checker.run(p.mail_domain_id, {
+        checks: p.checks,
+        resolver: p.resolver,
+      });
+      for (const check of report.checks) {
+        const level = check.status === "fail" ? "error" : check.status === "warn" ? "warn" : "info";
+        await ctx.log_(level, `${check.check}: ${check.status} — ${check.detail}`);
+      }
+      ctx.events.publish(
+        "servers",
+        "mail.auth.checked",
+        { server_id: serverId, mail_domain_id: p.mail_domain_id, overall: report.overall },
+        serverId,
+      );
+      return { overall: report.overall, resolver_used: report.resolver_used };
+    },
+    "mail.domain.provision": async (ctx) => {
+      const serverId = requireServer(ctx);
+      const p = params<{ mail_domain_id: string; domain: string }>(ctx);
+      // Nothing is written to the host yet (README, Status): what this
+      // job can honestly do is read the key the host already signs with
+      // and stop the row reading "provisioning" for ever.
+      let dkim: string | null = null;
+      try {
+        try {
+          const key = await ctx.hub.call(
+            serverId,
+            "mail.dkim.read",
+            { domain: p.domain },
+            { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
+          );
+          dkim = key.public_key || null;
+          await ctx.log_("info", `DKIM selector ${key.selector} read from the host`);
+        } catch (err) {
+          if (err instanceof AgentOfflineError) throw err;
+          await ctx.log_(
+            "warn",
+            `no DKIM key on the host yet: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        // An operator who suspended the domain in the same edit keeps
+        // that; only an in-progress or failed row is settled here.
+        await ctx.db
+          .update(mailDomains)
+          .set({
+            status: sql`case when ${mailDomains.status} in ('provisioning', 'error') then 'active' else ${mailDomains.status} end`,
+            ...(dkim ? { dkimPublicKey: dkim } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(mailDomains.id, p.mail_domain_id));
+      } catch (err) {
+        if (!(err instanceof AgentOfflineError)) {
+          await ctx.db
+            .update(mailDomains)
+            .set({ status: "error", updatedAt: new Date() })
+            .where(eq(mailDomains.id, p.mail_domain_id));
+        }
+        throw err;
+      }
+      ctx.events.publish(
+        "servers",
+        "mail_domain.provisioned",
+        { server_id: serverId, mail_domain_id: p.mail_domain_id, domain: p.domain },
+        serverId,
+      );
+      return { mail_domain_id: p.mail_domain_id, dkim_read: dkim !== null };
+    },
 
     /* databases */
     "db.database.create": async (ctx) => {

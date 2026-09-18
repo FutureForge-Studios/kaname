@@ -5529,7 +5529,7 @@
         "mail"
       ],
       "read_only": false,
-      "summary": "Set a mailbox password.",
+      "summary": "Set a mailbox password, optionally signing out its open sessions.",
       "params": {
         "type": "object",
         "properties": {
@@ -5541,6 +5541,10 @@
             "type": "string",
             "minLength": 12,
             "maxLength": 256
+          },
+          "revoke_sessions": {
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [

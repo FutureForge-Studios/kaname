@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { Resolver } from "node:dns/promises";
-import { BlockList, isIPv4 } from "node:net";
+import { BlockList, isIPv4, isIPv6 } from "node:net";
 import { eq, type Database } from "@kaname/db";
 import { certificates, domains, mailAuthChecks, mailDomains, servers } from "@kaname/db/schema";
 import {
@@ -12,7 +12,7 @@ import {
   type Remediation,
 } from "@kaname/contract";
 import type { Logger } from "pino";
-import type { AgentHub } from "../agent/hub.js";
+import { AgentOfflineError, AgentRpcError, type AgentHub } from "../agent/hub.js";
 import { notFound } from "../lib/errors.js";
 
 /* ------------------------------------------------------------------ *
@@ -106,7 +106,7 @@ export interface MailAuthCheckerDeps {
 export interface MailAuthRunOptions {
   /** Omit to run the whole list. */
   checks?: readonly MailAuthCheck[];
-  /** Resolver address to query instead of the system resolvers. */
+  /** Nameserver address to ask instead of the default resolver at the vantage point. */
   resolver?: string;
 }
 
@@ -153,10 +153,25 @@ export class MailAuthChecker {
   /** Runs the checks, persists every verdict, and returns the full report. */
   async run(mailDomainId: string, opts: MailAuthRunOptions = {}): Promise<MailAuthReport> {
     const subject = await this.loadSubject(mailDomainId);
-    const dns = new DnsView(opts.resolver);
     const wanted = opts.checks?.length
       ? MAIL_AUTH_ORDER.filter((c) => opts.checks!.includes(c))
       : MAIL_AUTH_ORDER;
+
+    // A resolver that cannot be used is a verdict on the run, not an
+    // exception out of it: every check reports why, and the page shows
+    // that instead of a request that died.
+    let dns: DnsView;
+    try {
+      dns = new DnsView(subject, this.deps.hub, opts.resolver);
+    } catch (err) {
+      this.deps.log?.warn({ err, mailDomainId, resolver: opts.resolver }, "mail auth resolver");
+      await this.persist(
+        subject,
+        wanted.map((check) => ({ outcome: crashed(check, err), durationMs: 0 })),
+        `unusable resolver ${opts.resolver ?? ""}`.trim(),
+      );
+      return this.report(mailDomainId);
+    }
 
     // Parallel because the checks share a memoised resolver: eight
     // sequential checks against a slow authoritative server is the
@@ -1222,40 +1237,85 @@ interface Answer<T> {
  * checks want the same names (the mail host's addresses are needed by
  * ptr and proxy_exposure) and running the checks in parallel would
  * otherwise triple the query load on someone's authoritative server.
+ *
+ * The questions are asked from the mail host when its agent is online:
+ * a split-horizon zone, a local resolver or the sim's own zone are only
+ * visible from there, and it is the host's answer that Postfix acts on.
+ * The control plane's resolver is the fallback, and the report names
+ * which one answered so a disagreement with `dig` can be explained.
  */
 class DnsView {
   readonly used: string;
-  private readonly resolver: Resolver;
+  private readonly resolver: Resolver | null;
   private readonly cache = new Map<string, Promise<Answer<never>>>();
 
-  constructor(server?: string) {
+  constructor(
+    private readonly subject: Pick<Subject, "serverId" | "serverName" | "agentOnline">,
+    private readonly hub: AgentHub,
+    private readonly server?: string,
+  ) {
+    if (subject.agentOnline) {
+      this.resolver = null;
+      this.used = `host:${subject.serverName}${server ? ` via ${server}` : ""}`;
+      return;
+    }
     this.resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: DNS_TRIES });
     if (server) this.resolver.setServers([server]);
-    this.used = this.resolver.getServers().join(", ") || "system";
+    this.used = `control-plane:${this.resolver.getServers().join(", ") || "system"}`;
   }
 
   txt(name: string): Promise<Answer<string>> {
     return this.query(`TXT:${name}`, async () => {
       // A TXT record longer than 255 bytes arrives as several strings.
-      const chunks = await this.resolver.resolveTxt(name);
-      return chunks.map((parts) => parts.join(""));
+      if (this.resolver) {
+        const chunks = await this.resolver.resolveTxt(name);
+        return chunks.map((parts) => parts.join(""));
+      }
+      return (await this.viaAgent(name, "TXT")).map(unquote);
     });
   }
 
   mx(name: string): Promise<Answer<{ priority: number; exchange: string }>> {
-    return this.query(`MX:${name}`, () => this.resolver.resolveMx(name));
+    return this.query(`MX:${name}`, async () => {
+      if (this.resolver) return this.resolver.resolveMx(name);
+      return (await this.viaAgent(name, "MX")).map(parseMx);
+    });
   }
 
   a(name: string): Promise<Answer<string>> {
-    return this.query(`A:${name}`, () => this.resolver.resolve4(name));
+    return this.query(`A:${name}`, () =>
+      this.resolver ? this.resolver.resolve4(name) : this.viaAgent(name, "A"),
+    );
   }
 
   aaaa(name: string): Promise<Answer<string>> {
-    return this.query(`AAAA:${name}`, () => this.resolver.resolve6(name));
+    return this.query(`AAAA:${name}`, () =>
+      this.resolver ? this.resolver.resolve6(name) : this.viaAgent(name, "AAAA"),
+    );
   }
 
   reverse(ip: string): Promise<Answer<string>> {
-    return this.query(`PTR:${ip}`, () => this.resolver.reverse(ip));
+    return this.query(`PTR:${ip}`, async () => {
+      if (this.resolver) return this.resolver.reverse(ip);
+      return (await this.viaAgent(reverseName(ip), "PTR")).map((n) => n.replace(/\.$/, ""));
+    });
+  }
+
+  /** Ask the host. An empty answer is "absent", the same as the resolver's ENODATA. */
+  private async viaAgent(name: string, type: string): Promise<string[]> {
+    const result = await this.hub.call(
+      this.subject.serverId,
+      "dns.resolve",
+      { name, type, ...(this.server ? { resolver: this.server } : {}) },
+      { timeoutMs: RPC_TIMEOUT_MS },
+    );
+    const values = result.records.flatMap((r) => r.values);
+    if (values.length === 0) {
+      const absent = new Error(`no ${type} record at ${name}`) as NodeJS.ErrnoException;
+      absent.code = "ENODATA";
+      throw absent;
+    }
+    return values;
   }
 
   private query<T>(key: string, run: () => Promise<T[]>): Promise<Answer<T>> {
@@ -1264,13 +1324,28 @@ class DnsView {
 
     const promise = run()
       .then((values) => ({ values, error: null }))
-      .catch((err: unknown) => ({
-        values: [] as T[],
-        error: (err as NodeJS.ErrnoException).code ?? "EUNKNOWN",
-      }));
+      .catch((err: unknown) => ({ values: [] as T[], error: lookupErrorCode(err) }));
     this.cache.set(key, promise as unknown as Promise<Answer<never>>);
     return promise;
   }
+}
+
+/** One code whichever side answered, so the checks read it the same way. */
+function lookupErrorCode(err: unknown): string {
+  if (err instanceof AgentRpcError) return err.agentError.code.toUpperCase();
+  if (err instanceof AgentOfflineError) return "EAGENTOFFLINE";
+  return (err as NodeJS.ErrnoException).code ?? "EUNKNOWN";
+}
+
+/** The host hands TXT values back as the zone shows them, quotes included. */
+function unquote(value: string): string {
+  return value.trim().replace(/^"(.*)"$/s, "$1");
+}
+
+/** "10 mail.example.com." as the resolver's own MX shape. */
+function parseMx(value: string): { priority: number; exchange: string } {
+  const [priority, exchange = ""] = value.trim().split(/\s+/, 2);
+  return { priority: Number(priority) || 0, exchange: exchange.replace(/\.$/, "") };
 }
 
 /** The record is genuinely absent, as opposed to the zone being broken. */
@@ -1370,9 +1445,18 @@ function normalizeKey(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
-function reverseName(ip: string): string {
+/** The in-addr.arpa / ip6.arpa name a PTR lives at. */
+export function reverseName(ip: string): string {
   if (isIPv4(ip)) return `${ip.split(".").reverse().join(".")}.in-addr.arpa`;
-  return `the ip6.arpa name for ${ip}`;
+  if (!isIPv6(ip)) return `the reverse name for ${ip}`;
+  // Expand "::" and pad every group so all 32 nibbles are present.
+  const halves = ip.split("::");
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves[1] ? halves[1].split(":") : [];
+  const missing = halves.length > 1 ? 8 - head.length - tail.length : 0;
+  const groups = [...head, ...Array<string>(Math.max(0, missing)).fill("0"), ...tail];
+  const nibbles = groups.map((g) => g.padStart(4, "0")).join("");
+  return `${nibbles.split("").reverse().join(".")}.ip6.arpa`;
 }
 
 /** Exact match, or a single-label wildcard covering it. */
