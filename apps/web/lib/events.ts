@@ -39,6 +39,8 @@ export class EventStream {
   private retryMs = DEFAULT_RETRY_MS;
   private attempt = 0;
   private stopped = false;
+  /** True from the start of a connect until its reader ends, so nothing opens a second one. */
+  private inFlight = false;
   private state: EventStreamStatus = "closed";
 
   constructor(private readonly options: EventStreamOptions) {}
@@ -72,7 +74,7 @@ export class EventStream {
 
   /** A tab coming back to the foreground should not wait out the backoff. */
   private wake = (): void => {
-    if (this.stopped || this.state === "open" || this.state === "connecting") return;
+    if (this.stopped || this.inFlight) return;
     if (document.visibilityState === "hidden" && !navigator.onLine) return;
     if (this.timer !== null) {
       window.clearTimeout(this.timer);
@@ -96,8 +98,12 @@ export class EventStream {
   }
 
   private async connect(): Promise<void> {
-    if (this.stopped) return;
+    if (this.stopped || this.inFlight) return;
+    this.inFlight = true;
 
+    // A predecessor that is still reading would otherwise dispatch every
+    // event twice and outlive stop(), which only aborts the newest one.
+    this.controller?.abort();
     const controller = new AbortController();
     this.controller = controller;
     this.setStatus(this.attempt === 0 ? "connecting" : "reconnecting");
@@ -126,16 +132,15 @@ export class EventStream {
         return;
       }
 
-      if (!response.ok || !response.body) {
-        this.scheduleReconnect();
-        return;
+      if (response.ok && response.body) {
+        this.attempt = 0;
+        this.setStatus("open");
+        await this.read(response.body);
       }
-
-      this.attempt = 0;
-      this.setStatus("open");
-      await this.read(response.body);
     } catch {
       /* Aborts are our own stop(); anything else is a dropped socket. */
+    } finally {
+      this.inFlight = false;
     }
 
     if (!controller.signal.aborted) this.scheduleReconnect();

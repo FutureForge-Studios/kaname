@@ -679,6 +679,17 @@ export const job = z.object({
 });
 export type Job = z.infer<typeof job>;
 
+/**
+ * A job log is not a paginated list: the drawer wants the whole thing
+ * in order, and the SSE bridge appends to it. So it has its own cap,
+ * well above the list cap, and a cursor for "only what I have not seen".
+ */
+export const jobLogQuery = z.object({
+  per_page: z.coerce.number().int().min(1).max(5000).default(2000),
+  since_seq: z.coerce.number().int().min(0).optional(),
+});
+export type JobLogQuery = z.infer<typeof jobLogQuery>;
+
 export const jobListQueryExtra = z.object({
   status: jobStatus.optional(),
   type: jobType.optional(),

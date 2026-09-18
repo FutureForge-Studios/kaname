@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { and, asc, desc, eq, sql } from "@kaname/db";
+import { and, asc, desc, eq, gt, sql } from "@kaname/db";
 import { jobLogs, jobs, servers } from "@kaname/db/schema";
-import { idParam, jobListQueryExtra, listQuery } from "@kaname/contract";
+import { idParam, jobListQueryExtra, jobLogQuery, listQuery } from "@kaname/contract";
 import { helpers, item, list, offset, paginate, parseParams, parseQuery } from "../http/plugin.js";
 import { notFound } from "../lib/errors.js";
 import { combine, scopeFilter } from "./_shared.js";
@@ -68,7 +68,7 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/jobs/:id/logs", async (req, reply) => {
     const { id } = parseParams(req, idParam);
-    const q = parseQuery(req, listQuery.pick({ per_page: true }));
+    const q = parseQuery(req, jobLogQuery);
     helpers(req).authorize("infra.servers:read");
 
     const job = await req.ctx.queue.get(id);
@@ -78,9 +78,13 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
     const rows = await req.ctx.db
       .select()
       .from(jobLogs)
-      .where(eq(jobLogs.jobId, id))
+      .where(
+        q.since_seq === undefined
+          ? eq(jobLogs.jobId, id)
+          : and(eq(jobLogs.jobId, id), gt(jobLogs.seq, q.since_seq)),
+      )
       .orderBy(asc(jobLogs.seq))
-      .limit(q.per_page ?? 500);
+      .limit(q.per_page);
 
     return item(
       reply,
