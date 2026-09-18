@@ -537,11 +537,12 @@ control plane is not reachable from here."
   else
     actual="$(openssl dgst -sha256 -r "$tmp/kanamed" | cut -d' ' -f1)"
   fi
-  [ -n "$expected" ] && [ "$expected" = "$actual" ] ||
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
     die "the downloaded agent does not match the checksum the control plane published
 (expected ${expected:-nothing}, got $actual). Nothing was installed. A truncated
 download or something on the path between this host and $1 changed the file;
 run this again, and if it repeats, look at what sits between the two."
+  fi
   log "    checksum verified"
 
   # Stopped first: replacing a running binary in place is what breaks a
