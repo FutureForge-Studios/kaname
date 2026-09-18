@@ -33,7 +33,11 @@ import (
  * this machine's identity.
  * ------------------------------------------------------------------ */
 
-const version = "0.1.0"
+// Set by the build: `-ldflags "-X main.version=<release>"`. A binary
+// nobody stamped says so, rather than claiming to be a release it is
+// not — the control plane compares this string against the manifest to
+// decide whether an update landed.
+var version = "0.0.0-dev"
 
 const (
 	metricsInterval = 15 * time.Second

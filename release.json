@@ -1,0 +1,8 @@
+{
+  "breaking": false,
+  "destructive": false,
+  "security": false,
+  "adds_config": [],
+  "min_upgrade_from": null,
+  "summary": ""
+}
