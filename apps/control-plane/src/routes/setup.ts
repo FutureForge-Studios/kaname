@@ -1,16 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { eq } from "@kaname/db";
-import {
-  notificationChannels,
-  roles,
-  servers,
-  settings,
-  userRoles,
-  users,
-} from "@kaname/db/schema";
+import { notificationChannels, servers, settings } from "@kaname/db/schema";
 import {
   assessPassword,
   createOwnerInput,
+  passwordContext,
   setInstanceNameInput,
   setupPreferencesInput,
   setupTokenInput,
@@ -21,6 +15,7 @@ import { ApiException, conflict } from "../lib/errors.js";
 import {
   claimSetupToken,
   clearSetupCookie,
+  createOwner,
   hasOwner,
   isSetupAuthorized,
   issueSetupCookie,
@@ -29,11 +24,12 @@ import {
   readSetupState,
   requireNoOwner,
   requireSetupOpen,
-  retireSetupTokens,
   saveProgress,
 } from "../services/setup.js";
 import { setSessionCookie } from "./auth.js";
 import { issueEnrollmentToken } from "./servers.js";
+import { saveSmtpSettings } from "../services/notifications.js";
+import { DEFAULT_NOTIFICATION_EVENTS } from "@kaname/contract";
 
 /* ------------------------------------------------------------------ *
  * Onboarding.
@@ -79,7 +75,7 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
   /* ----------------------------- welcome ---------------------------- */
 
   app.post("/setup/welcome", async (req, reply) => {
-    await requireSetupOpen(req);
+    await requireSetupOpen(req, reply);
 
     const health = await readSetupHealth(req.ctx);
     // Screen one is not skippable past a failure (spec 2.2). On an
@@ -104,13 +100,13 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
   /* ------------------------------ owner ----------------------------- */
 
   app.post("/setup/owner", SETUP_RATE_LIMIT, async (req, reply) => {
-    await requireNoOwner(req);
+    await requireNoOwner(req, reply);
     const body = parseBody(req, createOwnerInput);
 
     const email = body.email.trim().toLowerCase();
     // Server-side, always. A client-side regex is a hint to the person
     // typing; this is the check that decides.
-    const assessment = assessPassword(body.password, [body.name, email, email.split("@")[0] ?? ""]);
+    const assessment = assessPassword(body.password, passwordContext(body.name, body.email));
     if (!assessment.ok) {
       throw new ApiException("validation_failed", "That password is not strong enough.", {
         fields: { password: assessment.problems.join(" ") },
@@ -118,28 +114,15 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
-    const [owner] = await req.ctx.db
-      .insert(users)
-      .values({
+    const owner = await createOwner(
+      req.ctx,
+      {
         email,
         name: body.name.trim(),
         passwordHash: await req.ctx.auth.hashPassword(body.password),
-        status: "active",
-      })
-      .returning({ id: users.id, name: users.name, email: users.email });
-    if (!owner) throw new Error("failed to create the owner account");
-
-    const ownerRole = await req.ctx.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(eq(roles.slug, "owner"))
-      .limit(1);
-    if (!ownerRole[0]) throw new Error("the owner role is missing; bootstrap did not run");
-    await req.ctx.db.insert(userRoles).values({ userId: owner.id, roleId: ownerRole[0].id });
-
-    // The token existed to prove the caller ran the installer. There is
-    // now an account, so it is spent whether or not it was used again.
-    await retireSetupTokens(req.ctx, req.ip ?? null);
+      },
+      req.ip ?? null,
+    );
     clearSetupCookie(req, reply);
 
     const session = await req.ctx.auth.createSession(owner.id, {
@@ -164,7 +147,7 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
   /* ---------------------------- instance ---------------------------- */
 
   app.post("/setup/instance", async (req, reply) => {
-    await requireSetupOpen(req);
+    await requireSetupOpen(req, reply);
     await requireSignedIn(req);
     const body = parseBody(req, setInstanceNameInput);
 
@@ -180,6 +163,7 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
       .insert(settings)
       .values({ key: "panel", value: panel })
       .onConflictDoUpdate({ target: settings.key, set: { value: panel, updatedAt: new Date() } });
+    await saveProgress(req.ctx, { instance_named: true });
 
     await req.ctx.audit.record({
       actor: actor(req),
@@ -206,7 +190,7 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
    * exists, at which point ordinary enrollment takes over.
    */
   app.post("/setup/pair", SETUP_RATE_LIMIT, async (req, reply) => {
-    await requireNoOwner(req);
+    await requireNoOwner(req, reply);
     const body = parseBody(req, registerServerInput);
 
     const name = body.name.trim();
@@ -244,7 +228,7 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/setup/server", async (req, reply) => {
-    await requireSetupOpen(req);
+    await requireSetupOpen(req, reply);
     const principal = await requireSignedIn(req);
     const body = parseBody(req, registerServerInput);
 
@@ -290,7 +274,7 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/setup/server/confirm", async (req, reply) => {
-    await requireSetupOpen(req);
+    await requireSetupOpen(req, reply);
     await requireSignedIn(req);
 
     const state = await readSetupState(req.ctx, { authorized: true });
@@ -311,7 +295,7 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
   /* --------------------------- preferences -------------------------- */
 
   app.post("/setup/preferences", async (req, reply) => {
-    await requireSetupOpen(req);
+    await requireSetupOpen(req, reply);
     await requireSignedIn(req);
     const body = parseBody(req, setupPreferencesInput);
 
@@ -331,21 +315,53 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
         .onConflictDoUpdate({ target: settings.key, set: { value: acme, updatedAt: new Date() } });
     }
 
+    if (body.smtp) {
+      await saveSmtpSettings(
+        req.ctx,
+        body.smtp,
+        req.principal?.kind === "user" ? req.principal.id : null,
+      );
+    }
+
     if (body.notification.kind !== "none") {
       const target =
         body.notification.kind === "email" ? body.notification.address : body.notification.url;
-      await req.ctx.db.insert(notificationChannels).values({
-        name: body.notification.kind === "email" ? "Operators" : "Webhook",
+      const name = body.notification.kind === "email" ? "Operators" : "Webhook";
+      // Re-running the step (the browser was closed, the request was
+      // retried) must not stack up duplicate channels.
+      const existing = await req.ctx.db
+        .select({ id: notificationChannels.id })
+        .from(notificationChannels)
+        .where(eq(notificationChannels.name, name))
+        .limit(1);
+      const values = {
+        name,
         kind: body.notification.kind,
         config: { target },
         // Enough to be useful on day one without being noisy: the things
         // an operator would want a phone call about.
-        events: ["job_failed", "server_offline", "backup_failed", "certificate_expiring"],
+        events: [...DEFAULT_NOTIFICATION_EVENTS],
         enabled: true,
-      });
+      };
+      if (existing[0]) {
+        await req.ctx.db
+          .update(notificationChannels)
+          .set({ ...values, updatedAt: new Date() })
+          .where(eq(notificationChannels.id, existing[0].id));
+      } else {
+        await req.ctx.db.insert(notificationChannels).values(values);
+      }
+      req.ctx.notifications.invalidate();
     }
 
-    await saveProgress(req.ctx, { preferences_done: true });
+    // The domain is applied on the last screen, not here: naming the
+    // panel restarts the control plane, and that should interrupt setup
+    // once, at the end. Kept server-side so a reload in between does
+    // not lose it.
+    await saveProgress(req.ctx, {
+      preferences_done: true,
+      pending_domain: body.panel_domain?.trim().toLowerCase() || null,
+    });
 
     await req.ctx.audit.record({
       actor: actor(req),
@@ -362,7 +378,7 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
   /* ---------------------------- complete ---------------------------- */
 
   app.post("/setup/complete", async (req, reply) => {
-    await requireSetupOpen(req);
+    await requireSetupOpen(req, reply);
     await requireSignedIn(req);
 
     const completedAt = new Date().toISOString();
@@ -370,6 +386,9 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
       welcome_ack: true,
       server_ack: true,
       preferences_done: true,
+      // Handed to /settings/address by the last screen; not an intent
+      // to carry past the flow that recorded it.
+      pending_domain: null,
       completed_at: completedAt,
     });
 

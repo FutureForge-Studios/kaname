@@ -58,6 +58,37 @@ export function helpers(req: FastifyRequest): RouteHelpers {
   };
 }
 
+/* ----------------------------- cookies ---------------------------- */
+
+/**
+ * Whether a cookie set on this request may carry the Secure flag and
+ * the `__Host-` prefix. Decided per request rather than per process: an
+ * install answers on its IP over plain HTTP and, once a domain is set,
+ * on that name over HTTPS as well. A browser refuses a Secure cookie
+ * from the first origin, so choosing by how the request arrived is what
+ * keeps sign-in working on both at once. Fastify trusts the proxy, so
+ * `protocol` reflects Caddy's x-forwarded-proto.
+ */
+export function secureCookie(req: FastifyRequest): boolean {
+  const policy = req.ctx.config.secureCookies;
+  return policy === "auto" ? req.protocol === "https" : policy === "always";
+}
+
+/** The session cookie a response to this request sets or clears. */
+export function sessionCookieName(req: FastifyRequest): string {
+  return secureCookie(req) ? req.ctx.config.secureCookieName : req.ctx.config.cookieName;
+}
+
+/**
+ * A cookie by either of its names, the `__Host-` one first. Which name
+ * a browser holds depends on the origin it signed in on, and the same
+ * account may be signed in on both.
+ */
+export function readCookie(req: FastifyRequest, base: string): string | undefined {
+  const jar = req.cookies as Record<string, string | undefined> | undefined;
+  return jar?.[`__Host-${base}`] ?? jar?.[base];
+}
+
 /* --------------------------- validation --------------------------- */
 
 export function parseBody<T extends ZodTypeAny>(req: FastifyRequest, schema: T): z.infer<T> {
@@ -132,9 +163,7 @@ export async function registerRequestContext(app: FastifyInstance, ctx: AppConte
       return;
     }
 
-    const cookie = (req.cookies as Record<string, string | undefined> | undefined)?.[
-      ctx.config.cookieName
-    ];
+    const cookie = readCookie(req, ctx.config.cookieName);
     if (cookie) {
       req.principal = await ctx.auth.principalFromSessionToken(cookie);
     }

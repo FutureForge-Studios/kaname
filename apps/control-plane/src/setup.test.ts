@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import pino from "pino";
 import { createDb, type DbHandle } from "@kaname/db";
+import { users } from "@kaname/db/schema";
 import { migrateHandle } from "@kaname/db/migrate";
 import type { PairingInstructions, SetupState } from "@kaname/contract";
 import { loadConfig, resetConfigForTests } from "./config.js";
@@ -111,16 +112,44 @@ describe("first-run setup", () => {
     expect(JSON.parse(res.body).error.fields.token).toBeTruthy();
   });
 
+  it("still asks for the token once the installer's has expired", async () => {
+    await ctx.db.execute("update setup_tokens set expires_at = now() - interval '1 minute'");
+    try {
+      // The form has to stay on screen: every step still demands the
+      // token, and the remedy (a restart mints another) is shown next
+      // to the field rather than hidden behind a health check.
+      const state = body<SetupState>(await get("/api/v1/setup/state"));
+      expect(state.token_required).toBe(true);
+      expect(state.token_live).toBe(false);
+
+      const res = await post("/api/v1/setup/token", { token: SETUP_TOKEN });
+      expect(res.statusCode).toBe(401);
+      expect(JSON.parse(res.body).error.fields.token).toBe("expired");
+    } finally {
+      await ctx.db.execute("update setup_tokens set expires_at = now() + interval '1 day'");
+    }
+  });
+
   it("accepts the installer's token and authorises the flow", async () => {
     const res = await post("/api/v1/setup/token", { token: SETUP_TOKEN });
     expect(res.statusCode, res.body).toBe(200);
     expect(body<SetupState>(res).authorized).toBe(true);
+
+    // The cookie lives as long as the token it stands in for, and
+    // survives a closed browser: "finish after a coffee" is the promise.
+    const cookie = res.cookies.find((c) => c.name === "kaname_setup");
+    expect(cookie?.expires).toBeInstanceOf(Date);
+    const hours = (cookie!.expires!.getTime() - Date.now()) / 3_600_000;
+    expect(hours).toBeGreaterThan(23);
+    expect(hours).toBeLessThanOrEqual(24);
   });
 
   it("acknowledges the install check and moves to the account step", async () => {
     const res = await post("/api/v1/setup/welcome");
     expect(res.statusCode, res.body).toBe(200);
     expect(body<SetupState>(res).step).toBe("owner");
+    // Every authorised step re-issues the cookie, so its clock slides.
+    expect(res.cookies.some((c) => c.name === "kaname_setup" && c.value)).toBe(true);
   });
 
   it("refuses a weak password server-side, with the reason on the field", async () => {
@@ -150,24 +179,75 @@ describe("first-run setup", () => {
     expect(JSON.parse(res.body).error.fields.password).toContain("Do not reuse");
   });
 
-  it("creates the owner account and signs it in", async () => {
-    const res = await post("/api/v1/setup/owner", {
+  it("creates the owner account exactly once, even when asked twice at the same moment", async () => {
+    const payload = {
       name: "Ada Lovelace",
       email: "ada@example.com",
       password: OWNER_PASSWORD,
       password_confirmation: OWNER_PASSWORD,
-    });
+    };
+    // Two tabs, one token, both submitted: the check and the insert are
+    // one transaction under a lock, so the second answers 409 rather
+    // than minting a second Owner or tripping over the email index.
+    const [first, second] = await Promise.all([
+      post("/api/v1/setup/owner", payload),
+      post("/api/v1/setup/owner", payload),
+    ]);
+    const statuses = [first.statusCode, second.statusCode].sort();
+    expect(statuses, `${first.body}\n${second.body}`).toEqual([200, 409]);
 
-    expect(res.statusCode, res.body).toBe(200);
+    const res = first.statusCode === 200 ? first : second;
     const state = body<SetupState>(res);
     expect(state.has_owner).toBe(true);
     expect(state.step).toBe("instance");
+
+    expect((await ctx.db.select({ id: users.id }).from(users)).length).toBe(1);
 
     // The session cookie arrives with the account, so the remaining
     // steps run as that account rather than as the installer's token.
     const session = await get("/api/v1/auth/session");
     expect(session.statusCode).toBe(200);
     expect(JSON.parse(session.body).data.user.email).toBe("ada@example.com");
+  });
+
+  it("chooses the session cookie by how the request arrived", async () => {
+    const login = (headers: Record<string, string>) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/auth/login",
+        payload: { email: "ada@example.com", password: OWNER_PASSWORD },
+        headers,
+      });
+
+    // Behind Caddy on the domain: HTTPS, so the __Host- cookie is legal.
+    const https = await login({ "x-forwarded-proto": "https" });
+    expect(https.statusCode, https.body).toBe(200);
+    const secure = https.cookies.find((c) => c.name === "__Host-kaname_session");
+    expect(secure?.secure).toBe(true);
+    expect(https.cookies.some((c) => c.name === "kaname_session")).toBe(false);
+
+    // On the IP over plain HTTP: a browser would refuse a Secure cookie,
+    // so the plain one is the only one that can keep sign-in working.
+    const http = await login({});
+    expect(http.statusCode, http.body).toBe(200);
+    const plain = http.cookies.find((c) => c.name === "kaname_session");
+    expect(plain?.value).toBeTruthy();
+    expect(plain?.secure).toBeFalsy();
+    expect(http.cookies.some((c) => c.name.startsWith("__Host-"))).toBe(false);
+
+    // Either cookie authenticates, whichever origin presents it.
+    for (const cookie of [
+      `__Host-kaname_session=${secure!.value}`,
+      `kaname_session=${plain!.value}`,
+    ]) {
+      const session = await app.inject({
+        method: "GET",
+        url: "/api/v1/auth/session",
+        headers: { cookie },
+      });
+      expect(session.statusCode, cookie).toBe(200);
+      expect(JSON.parse(session.body).data.user.email).toBe("ada@example.com");
+    }
   });
 
   it("cannot be claimed a second time", async () => {
@@ -194,6 +274,14 @@ describe("first-run setup", () => {
       payload: { instance_name: "Not Mine" },
     });
     expect(res.statusCode).toBe(401);
+  });
+
+  it("does not loop the step when the instance is named after the product", async () => {
+    // "Kaname" is also the seeded default, which is why the step used to
+    // infer "not yet named" from it and send the operator round again.
+    const res = await post("/api/v1/setup/instance", { instance_name: "Kaname" });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(body<SetupState>(res).step).toBe("server");
   });
 
   it("names the instance", async () => {
@@ -228,17 +316,34 @@ describe("first-run setup", () => {
     await post("/api/v1/setup/server", { name: "edge-01" });
     expect((await post("/api/v1/setup/server/confirm")).statusCode).toBe(200);
 
+    const typo = await post("/api/v1/setup/preferences", {
+      update_tier: "notify",
+      notification: { kind: "none" },
+      panel_domain: "not a domain",
+    });
+    // Refused now, on the field, rather than after the restart it costs.
+    expect(typo.statusCode).toBe(422);
+    expect(JSON.parse(typo.body).error.fields.panel_domain).toBeTruthy();
+
     const prefs = await post("/api/v1/setup/preferences", {
       update_tier: "notify",
       update_interval: "daily",
       notification: { kind: "none" },
+      panel_domain: "Panel.Example.COM",
     });
     expect(prefs.statusCode, prefs.body).toBe(200);
     expect(body<SetupState>(prefs).step).toBe("done");
+    // Held server-side until the last screen applies it, so a reload in
+    // between does not quietly drop the domain the operator typed.
+    expect(body<SetupState>(prefs).pending_domain).toBe("panel.example.com");
+    expect(body<SetupState>(await get("/api/v1/setup/state")).pending_domain).toBe(
+      "panel.example.com",
+    );
 
     const done = await post("/api/v1/setup/complete");
     expect(done.statusCode, done.body).toBe(200);
     expect(body<SetupState>(done).needs_onboarding).toBe(false);
+    expect(body<SetupState>(done).pending_domain).toBeNull();
   });
 
   it("refuses every setup mutation once it has completed", async () => {

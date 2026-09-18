@@ -1,9 +1,10 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { and, desc, eq, sql } from "@kaname/db";
-import { servers, settings, setupTokens, users } from "@kaname/db/schema";
+import { and, desc, eq, sql, type Database } from "@kaname/db";
+import { roles, servers, settings, setupTokens, userRoles, users } from "@kaname/db/schema";
 import type { SetupHealth, SetupState, SetupStep } from "@kaname/contract";
 import { constantTimeEquals, hashToken, hmac } from "../lib/crypto.js";
 import { ApiException } from "../lib/errors.js";
+import { readCookie, secureCookie } from "../http/plugin.js";
 import type { AppContext } from "../context.js";
 
 /* ------------------------------------------------------------------ *
@@ -23,8 +24,13 @@ import type { AppContext } from "../context.js";
  */
 export const SETUP_TOKEN_TTL_MINUTES = 24 * 60;
 
-/** How long the cookie minted by /setup/token stands in for the token. */
-const SETUP_COOKIE_TTL_MS = 60 * 60_000;
+/**
+ * How long the cookie minted by /setup/token stands in for the token.
+ * The same as the token's own life: the cookie is worthless without a
+ * live token row, so a shorter clock added no safety and signed people
+ * out of setup mid-coffee.
+ */
+const SETUP_COOKIE_TTL_MS = SETUP_TOKEN_TTL_MINUTES * 60_000;
 const SETUP_COOKIE_BASE = "kaname_setup";
 
 /* ------------------------------------------------------------------ *
@@ -40,15 +46,24 @@ const SETUP_COOKIE_BASE = "kaname_setup";
 
 export interface SetupProgress {
   welcome_ack: boolean;
+  /**
+   * Recorded explicitly because the name itself cannot say: "Kaname" is
+   * both the seeded default and a name somebody may genuinely pick.
+   */
+  instance_named: boolean;
   server_ack: boolean;
   preferences_done: boolean;
+  /** A domain chosen on the preferences step, applied on the last one. */
+  pending_domain: string | null;
   completed_at: string | null;
 }
 
 const EMPTY_PROGRESS: SetupProgress = {
   welcome_ack: false,
+  instance_named: false,
   server_ack: false,
   preferences_done: false,
+  pending_domain: null,
   completed_at: null,
 };
 
@@ -76,7 +91,11 @@ export async function saveProgress(
  * ------------------------------------------------------------------ */
 
 export async function hasOwner(ctx: AppContext): Promise<boolean> {
-  const counted = await ctx.db.select({ n: sql<number>`count(*)::int` }).from(users);
+  return anyUser(ctx.db);
+}
+
+async function anyUser(db: Database): Promise<boolean> {
+  const counted = await db.select({ n: sql<number>`count(*)::int` }).from(users);
   return (counted[0]?.n ?? 0) > 0;
 }
 
@@ -101,7 +120,12 @@ export async function readSetupState(
     servers_registered: counts.registered,
     servers_connected: counts.connected,
     authorized: opts.authorized,
-    token_required: !owner && pendingToken,
+    // Required until an owner exists, whether or not one is currently
+    // claimable: saying "no token needed" while every step still
+    // demanded one hid the form and left nowhere to type it.
+    token_required: !owner,
+    token_live: !owner && pendingToken,
+    pending_domain: progress.pending_domain,
   };
 }
 
@@ -115,7 +139,9 @@ function deriveStep(
   if (progress.completed_at) return "done";
   if (!progress.welcome_ack) return "welcome";
   if (!owner) return "owner";
-  if (!instanceName) return "instance";
+  // The name alone still counts for instances set up before the flag
+  // existed; the flag is what stops "Kaname" looping the step.
+  if (!progress.instance_named && !instanceName) return "instance";
   if (!progress.server_ack || counts.registered === 0) return "server";
   if (!progress.preferences_done) return "preferences";
   return "done";
@@ -243,11 +269,72 @@ export async function claimSetupToken(
 }
 
 /** Called once the owner account exists: the token has done its job. */
-export async function retireSetupTokens(ctx: AppContext, ip: string | null): Promise<void> {
-  await ctx.db
+export async function retireSetupTokens(db: Database, ip: string | null): Promise<void> {
+  await db
     .update(setupTokens)
     .set({ usedAt: new Date(), usedIp: ip ?? undefined })
     .where(sql`${setupTokens.usedAt} is null`);
+}
+
+/* ------------------------------------------------------------------ *
+ * The owner account
+ * ------------------------------------------------------------------ */
+
+/** Arbitrary and fixed: every control plane on this database takes the same lock. */
+const OWNER_LOCK_KEY = 7_248_017;
+
+/**
+ * The one-way door itself. The "nobody exists yet" check and the insert
+ * happen under one lock in one transaction, because two tabs submitting
+ * together — or two people who both saw the token — would otherwise
+ * both pass the check and both get an Owner. The password is hashed by
+ * the caller first; holding the lock across argon2 would be a way to
+ * stall every other request for nothing.
+ */
+export async function createOwner(
+  ctx: AppContext,
+  input: { email: string; name: string; passwordHash: string },
+  ip: string | null,
+): Promise<{ id: string; name: string; email: string }> {
+  try {
+    return await ctx.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(${sql.raw(String(OWNER_LOCK_KEY))})`);
+      if (await anyUser(tx)) throw setupAlreadyClaimed();
+
+      const [owner] = await tx
+        .insert(users)
+        .values({ ...input, status: "active" })
+        .returning({ id: users.id, name: users.name, email: users.email });
+      if (!owner) throw new Error("failed to create the owner account");
+
+      const ownerRole = await tx
+        .select({ id: roles.id })
+        .from(roles)
+        .where(eq(roles.slug, "owner"))
+        .limit(1);
+      if (!ownerRole[0]) throw new Error("the owner role is missing; bootstrap did not run");
+      await tx.insert(userRoles).values({ userId: owner.id, roleId: ownerRole[0].id });
+
+      // The token existed to prove the caller ran the installer. There
+      // is now an account, so it is spent whether or not it was used
+      // again — and spent in the same transaction, so a rolled-back
+      // account does not leave a dead token behind.
+      await retireSetupTokens(tx, ip);
+      return owner;
+    });
+  } catch (err) {
+    // An insert that reached the unique index anyway is the same story
+    // as a failed re-check: somebody else got there first.
+    if (isUniqueViolation(err)) throw setupAlreadyClaimed();
+    throw err;
+  }
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  for (let cursor = err; cursor && typeof cursor === "object"; cursor = (cursor as Error).cause) {
+    if ((cursor as { code?: unknown }).code === "23505") return true;
+  }
+  return false;
 }
 
 async function tokenHashIsLive(ctx: AppContext, tokenHash: string): Promise<boolean> {
@@ -274,8 +361,9 @@ async function tokenHashIsLive(ctx: AppContext, tokenHash: string): Promise<bool
  * the browser's memory.
  * ------------------------------------------------------------------ */
 
-export function setupCookieName(ctx: AppContext): string {
-  return ctx.config.secureCookies ? `__Host-${SETUP_COOKIE_BASE}` : SETUP_COOKIE_BASE;
+/** Per request, like the session cookie: `__Host-` is only legal over HTTPS. */
+export function setupCookieName(req: FastifyRequest): string {
+  return secureCookie(req) ? `__Host-${SETUP_COOKIE_BASE}` : SETUP_COOKIE_BASE;
 }
 
 export function issueSetupCookie(
@@ -283,31 +371,31 @@ export function issueSetupCookie(
   reply: FastifyReply,
   tokenHash: string,
 ): void {
-  const body = Buffer.from(`${tokenHash}.${Date.now() + SETUP_COOKIE_TTL_MS}`, "utf8").toString(
-    "base64url",
-  );
-  reply.setCookie(setupCookieName(req.ctx), `${body}.${hmac(req.ctx.config.masterKey, body)}`, {
+  const expiresAt = Date.now() + SETUP_COOKIE_TTL_MS;
+  const body = Buffer.from(`${tokenHash}.${expiresAt}`, "utf8").toString("base64url");
+  reply.setCookie(setupCookieName(req), `${body}.${hmac(req.ctx.config.masterKey, body)}`, {
     httpOnly: true,
     sameSite: "lax",
-    secure: req.ctx.config.secureCookies,
+    secure: secureCookie(req),
     path: "/",
+    // Persisted, not a session cookie: "finish after a coffee" includes
+    // closing the browser in between.
+    expires: new Date(expiresAt),
   });
 }
 
 export function clearSetupCookie(req: FastifyRequest, reply: FastifyReply): void {
-  reply.clearCookie(setupCookieName(req.ctx), {
+  reply.clearCookie(setupCookieName(req), {
     httpOnly: true,
     sameSite: "lax",
-    secure: req.ctx.config.secureCookies,
+    secure: secureCookie(req),
     path: "/",
   });
 }
 
 /** The token hash the cookie carries, if its signature and expiry hold. */
 export function readSetupCookie(req: FastifyRequest): string | null {
-  const raw = (req.cookies as Record<string, string | undefined> | undefined)?.[
-    setupCookieName(req.ctx)
-  ];
+  const raw = readCookie(req, SETUP_COOKIE_BASE);
   if (!raw) return null;
 
   const [body, signature] = raw.split(".");
@@ -329,18 +417,26 @@ export function readSetupCookie(req: FastifyRequest): string | null {
  * user, because the remaining steps are ordinary authenticated work.
  */
 export async function isSetupAuthorized(req: FastifyRequest): Promise<boolean> {
-  if (req.principal) return true;
+  return (await setupAuthorization(req)) !== null;
+}
+
+type SetupAuthorization =
+  { via: "session" } | { via: "header" } | { via: "cookie"; tokenHash: string };
+
+/** How this request is allowed to act on setup, or null. */
+async function setupAuthorization(req: FastifyRequest): Promise<SetupAuthorization | null> {
+  if (req.principal) return { via: "session" };
 
   // The installer is not a browser and has no cookie jar, so it presents
   // the token it generated on every call instead.
   const header = req.headers["x-kaname-setup-token"];
   if (typeof header === "string" && header.length > 0) {
-    return tokenHashIsLive(req.ctx, hashToken(header.trim()));
+    return (await tokenHashIsLive(req.ctx, hashToken(header.trim()))) ? { via: "header" } : null;
   }
 
   const tokenHash = readSetupCookie(req);
-  if (!tokenHash) return false;
-  return tokenHashIsLive(req.ctx, tokenHash);
+  if (!tokenHash) return null;
+  return (await tokenHashIsLive(req.ctx, tokenHash)) ? { via: "cookie", tokenHash } : null;
 }
 
 /**
@@ -348,15 +444,20 @@ export async function isSetupAuthorized(req: FastifyRequest): Promise<boolean> {
  * answered before authorisation, so a completed instance says the same
  * thing to everyone and a stale token learns nothing from asking.
  */
-export async function requireSetupOpen(req: FastifyRequest): Promise<void> {
+export async function requireSetupOpen(req: FastifyRequest, reply: FastifyReply): Promise<void> {
   const progress = await loadProgress(req.ctx);
   if (progress.completed_at) throw setupAlreadyComplete();
-  if (!(await isSetupAuthorized(req))) throw setupTokenRequired();
+
+  const authorization = await setupAuthorization(req);
+  if (!authorization) throw setupTokenRequired();
+  // The cookie's clock restarts on every use, so a tab left open on one
+  // screen is not signed out of setup while the token behind it lives.
+  if (authorization.via === "cookie") issueSetupCookie(req, reply, authorization.tokenHash);
 }
 
 /** Additionally forbids the step once an owner exists. */
-export async function requireNoOwner(req: FastifyRequest): Promise<void> {
-  await requireSetupOpen(req);
+export async function requireNoOwner(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  await requireSetupOpen(req, reply);
   if (await hasOwner(req.ctx)) throw setupAlreadyClaimed();
 }
 

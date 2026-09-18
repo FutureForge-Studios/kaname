@@ -31,22 +31,29 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
 
   if (pathname === "/setup") {
-    if (!state.needs_onboarding) return redirect(request, "/login");
+    // Finished: the owner who reloads lands in the panel, not on a
+    // sign-in form for a session they already hold.
+    if (!state.needs_onboarding) return redirect(request, state.authorized ? "/" : "/login");
     // Once an account exists, only that account may finish setting the
     // instance up. An anonymous visitor gets the login form — never a
-    // second pass at creating an owner.
-    if (state.has_owner && !state.authorized) return redirect(request, "/login");
+    // second pass at creating an owner — and is brought back here by it.
+    if (state.has_owner && !state.authorized) return redirect(request, "/login", "/setup");
     return NextResponse.next();
   }
 
   if (!state.has_owner) return redirect(request, "/setup");
+  // An owner whose wizard is unfinished — a lapsed session, a sign-in
+  // from another machine — resumes it rather than landing on a panel
+  // with no name, no confirmed server and completed_at never set.
+  if (state.needs_onboarding && state.authorized) return redirect(request, "/setup");
   return NextResponse.next();
 }
 
-function redirect(request: NextRequest, pathname: string): NextResponse {
+function redirect(request: NextRequest, pathname: string, next?: string): NextResponse {
   const url = request.nextUrl.clone();
   url.pathname = pathname;
   url.search = "";
+  if (next) url.searchParams.set("next", next);
   return NextResponse.redirect(url);
 }
 
