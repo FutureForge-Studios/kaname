@@ -97,14 +97,18 @@ export default function MailLogsPage() {
     </Tabs>
   );
 
-  return tab === "tail" ? <TailView tabs={tabs} /> : <SearchView tabs={tabs} />;
+  return tab === "tail" ? (
+    <TailView tabs={tabs} />
+  ) : (
+    <SearchView tabs={tabs} onOpenTail={() => setTab("tail")} />
+  );
 }
 
 /* ------------------------------------------------------------------ *
  * Search
  * ------------------------------------------------------------------ */
 
-function SearchView({ tabs }: { tabs: React.ReactNode }) {
+function SearchView({ tabs, onOpenTail }: { tabs: React.ReactNode; onOpenTail: () => void }) {
   const selection = useServerSelection({ permission: "email.logs:read" });
 
   const state = useResourceListState({
@@ -276,9 +280,17 @@ function SearchView({ tabs }: { tabs: React.ReactNode }) {
         density="compact"
         searchPlaceholder="Subject, sender or message text"
         errorContext="Mail logs"
+        /* Nothing writes this table yet (README, Status): an empty search is
+         * the absence of ingestion, not a quiet hour, and should say so
+         * rather than let an operator hunt for a broken filter. */
         emptyIcon={ScrollText}
-        emptyTitle="Nothing in this window"
-        emptyDescription="No message matching these filters passed through in the selected range."
+        emptyTitle="Kaname does not ingest the transport log yet"
+        emptyDescription="Searchable history needs the log collected from each host, which is not built. The live tail reads it straight off the host."
+        emptyAction={
+          <Button variant="primary" size="sm" icon={Send} onClick={onOpenTail}>
+            Open live tail
+          </Button>
+        }
         filters={
           <>
             <Select
@@ -592,6 +604,8 @@ function EntryDrawer({ entry, onClose }: { entry: MailLogEntry | null; onClose: 
 
 const MAX_TAIL_LINES = 5000;
 const TAIL_BACKLOG = 200;
+/** A busy relay writes several lines per message; React gets them in batches. */
+const TAIL_FLUSH_MS = 120;
 
 const STATUS_LABELS: Record<MailTailStatus, string> = {
   connecting: "Connecting",
@@ -625,6 +639,8 @@ function TailView({ tabs }: { tabs: React.ReactNode }) {
   const [filter, setFilter] = React.useState("");
   const [applied, setApplied] = React.useState("");
   const [running, setRunning] = React.useState(true);
+  /** Bumped by Retry so the effect reopens a tail even when nothing else changed. */
+  const [session, setSession] = React.useState(0);
   const [status, setStatus] = React.useState<MailTailStatus>("closed");
   const [error, setError] = React.useState<ApiError | null>(null);
   const [lines, setLines] = React.useState<LogLine[]>([]);
@@ -642,25 +658,52 @@ function TailView({ tabs }: { tabs: React.ReactNode }) {
       return;
     }
 
-    return openMailLogTail({
+    const buffer: LogLine[] = [];
+    const flush = setInterval(() => {
+      if (buffer.length === 0) return;
+      const batch = buffer.splice(0, buffer.length);
+      setLines((current) => {
+        const next = current.concat(batch);
+        return next.length > MAX_TAIL_LINES ? next.slice(next.length - MAX_TAIL_LINES) : next;
+      });
+    }, TAIL_FLUSH_MS);
+
+    const stop = openMailLogTail({
       serverId,
       lines: TAIL_BACKLOG,
       ...(applied ? { q: applied } : {}),
       onStatusChange: setStatus,
-      onError: setError,
+      onError: (failure) => {
+        setError(failure);
+        // The stream is closed; the toggle has to say so or the next
+        // click would "stop" something that already stopped.
+        setRunning(false);
+      },
       onLine: (record: MailLogLine) => {
         sequence.current += 1;
-        const id = `mail-${sequence.current}`;
-        setLines((current) => {
-          const next = [
-            ...current,
-            { id, ts: record.ts, level: levelFor(record.line), message: record.line },
-          ];
-          return next.length > MAX_TAIL_LINES ? next.slice(next.length - MAX_TAIL_LINES) : next;
+        buffer.push({
+          id: `mail-${sequence.current}`,
+          ts: record.ts,
+          level: levelFor(record.line),
+          message: record.line,
+        });
+      },
+      onGap: () => {
+        sequence.current += 1;
+        buffer.push({
+          id: `mail-${sequence.current}`,
+          ts: new Date().toISOString(),
+          level: "notice",
+          message: "— reconnected; lines written in between are not shown —",
         });
       },
     });
-  }, [applied, running, serverId]);
+
+    return () => {
+      clearInterval(flush);
+      stop();
+    };
+  }, [applied, running, serverId, session]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -747,6 +790,7 @@ function TailView({ tabs }: { tabs: React.ReactNode }) {
             onRetry={() => {
               setError(null);
               setRunning(true);
+              setSession((current) => current + 1);
             }}
             context="Live tail"
           />
