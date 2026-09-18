@@ -18,7 +18,13 @@ import {
   sshConfigs,
   updateRuns,
 } from "@kaname/db/schema";
-import type { AgentMethod, JobType, MailAuthCheck, MethodParams } from "@kaname/contract";
+import type {
+  AgentMethod,
+  JobType,
+  MailAuthCheck,
+  MethodParams,
+  MethodResult,
+} from "@kaname/contract";
 import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
 import { MailAuthChecker } from "../services/mail-auth.js";
 import type { JobContext, JobHandler, JobWorker } from "./worker.js";
@@ -871,17 +877,49 @@ export function registerJobHandlers(worker: JobWorker): void {
         .set({ status: "running", startedAt: new Date() })
         .where(eq(backupRuns.id, run_id));
 
-      const handle = ctx.hub.stream(
-        serverId,
-        "backup.run",
-        rest,
-        (d) => void ctx.log_("info", d.trim()),
-        {
-          timeoutMs: ctx.job.timeoutMs,
-          signal: ctx.signal,
-        },
-      );
-      const snapshot = await handle.done;
+      let snapshot: MethodResult<"backup.run">;
+      try {
+        const handle = ctx.hub.stream(
+          serverId,
+          "backup.run",
+          rest,
+          (d) => void ctx.log_("info", d.trim()),
+          {
+            timeoutMs: ctx.job.timeoutMs,
+            signal: ctx.signal,
+          },
+        );
+        snapshot = await handle.done;
+      } catch (err) {
+        // The run row mirrors the job: an unreachable host is a wait, so
+        // the run goes back to queued with the job; anything else is a
+        // failure the backups page and the notifier both need to see —
+        // left as "running" it would sit there forever.
+        if (err instanceof AgentOfflineError) {
+          await ctx.db
+            .update(backupRuns)
+            .set({ status: "queued", startedAt: null })
+            .where(eq(backupRuns.id, run_id));
+          throw err;
+        }
+        const message =
+          err instanceof AgentRpcError
+            ? err.agentError.message
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        await ctx.db
+          .update(backupRuns)
+          .set({ status: "failed", error: message.slice(0, 2000), finishedAt: new Date() })
+          .where(eq(backupRuns.id, run_id));
+        ctx.events.publish(
+          "backups",
+          "backup.failed",
+          { run_id, server_id: serverId, error: message },
+          serverId,
+        );
+        throw err;
+      }
 
       const [point] = await ctx.db
         .insert(restorePoints)

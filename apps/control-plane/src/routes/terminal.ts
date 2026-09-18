@@ -10,8 +10,9 @@ import {
   type TerminalSessionRecord,
   type TerminalSessionTicket,
 } from "@kaname/contract";
-import { MAX_DEADLINE_MS, ptyResizeParams } from "@kaname/contract/agent";
+import { MAX_DEADLINE_MS, ptyResizeParams, type MethodResult } from "@kaname/contract/agent";
 import { z } from "zod";
+import { AgentOfflineError, AgentRpcError, type StreamHandle } from "../agent/hub.js";
 import {
   helpers,
   item,
@@ -388,34 +389,61 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
     const flushTimer = setInterval(() => void flush(), RECORDING_FLUSH_MS);
     flushTimer.unref?.();
 
-    const handle = req.ctx.hub.stream(
-      session.serverId,
-      "pty.open",
-      {
-        cols,
-        rows: rows_,
-        user: session.posixUser,
-        term: "xterm-256color",
-      },
-      async (data, encoding) => {
-        const buf = encoding === "base64" ? Buffer.from(data, "base64") : Buffer.from(data, "utf8");
-        bytesOut += buf.length;
-        record("out", buf);
-        if (socket.readyState !== socket.OPEN) return;
-        socket.send(buf);
-        // ws has no drain event for its send queue, so a browser that has
-        // stopped reading shows up here; waiting holds the PTY output too.
-        while (
-          socket.bufferedAmount > OUTPUT_HIGH_WATER_BYTES &&
-          socket.readyState === socket.OPEN
-        ) {
-          await new Promise((resolve) => setTimeout(resolve, OUTPUT_POLL_MS));
-        }
-      },
-      // A shell stays open as long as the operator wants it open, up to
-      // the six hours the agent itself allows a request.
-      { timeoutMs: MAX_DEADLINE_MS },
-    );
+    let handle: StreamHandle<MethodResult<"pty.open">>;
+    try {
+      handle = openPty();
+    } catch (err) {
+      // The agent dropped between the connectivity check above and here,
+      // or does not offer a shell. Nothing is wired to the socket yet, so
+      // this is the last place to tell the browser and settle the row
+      // instead of leaving a hung terminal, a live flush timer and a
+      // session that reads as still open.
+      clearInterval(flushTimer);
+      await req.ctx.db
+        .update(terminalSessions)
+        .set({ endedAt: new Date(), durationMs: 0, updatedAt: new Date() })
+        .where(eq(terminalSessions.id, session.id));
+      const reason =
+        err instanceof AgentOfflineError
+          ? `the agent on ${server.name} is not connected`
+          : err instanceof AgentRpcError
+            ? err.agentError.message
+            : "could not open a shell on the host";
+      socket.close(4503, reason.slice(0, 120));
+      return;
+    }
+
+    function openPty(): StreamHandle<MethodResult<"pty.open">> {
+      return req.ctx.hub.stream(
+        session.serverId,
+        "pty.open",
+        {
+          cols,
+          rows: rows_,
+          user: session.posixUser,
+          term: "xterm-256color",
+        },
+        async (data, encoding) => {
+          const buf =
+            encoding === "base64" ? Buffer.from(data, "base64") : Buffer.from(data, "utf8");
+          bytesOut += buf.length;
+          record("out", buf);
+          if (socket.readyState !== socket.OPEN) return;
+          socket.send(buf);
+          // ws has no drain event for its send queue, so a browser that has
+          // stopped reading shows up here; waiting holds the PTY output too.
+          while (
+            socket.bufferedAmount > OUTPUT_HIGH_WATER_BYTES &&
+            socket.readyState === socket.OPEN
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, OUTPUT_POLL_MS));
+          }
+        },
+        // A shell stays open as long as the operator wants it open, up to
+        // the six hours the agent itself allows a request.
+        { timeoutMs: MAX_DEADLINE_MS },
+      );
+    }
 
     const finish = async (reason: string, code = 1000): Promise<void> => {
       if (closed) return;

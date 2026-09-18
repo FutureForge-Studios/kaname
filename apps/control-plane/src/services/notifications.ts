@@ -74,6 +74,8 @@ export interface NotificationMessage {
   /** Same key inside `windowMs` is sent once. */
   key?: string;
   windowMs?: number;
+  /** When set, only these channel ids may receive it (an alert rule's own routing). */
+  channels?: readonly string[];
   data?: Record<string, unknown>;
 }
 
@@ -235,8 +237,12 @@ export class NotificationService {
     if (message.key && !this.remember(message.key, message.windowMs ?? HOUR)) return;
 
     const wanted = new Set<string>([message.event, ...(message.also ?? [])]);
+    const only = message.channels && message.channels.length > 0 ? new Set(message.channels) : null;
     const channels = (await this.loadChannels()).filter(
-      (channel) => channel.enabled && [...wanted].some((event) => channel.events.has(event)),
+      (channel) =>
+        channel.enabled &&
+        (!only || only.has(channel.id)) &&
+        [...wanted].some((event) => channel.events.has(event)),
     );
     if (channels.length === 0) return;
 
@@ -813,16 +819,22 @@ export class NotificationService {
         });
         return;
       }
-      case "alert.firing": {
+      case "alert.firing":
+      case "alert.resolved": {
+        const resolved = event.type === "alert.resolved";
+        const channels = Array.isArray(data.channels)
+          ? data.channels.filter((id): id is string => typeof id === "string")
+          : undefined;
         this.notify({
           event: "alert_firing",
-          title: String(data.title ?? data.message ?? "Alert firing"),
+          title: `${resolved ? "Resolved: " : ""}${String(data.title ?? data.rule_name ?? "Alert")}${where}`,
           body: String(data.message ?? ""),
           serverId,
           serverName: name,
           href: "/monitoring",
-          key: `alert:${String(data.alert_id ?? data.rule_id ?? "")}:${serverId ?? ""}`,
-          windowMs: 30 * 60_000,
+          key: `alert:${String(data.alert_id ?? "")}:${event.type}`,
+          windowMs: 6 * HOUR,
+          channels,
           data,
         });
         return;
