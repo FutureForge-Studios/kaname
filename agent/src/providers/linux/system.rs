@@ -16,7 +16,9 @@ use async_trait::async_trait;
 
 use super::Shared;
 use super::common::{epoch_rfc3339, invalid, now_rfc3339, split_lines, unsupported};
-use super::exec::{self, ExecOptions, has_binary, is_exit_code, read_trimmed, run, run_raw, run_stream, run_with};
+use super::exec::{
+    self, ExecOptions, has_binary, is_exit_code, read_trimmed, run, run_raw, run_stream, run_with,
+};
 use crate::providers::*;
 
 /// Pseudo filesystems carry no capacity an operator can act on, so they
@@ -210,7 +212,12 @@ impl System for SystemOps {
             run(
                 ctx,
                 "systemd-run",
-                &[&on_active, "--timer-property=AccuracySec=1s", "systemctl", "reboot"],
+                &[
+                    &on_active,
+                    "--timer-property=AccuracySec=1s",
+                    "systemctl",
+                    "reboot",
+                ],
             )
             .await?;
             return Ok(());
@@ -273,7 +280,9 @@ impl System for SystemOps {
             check_package_name(name)?;
         }
 
-        let mut options = ExecOptions::default().c_locale().env("DEBIAN_FRONTEND", "noninteractive");
+        let mut options = ExecOptions::default()
+            .c_locale()
+            .env("DEBIAN_FRONTEND", "noninteractive");
         match manager {
             PackageManager::Apt => {
                 options.name = "apt-get".into();
@@ -416,8 +425,11 @@ async fn upgradable_packages(ctx: &Ctx, manager: PackageManager) -> PResult<Hash
                 Err(err) if is_exit_code(&err, 100) => exec_output_of(&err),
                 Err(err) => return Err(err),
             };
-            let secure = match run_with(ctx, ExecOptions::new(bin, ["-q", "--security", "check-update"]).c_locale())
-                .await
+            let secure = match run_with(
+                ctx,
+                ExecOptions::new(bin, ["-q", "--security", "check-update"]).c_locale(),
+            )
+            .await
             {
                 Ok(out) => Some(out),
                 Err(err) if is_exit_code(&err, 100) => Some(exec_output_of(&err)),
@@ -468,7 +480,9 @@ async fn reboot_required(ctx: &Ctx) -> bool {
 pub fn parse_tabbed_packages(out: &str) -> Vec<PackageInfo> {
     let mut packages = Vec::with_capacity(128);
     for line in split_lines(out) {
-        let Some((name, version)) = line.split_once('\t') else { continue };
+        let Some((name, version)) = line.split_once('\t') else {
+            continue;
+        };
         if name.is_empty() {
             continue;
         }
@@ -485,7 +499,9 @@ pub fn parse_tabbed_packages(out: &str) -> Vec<PackageInfo> {
 pub fn parse_apk_installed(out: &str) -> Vec<PackageInfo> {
     let mut packages = Vec::with_capacity(64);
     for line in split_lines(out) {
-        let Some((name, version)) = split_apk_version(line.trim()) else { continue };
+        let Some((name, version)) = split_apk_version(line.trim()) else {
+            continue;
+        };
         packages.push(PackageInfo {
             name: name.to_string(),
             installed_version: version.to_string(),
@@ -582,7 +598,9 @@ pub fn parse_apk_upgradable(out: &str) -> HashMap<String, PackageInfo> {
         if fields.len() < 3 || fields[1] != "<" {
             continue;
         }
-        let Some((name, installed)) = split_apk_version(fields[0]) else { continue };
+        let Some((name, installed)) = split_apk_version(fields[0]) else {
+            continue;
+        };
         pending.insert(
             name.to_string(),
             PackageInfo {
@@ -650,7 +668,11 @@ pub fn check_package_name(name: &str) -> PResult<()> {
     for c in name.bytes() {
         match c {
             b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'_' | b'+' | b':' => {}
-            _ => return Err(invalid(format!("package name {name:?} contains an illegal character"))),
+            _ => {
+                return Err(invalid(format!(
+                    "package name {name:?} contains an illegal character"
+                )));
+            }
         }
     }
     Ok(())
@@ -676,7 +698,9 @@ pub async fn collect_disks(ctx: &Ctx) -> PResult<Vec<DiskUsage>> {
         if seen.contains(&mount) {
             continue;
         }
-        let Ok(stat) = nix::sys::statvfs::statvfs(mount.as_str()) else { continue };
+        let Ok(stat) = nix::sys::statvfs::statvfs(mount.as_str()) else {
+            continue;
+        };
         let block = stat.fragment_size() as u64;
         let total = stat.blocks() as u64 * block;
         if total == 0 {
@@ -740,7 +764,8 @@ fn unescape_mount(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 3 < bytes.len() {
-            if let Ok(code) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 4]).unwrap_or("x"), 8) {
+            if let Ok(code) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 4]).unwrap_or("x"), 8)
+            {
                 out.push(code);
                 i += 4;
                 continue;
@@ -800,7 +825,8 @@ pub fn os_family(platform: &str, release: &HashMap<String, String>) -> String {
     // The distributions gopsutil folds into a family by name.
     let family = match platform.as_str() {
         "linuxmint" | "raspbian" | "pop" | "kali" | "devuan" | "elementary" | "neon" | "zorin" => "debian",
-        "centos" | "rocky" | "almalinux" | "ol" | "oracle" | "amzn" | "scientific" | "cloudlinux" | "redhat" => "rhel",
+        "centos" | "rocky" | "almalinux" | "ol" | "oracle" | "amzn" | "scientific" | "cloudlinux"
+        | "redhat" => "rhel",
         "manjaro" | "endeavouros" | "artix" | "garuda" => "arch",
         "postmarketos" => "alpine",
         _ => "",
@@ -829,7 +855,10 @@ fn timezone() -> String {
             return target[index + "zoneinfo/".len()..].to_string();
         }
     }
-    std::env::var("TZ").ok().filter(|tz| !tz.is_empty()).unwrap_or_else(|| "UTC".to_string())
+    std::env::var("TZ")
+        .ok()
+        .filter(|tz| !tz.is_empty())
+        .unwrap_or_else(|| "UTC".to_string())
 }
 
 /// The hypervisor or container runtime this host runs under, read the way
@@ -856,7 +885,10 @@ pub fn detect_virtualization(read: &dyn Fn(&str) -> String, exists: &dyn Fn(&str
         return "vmware".into();
     }
     let cpuinfo = read("/proc/cpuinfo");
-    if cpuinfo.contains("QEMU Virtual CPU") || cpuinfo.contains("Common KVM processor") || cpuinfo.contains("Common 32-bit KVM processor") {
+    if cpuinfo.contains("QEMU Virtual CPU")
+        || cpuinfo.contains("Common KVM processor")
+        || cpuinfo.contains("Common 32-bit KVM processor")
+    {
         return "kvm".into();
     }
     if exists("/proc/bc") && !exists("/proc/vz") {
@@ -866,7 +898,10 @@ pub fn detect_virtualization(read: &dyn Fn(&str) -> String, exists: &dyn Fn(&str
         return "openvz".into();
     }
     let status = read("/proc/self/status");
-    if status.lines().any(|l| l.starts_with("VxID:") && l.split_whitespace().nth(1).is_some_and(|v| v != "0")) {
+    if status
+        .lines()
+        .any(|l| l.starts_with("VxID:") && l.split_whitespace().nth(1).is_some_and(|v| v != "0"))
+    {
         return "linux-vserver".into();
     }
     let cgroup = read("/proc/1/cgroup");
@@ -944,10 +979,14 @@ pub fn parse_cpuinfo(raw: &str) -> (String, usize) {
     let mut model = String::new();
     let mut cores = 0;
     for line in raw.lines() {
-        let Some((key, value)) = line.split_once(':') else { continue };
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
         match key.trim() {
             "processor" => cores += 1,
-            "model name" | "Model" | "cpu model" | "Hardware" if model.is_empty() => model = value.trim().to_string(),
+            "model name" | "Model" | "cpu model" | "Hardware" if model.is_empty() => {
+                model = value.trim().to_string()
+            }
             _ => {}
         }
     }
@@ -964,9 +1003,13 @@ fn read_meminfo() -> HashMap<String, u64> {
 pub fn parse_meminfo(raw: &str) -> HashMap<String, u64> {
     let mut out = HashMap::new();
     for line in raw.lines() {
-        let Some((key, rest)) = line.split_once(':') else { continue };
+        let Some((key, rest)) = line.split_once(':') else {
+            continue;
+        };
         let mut fields = rest.split_whitespace();
-        let Some(value) = fields.next().and_then(|v| v.parse::<u64>().ok()) else { continue };
+        let Some(value) = fields.next().and_then(|v| v.parse::<u64>().ok()) else {
+            continue;
+        };
         let multiplier = match fields.next() {
             Some("kB") => 1024,
             Some("mB") => 1024 * 1024,
@@ -983,7 +1026,10 @@ pub fn memory_figures(meminfo: &HashMap<String, u64>) -> (u64, u64, u64) {
     let get = |k: &str| meminfo.get(k).copied().unwrap_or(0);
     let total = get("MemTotal");
     let cached = get("Cached") + get("SReclaimable");
-    let used = total.saturating_sub(get("MemFree")).saturating_sub(get("Buffers")).saturating_sub(cached);
+    let used = total
+        .saturating_sub(get("MemFree"))
+        .saturating_sub(get("Buffers"))
+        .saturating_sub(cached);
     (used, total, cached)
 }
 
@@ -1001,7 +1047,11 @@ fn count_processes() -> usize {
     std::fs::read_dir("/proc")
         .map(|dir| {
             dir.filter_map(Result::ok)
-                .filter(|e| e.file_name().to_str().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit())))
+                .filter(|e| {
+                    e.file_name()
+                        .to_str()
+                        .is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()))
+                })
                 .count()
         })
         .unwrap_or(0)
@@ -1018,7 +1068,11 @@ pub fn parse_cpu_times(stat: &str) -> Vec<CpuTimes> {
             }
             continue;
         }
-        let values: Vec<u64> = line.split_whitespace().skip(1).filter_map(|v| v.parse().ok()).collect();
+        let values: Vec<u64> = line
+            .split_whitespace()
+            .skip(1)
+            .filter_map(|v| v.parse().ok())
+            .collect();
         if values.len() < 4 {
             continue;
         }
@@ -1047,7 +1101,9 @@ pub fn parse_net_dev(raw: &str) -> (u64, u64) {
     let mut rx = 0u64;
     let mut tx = 0u64;
     for line in raw.lines().skip(2) {
-        let Some((_, rest)) = line.split_once(':') else { continue };
+        let Some((_, rest)) = line.split_once(':') else {
+            continue;
+        };
         let fields: Vec<&str> = rest.split_whitespace().collect();
         if fields.len() < 9 {
             continue;
@@ -1119,8 +1175,14 @@ mod tests {
 
     #[test]
     fn apk_versions_split_on_the_last_two_dashes() {
-        assert_eq!(split_apk_version("openssl-3.1.4-r5"), Some(("openssl", "3.1.4-r5")));
-        assert_eq!(split_apk_version("py3-pip-23.3.1-r0"), Some(("py3-pip", "23.3.1-r0")));
+        assert_eq!(
+            split_apk_version("openssl-3.1.4-r5"),
+            Some(("openssl", "3.1.4-r5"))
+        );
+        assert_eq!(
+            split_apk_version("py3-pip-23.3.1-r0"),
+            Some(("py3-pip", "23.3.1-r0"))
+        );
         assert_eq!(split_apk_version("nodash"), None);
         assert_eq!(split_apk_version("one-dash"), None);
     }
@@ -1174,7 +1236,10 @@ Conf libssl3 (3.0.11-1~deb12u2 Debian-Security:12/stable-security [amd64])\n";
         assert_eq!(pending.len(), 2);
         assert!(pending["openssl"].security);
         assert!(!pending["vim-minimal"].security);
-        assert_eq!(pending["openssl"].available_version.as_deref(), Some("1:3.0.7-24.el9"));
+        assert_eq!(
+            pending["openssl"].available_version.as_deref(),
+            Some("1:3.0.7-24.el9")
+        );
     }
 
     #[test]
@@ -1186,7 +1251,10 @@ Conf libssl3 (3.0.11-1~deb12u2 Debian-Security:12/stable-security [amd64])\n";
 
         let pacman = parse_pacman_upgradable("linux 6.6.1.arch1-1 -> 6.6.2.arch1-1\n");
         assert_eq!(pacman["linux"].installed_version, "6.6.1.arch1-1");
-        assert_eq!(pacman["linux"].available_version.as_deref(), Some("6.6.2.arch1-1"));
+        assert_eq!(
+            pacman["linux"].available_version.as_deref(),
+            Some("6.6.2.arch1-1")
+        );
     }
 
     #[test]
@@ -1201,7 +1269,8 @@ Conf libssl3 (3.0.11-1~deb12u2 Debian-Security:12/stable-security [amd64])\n";
     #[test]
     fn cpu_times_turn_into_interval_percentages() {
         let before = "cpu  100 0 100 800 0 0 0 0 0 0\ncpu0 50 0 50 400 0 0 0 0 0 0\ncpu1 50 0 50 400 0 0 0 0 0 0\nintr 1 2 3\n";
-        let after = "cpu  200 0 200 1400 0 0 0 0 0 0\ncpu0 150 0 150 500 0 0 0 0 0 0\ncpu1 50 0 50 900 0 0 0 0 0 0\n";
+        let after =
+            "cpu  200 0 200 1400 0 0 0 0 0 0\ncpu0 150 0 150 500 0 0 0 0 0 0\ncpu1 50 0 50 900 0 0 0 0 0 0\n";
         let then = parse_cpu_times(before);
         let now = parse_cpu_times(after);
         assert_eq!(then.len(), 3);
@@ -1225,8 +1294,14 @@ Conf libssl3 (3.0.11-1~deb12u2 Debian-Security:12/stable-security [amd64])\n";
 
     #[test]
     fn loadavg_btime_netdev_and_diskstats_parse() {
-        assert_eq!(parse_loadavg("0.52 0.58 0.59 2/1234 5678\n"), Some((0.52, 0.58, 0.59)));
-        assert_eq!(parse_btime("cpu 1 2 3 4\nbtime 1700000000\nprocesses 5\n"), Some(1700000000));
+        assert_eq!(
+            parse_loadavg("0.52 0.58 0.59 2/1234 5678\n"),
+            Some((0.52, 0.58, 0.59))
+        );
+        assert_eq!(
+            parse_btime("cpu 1 2 3 4\nbtime 1700000000\nprocesses 5\n"),
+            Some(1700000000)
+        );
 
         let net = "Inter-|   Receive                                                |  Transmit\n face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n    lo: 1000 10 0 0 0 0 0 0 2000 20 0 0 0 0 0 0\n  eth0: 5000 50 0 0 0 0 0 0 7000 70 0 0 0 0 0 0\n";
         assert_eq!(parse_net_dev(net), (6000, 9000));
@@ -1265,13 +1340,16 @@ Conf libssl3 (3.0.11-1~deb12u2 Debian-Security:12/stable-security [amd64])\n";
 
     #[test]
     fn cpuinfo_yields_model_and_core_count() {
-        let raw = "processor\t: 0\nmodel name\t: AMD EPYC 7B13\nprocessor\t: 1\nmodel name\t: AMD EPYC 7B13\n";
+        let raw =
+            "processor\t: 0\nmodel name\t: AMD EPYC 7B13\nprocessor\t: 1\nmodel name\t: AMD EPYC 7B13\n";
         assert_eq!(parse_cpuinfo(raw), ("AMD EPYC 7B13".to_string(), 2));
     }
 
     #[test]
     fn virtualization_reads_the_kernels_traces() {
-        let files: HashMap<&str, &str> = [("/proc/modules", "kvm_intel 1 0\nkvm 2 1\n")].into_iter().collect();
+        let files: HashMap<&str, &str> = [("/proc/modules", "kvm_intel 1 0\nkvm 2 1\n")]
+            .into_iter()
+            .collect();
         let read = |p: &str| files.get(p).map(|s| s.to_string()).unwrap_or_default();
         let exists = |p: &str| p == "/.dockerenv";
         // The module list is checked before the docker marker, as gopsutil does.

@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use x509_parser::prelude::*;
+use x509_parser::public_key::PublicKey;
 
 use super::Shared;
 use super::common::{epoch_rfc3339, invalid, unsupported};
@@ -37,7 +38,9 @@ impl Certs for CertOps {
         let mut seen: HashSet<String> = HashSet::new();
 
         for root in [LETS_ENCRYPT_DIR, INSTALLED_CERT_DIR] {
-            let Ok(entries) = std::fs::read_dir(root) else { continue };
+            let Ok(entries) = std::fs::read_dir(root) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 ctx.check()?;
                 if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -117,7 +120,13 @@ impl Certs for CertOps {
             args.push(domain.clone());
         }
 
-        let out = run_stream(ctx, s.as_ref(), ExecOptions::new("certbot", args).c_locale(), None).await?;
+        let out = run_stream(
+            ctx,
+            s.as_ref(),
+            ExecOptions::new("certbot", args).c_locale(),
+            None,
+        )
+        .await?;
         if !out.success() {
             return Err(exec_error("certbot", &out.stdout, out.code));
         }
@@ -135,11 +144,22 @@ impl Certs for CertOps {
         self.0.require(cap::CERTBOT)?;
         check_domain(&p.subject)?;
 
-        let mut args = vec!["renew".to_string(), "--non-interactive".into(), "--cert-name".into(), p.subject.clone()];
+        let mut args = vec![
+            "renew".to_string(),
+            "--non-interactive".into(),
+            "--cert-name".into(),
+            p.subject.clone(),
+        ];
         if p.force {
             args.push("--force-renewal".into());
         }
-        let out = run_stream(ctx, s.as_ref(), ExecOptions::new("certbot", args).c_locale(), None).await?;
+        let out = run_stream(
+            ctx,
+            s.as_ref(),
+            ExecOptions::new("certbot", args).c_locale(),
+            None,
+        )
+        .await?;
         if !out.success() {
             return Err(exec_error("certbot", &out.stdout, out.code));
         }
@@ -179,7 +199,9 @@ impl Certs for CertOps {
         ctx.check()?;
         check_domain(&p.subject)?;
         if let Err(err) = parse_pem_chain(p.certificate_pem.as_bytes()) {
-            return Err(invalid(format!("certificate_pem is not a valid certificate: {err}")));
+            return Err(invalid(format!(
+                "certificate_pem is not a valid certificate: {err}"
+            )));
         }
         if !has_pem_block(p.key_pem.as_bytes()) {
             return Err(invalid("key_pem does not contain a PEM block"));
@@ -215,7 +237,8 @@ impl Certs for CertOps {
 
 pub fn read_certificate(target: &str) -> PResult<CertificateInfo> {
     let raw = std::fs::read(target).map_err(|e| wrap_fs_error(target, e))?;
-    let mut info = parse_certificate(&raw).map_err(|e| ProviderError::internal(format!("parse {target}: {e}")))?;
+    let mut info =
+        parse_certificate(&raw).map_err(|e| ProviderError::internal(format!("parse {target}: {e}")))?;
     info.path = target.to_string();
     Ok(info)
 }
@@ -232,7 +255,9 @@ pub fn parse_certificate(raw: &[u8]) -> Result<CertificateInfo, String> {
             match name {
                 GeneralName::DNSName(dns) => sans.push(dns.to_string()),
                 GeneralName::IPAddress(octets) => match octets.len() {
-                    4 => sans.push(std::net::Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]).to_string()),
+                    4 => sans.push(
+                        std::net::Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]).to_string(),
+                    ),
                     16 => {
                         let mut bytes = [0u8; 16];
                         bytes.copy_from_slice(octets);
@@ -330,8 +355,12 @@ pub fn check_domain(domain: &str) -> PResult<()> {
 
 pub fn check_revocation_reason(reason: &str) -> PResult<()> {
     match reason {
-        "unspecified" | "keycompromise" | "affiliationchanged" | "superseded" | "cessationofoperation" => Ok(()),
-        _ => Err(invalid(format!("reason {reason:?} is not an ACME revocation reason"))),
+        "unspecified" | "keycompromise" | "affiliationchanged" | "superseded" | "cessationofoperation" => {
+            Ok(())
+        }
+        _ => Err(invalid(format!(
+            "reason {reason:?} is not an ACME revocation reason"
+        ))),
     }
 }
 
@@ -405,11 +434,15 @@ J495I26xRc5NBFXqMOpmEml3IFzmOJrEB9iI8P4=
 
     #[test]
     fn the_first_certificate_block_is_the_leaf() {
-        let chain = format!("-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n{EC_CERT}{RSA_CERT}");
+        let chain = format!(
+            "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n{EC_CERT}{RSA_CERT}"
+        );
         let info = parse_certificate(chain.as_bytes()).unwrap();
         assert_eq!(info.subject, "example.test");
         assert!(parse_pem_chain(b"not pem at all").is_err());
-        assert!(has_pem_block(b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"));
+        assert!(has_pem_block(
+            b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"
+        ));
         assert!(!has_pem_block(b"nope"));
     }
 

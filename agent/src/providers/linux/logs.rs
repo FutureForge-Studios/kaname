@@ -20,7 +20,7 @@ use parking_lot::Mutex;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader};
 
 use super::Shared;
-use super::common::{epoch_rfc3339, invalid, not_found, now_rfc3339, rfc3339, split_lines};
+use super::common::{epoch_rfc3339, invalid, not_found, now_rfc3339, split_lines};
 use super::exec::{ExecOptions, run_stream};
 use super::paths::validate_path;
 use super::services::{check_unit_pattern, qualify};
@@ -90,7 +90,9 @@ impl Logs for LogOps {
             add_file(path, label.to_string(), kind, &mut sources);
         }
         for dir in ["/var/log/nginx", "/var/log/apache2", "/var/log/caddy"] {
-            let Ok(matches) = glob::glob(&format!("{dir}/*.log")) else { continue };
+            let Ok(matches) = glob::glob(&format!("{dir}/*.log")) else {
+                continue;
+            };
             let base_dir = Path::new(dir).file_name().and_then(|n| n.to_str()).unwrap_or(dir);
             for entry in matches.flatten() {
                 let path = entry.to_string_lossy().into_owned();
@@ -101,7 +103,11 @@ impl Logs for LogOps {
                 } else {
                     "file"
                 };
-                let base = entry.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+                let base = entry
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
                 add_file(&path, format!("{base_dir} {base}"), kind, &mut sources);
             }
         }
@@ -187,7 +193,11 @@ pub struct JournalQuery {
 pub async fn journal(ctx: &Ctx, q: JournalQuery, stream: Option<StreamRef>) -> PResult<Vec<LogRecord>> {
     let lines = if q.lines <= 0 { 200 } else { q.lines as usize };
 
-    let mut args = vec!["--no-pager".to_string(), "--output=json".to_string(), format!("--lines={lines}")];
+    let mut args = vec![
+        "--no-pager".to_string(),
+        "--output=json".to_string(),
+        format!("--lines={lines}"),
+    ];
     if let Some(priority) = journal_priority(&q.filter.level) {
         args.push(format!("--priority={priority}"));
     }
@@ -210,7 +220,13 @@ pub async fn journal(ctx: &Ctx, q: JournalQuery, stream: Option<StreamRef>) -> P
         cancel: child.clone(),
     });
 
-    let result = run_stream(&child, sink.as_ref(), ExecOptions::new("journalctl", args).c_locale(), None).await;
+    let result = run_stream(
+        &child,
+        sink.as_ref(),
+        ExecOptions::new("journalctl", args).c_locale(),
+        None,
+    )
+    .await;
     let backlog = std::mem::take(&mut *sink.backlog.lock());
     if let Some(err) = sink.failure.lock().take() {
         return Err(err);
@@ -251,7 +267,9 @@ impl Stream for JournalSink {
             if line.is_empty() || line.len() > MAX_LOG_LINE {
                 continue;
             }
-            let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(line) else { continue };
+            let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(line) else {
+                continue;
+            };
             let record = journal_record(&parsed, &self.source);
             if !self.filter.matches(&record) {
                 continue;
@@ -654,12 +672,10 @@ pub fn parse_since(value: &str) -> PResult<chrono::DateTime<chrono::Utc>> {
 /// across versions.
 pub fn journal_since(value: &str) -> PResult<String> {
     let parsed = parse_since(value)?;
-    Ok(parsed.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
-}
-
-#[allow(dead_code)]
-fn _rfc3339_is_used(t: chrono::DateTime<chrono::Utc>) -> String {
-    rfc3339(t)
+    Ok(parsed
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string())
 }
 
 #[cfg(test)]
@@ -706,7 +722,10 @@ mod tests {
     #[test]
     fn levels_are_guessed_from_the_text() {
         assert_eq!(guess_level("kernel: panic - not syncing"), "fatal");
-        assert_eq!(guess_level("2024/01/01 [crit] 1#1: *2 SSL_do_handshake()"), "error");
+        assert_eq!(
+            guess_level("2024/01/01 [crit] 1#1: *2 SSL_do_handshake()"),
+            "error"
+        );
         assert_eq!(guess_level("[warn] something"), "warn");
         assert_eq!(guess_level("sshd: Accepted publickey"), "info");
         assert_eq!(guess_level("DEBUG trace"), "debug");
@@ -740,10 +759,22 @@ mod tests {
     #[test]
     fn log_sources_parse_into_kind_and_ref() {
         assert_eq!(parse_log_source("journald").unwrap(), ("journald", String::new()));
-        assert_eq!(parse_log_source("journald:nginx").unwrap(), ("journald", "nginx".into()));
-        assert_eq!(parse_log_source("container:abc").unwrap(), ("container", "abc".into()));
-        assert_eq!(parse_log_source("file:/var/log/syslog").unwrap(), ("file", "/var/log/syslog".into()));
-        assert_eq!(parse_log_source("/var/log/syslog").unwrap(), ("file", "/var/log/syslog".into()));
+        assert_eq!(
+            parse_log_source("journald:nginx").unwrap(),
+            ("journald", "nginx".into())
+        );
+        assert_eq!(
+            parse_log_source("container:abc").unwrap(),
+            ("container", "abc".into())
+        );
+        assert_eq!(
+            parse_log_source("file:/var/log/syslog").unwrap(),
+            ("file", "/var/log/syslog".into())
+        );
+        assert_eq!(
+            parse_log_source("/var/log/syslog").unwrap(),
+            ("file", "/var/log/syslog".into())
+        );
         assert!(parse_log_source("").is_err());
         assert!(parse_log_source("bogus").is_err());
         assert!(parse_log_source("journald:--all").is_err());
@@ -753,7 +784,10 @@ mod tests {
 
     #[test]
     fn since_accepts_stamps_seconds_and_windows() {
-        assert_eq!(parse_since("2024-01-02T03:04:05Z").unwrap().timestamp(), 1704164645);
+        assert_eq!(
+            parse_since("2024-01-02T03:04:05Z").unwrap().timestamp(),
+            1704164645
+        );
         assert_eq!(parse_since("1704164645").unwrap().timestamp(), 1704164645);
         let now = chrono::Utc::now();
         let two_hours = parse_since("-2h").unwrap();
@@ -769,7 +803,9 @@ mod tests {
         let path = dir.path().join("app.log");
         let mut content = String::new();
         for i in 0..5000 {
-            content.push_str(&format!("line {i} with some padding to cross a block boundary\r\n"));
+            content.push_str(&format!(
+                "line {i} with some padding to cross a block boundary\r\n"
+            ));
         }
         std::fs::write(&path, &content).unwrap();
         let (lines, offset) = last_lines(path.to_str().unwrap(), 3).unwrap();
@@ -811,9 +847,13 @@ mod tests {
             failure: Mutex::new(None),
             cancel: Ctx::background(),
         };
-        sink.send(br#"{"MESSAGE":"first","PRIORITY":"6"}"#, Encoding::Utf8).await.unwrap();
+        sink.send(br#"{"MESSAGE":"first","PRIORITY":"6"}"#, Encoding::Utf8)
+            .await
+            .unwrap();
         sink.send(b"not json\n", Encoding::Utf8).await.unwrap();
-        sink.send(br#"{"MESSAGE":"second","PRIORITY":"4"}"#, Encoding::Utf8).await.unwrap();
+        sink.send(br#"{"MESSAGE":"second","PRIORITY":"4"}"#, Encoding::Utf8)
+            .await
+            .unwrap();
         assert_eq!(sink.backlog.lock().len(), 1);
         assert_eq!(sink.backlog.lock()[0].message, "first");
         let sent = capture.0.lock();
