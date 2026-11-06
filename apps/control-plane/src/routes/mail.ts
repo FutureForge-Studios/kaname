@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { and, asc, desc, eq, sql, type Database } from "@kaname/db";
-import { domains, mailAliases, mailDomains, mailServers, mailboxes, servers } from "@kaname/db/schema";
+import {
+  domains,
+  mailAliases,
+  mailDomains,
+  mailServers,
+  mailboxes,
+  servers,
+} from "@kaname/db/schema";
 import {
   adoptMailServerInput,
   createMailAliasInput,
@@ -626,7 +633,11 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
       .innerJoin(servers, eq(mailboxes.serverId, servers.id))
       .where(where);
 
-    return list(reply, rows.map(toMailboxApi), paginate(counted[0]?.total ?? 0, q.page, q.per_page));
+    return list(
+      reply,
+      rows.map(toMailboxApi),
+      paginate(counted[0]?.total ?? 0, q.page, q.per_page),
+    );
   });
 
   app.get("/mailboxes/:id", async (req, reply) => {
@@ -1061,7 +1072,11 @@ interface AliasRow {
   server: ServerRow;
 }
 
-async function loadAlias(req: FastifyRequest, id: string, permission: Permission): Promise<AliasRow> {
+async function loadAlias(
+  req: FastifyRequest,
+  id: string,
+  permission: Permission,
+): Promise<AliasRow> {
   const h = helpers(req);
   h.authorize(permission);
 
@@ -1169,7 +1184,9 @@ async function assertAddressFree(req: FastifyRequest, address: string): Promise<
         mailbox.status === "removing"
           ? "It is being removed; wait for that job to finish."
           : "Pick another local part, or open the existing mailbox.",
-      actions: [{ label: "Open mailbox", href: `/email/mailboxes?q=${encodeURIComponent(address)}` }],
+      actions: [
+        { label: "Open mailbox", href: `/email/mailboxes?q=${encodeURIComponent(address)}` },
+      ],
     });
   }
   const [alias] = await req.ctx.db
@@ -1217,7 +1234,9 @@ export function isUniqueViolation(err: unknown): boolean {
 
 /** The alias addresses delivering to a mailbox, as one array column. */
 function aliasesOf(mailboxId: typeof mailboxes.id) {
-  return sql<string[]>`coalesce((select array_agg(a.address order by a.address) from mail_aliases a where a.mailbox_id = ${mailboxId}), '{}'::text[])`;
+  return sql<
+    string[]
+  >`coalesce((select array_agg(a.address order by a.address) from mail_aliases a where a.mailbox_id = ${mailboxId}), '{}'::text[])`;
 }
 
 async function toMailServerApi(db: Database, row: MailServerRow): Promise<MailServer> {

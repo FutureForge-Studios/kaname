@@ -1,5 +1,14 @@
 import { relations } from "drizzle-orm";
-import { bigint, boolean, index, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import {
+  bigint,
+  boolean,
+  index,
+  jsonb,
+  pgTable,
+  text,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 import type {
   MailCertificateStatus,
   MailCheck,
@@ -169,6 +178,9 @@ export const mailboxesRelations = relations(mailboxes, ({ one, many }) => ({
 }));
 
 export const mailAliasesRelations = relations(mailAliases, ({ one }) => ({
-  mailDomain: one(mailDomains, { fields: [mailAliases.mailDomainId], references: [mailDomains.id] }),
+  mailDomain: one(mailDomains, {
+    fields: [mailAliases.mailDomainId],
+    references: [mailDomains.id],
+  }),
   mailbox: one(mailboxes, { fields: [mailAliases.mailboxId], references: [mailboxes.id] }),
 }));

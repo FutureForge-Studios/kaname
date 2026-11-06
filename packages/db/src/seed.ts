@@ -553,7 +553,8 @@ export async function seedDemo(db: Database): Promise<void> {
           id: "outbound_25",
           label: "Outbound port 25",
           status: "pass",
-          detail: "A connection to a public MX on port 25 succeeded, so direct sending works from here.",
+          detail:
+            "A connection to a public MX on port 25 succeeded, so direct sending works from here.",
           remedy: null,
           help_url: null,
         },
@@ -570,7 +571,8 @@ export async function seedDemo(db: Database): Promise<void> {
           label: "Blocklists",
           status: "fail",
           detail: `${mailIp} is listed on Spamhaus PBL (policy block list), which covers the whole provider range as end-user space.`,
-          remedy: "Request removal of this single address at spamhaus.org/pbl, or ask Vultr to delist the range. Until then, large receivers will refuse mail from it.",
+          remedy:
+            "Request removal of this single address at spamhaus.org/pbl, or ask Vultr to delist the range. Until then, large receivers will refuse mail from it.",
           help_url: "https://yunori.email/server/docs/blocklists",
         },
         {
@@ -655,7 +657,14 @@ export async function seedDemo(db: Database): Promise<void> {
       [],
       false,
     ),
-    dnsRecord("CNAME", "autoconfig.futureforge.dev", `${mailHost}.`, "pass", [`${mailHost}.`], false),
+    dnsRecord(
+      "CNAME",
+      "autoconfig.futureforge.dev",
+      `${mailHost}.`,
+      "pass",
+      [`${mailHost}.`],
+      false,
+    ),
     dnsRecord(
       "SRV",
       "_imaps._tcp.futureforge.dev",
