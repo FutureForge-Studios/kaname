@@ -1027,9 +1027,10 @@ mod tests {
             ("fs.usage", json!({}), ErrorCode::Unsupported),
         ];
         for (method, params, want) in cases {
-            let err = call(&r, method, Some(params.clone()))
-                .await
-                .unwrap_or_else(|_| panic!("{method} {params} was accepted"));
+            let err = match call(&r, method, Some(params.clone())).await {
+                Ok(v) => panic!("{method} {params} was accepted: {v}"),
+                Err(e) => e,
+            };
             assert_eq!(err.code, want, "{method} {params}: {}", err.message);
         }
     }

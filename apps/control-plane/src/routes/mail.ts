@@ -166,6 +166,7 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     await assertNoMailServer(req, server);
 
     const domain = await loadDomainRow(req, body.domain_id);
+    await assertDomainHostsNoMail(req, domain);
     const hostname = body.hostname ?? `mail.${domain.name}`;
 
     const [row] = await req.ctx.db
@@ -482,17 +483,7 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     const mailServer = await installedMailServerFor(req, server);
     const domain = await loadDomainRow(req, body.domain_id);
 
-    const existing = await req.ctx.db
-      .select({ id: mailDomains.id, serverId: mailDomains.serverId })
-      .from(mailDomains)
-      .where(eq(mailDomains.domainId, domain.id))
-      .limit(1);
-    if (existing[0]) {
-      throw conflict(`${domain.name} already hosts mail.`, {
-        summary: "A domain receives mail on one server. Open the existing mail domain instead.",
-        actions: [{ label: "Open mail domain", href: `/email/domains?id=${existing[0].id}` }],
-      });
-    }
+    await assertDomainHostsNoMail(req, domain);
 
     const [row] = await req.ctx.db
       .insert(mailDomains)
@@ -1145,6 +1136,24 @@ async function installedMailServerFor(
     });
   }
   return mailServer;
+}
+
+/** A domain receives mail on one server; a second would split its MX. */
+async function assertDomainHostsNoMail(
+  req: FastifyRequest,
+  domain: { id: string; name: string },
+): Promise<void> {
+  const existing = await req.ctx.db
+    .select({ id: mailDomains.id })
+    .from(mailDomains)
+    .where(eq(mailDomains.domainId, domain.id))
+    .limit(1);
+  if (existing[0]) {
+    throw conflict(`${domain.name} already hosts mail.`, {
+      summary: "A domain receives mail on one server. Open the existing mail domain instead.",
+      actions: [{ label: "Open mail domain", href: `/email/domains?id=${existing[0].id}` }],
+    });
+  }
 }
 
 /** A mailbox and an alias share one address space on the host. */
