@@ -904,7 +904,7 @@ pub fn detect_virtualization(read: &dyn Fn(&str) -> String, exists: &dyn Fn(&str
 
 /* ------------------------------- procfs ------------------------------ */
 
-fn boot_time_secs() -> u64 {
+pub fn boot_time_secs() -> u64 {
     std::fs::read_to_string("/proc/stat")
         .ok()
         .and_then(|s| parse_btime(&s))
