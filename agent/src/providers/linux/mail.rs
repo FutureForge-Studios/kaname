@@ -442,19 +442,16 @@ impl MailOps {
     }
 
     /// `preflight --json` / `doctor --json`: exit 2 means blocking failures
-    /// but the report on stdout is still the answer.
+    /// but the report on stdout is still the answer, so the JSON decides
+    /// and the exit status does not.
     async fn checks(&self, ctx: &Ctx, args: &[&str]) -> PResult<Vec<MailCheck>> {
         let bin = self.bin()?;
         let out = exec::run_raw(ctx, &yunori(&bin, args)).await?;
-        if out.success() || out.code == Some(2) {
-            if let Ok(checks) = parse::checks_json(&out.stdout) {
-                return Ok(checks);
-            }
+        match parse::checks_json(&out.stdout) {
+            Ok(checks) if out.success() || out.code == Some(2) => Ok(checks),
+            Ok(checks) if !out.stdout.trim().is_empty() => Ok(checks),
+            _ => Err(cli_failure(&format!("yunori-mail {}", args[0]), &out, &[])),
         }
-        if let Ok(checks) = parse::checks_json(&out.stdout) {
-            return Ok(checks);
-        }
-        Err(cli_failure(&format!("yunori-mail {}", args[0]), &out, &[]))
     }
 
     async fn service_active(&self, ctx: &Ctx, unit: &str) -> bool {
