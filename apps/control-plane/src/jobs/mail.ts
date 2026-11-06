@@ -1,5 +1,12 @@
 import { eq } from "@kaname/db";
-import { domains, mailAliases, mailDomains, mailServers, mailboxes, servers } from "@kaname/db/schema";
+import {
+  domains,
+  mailAliases,
+  mailDomains,
+  mailServers,
+  mailboxes,
+  servers,
+} from "@kaname/db/schema";
 import type {
   JobType,
   MailCheck,
@@ -167,7 +174,9 @@ export async function syncMailServer(ctx: JobContext, mailServerId: string): Pro
     }
   };
   const doctor = status.installed
-    ? await optional("doctor", () => ctx.hub.call(serverId, "mail.doctor", {}, { signal: ctx.signal }))
+    ? await optional("doctor", () =>
+        ctx.hub.call(serverId, "mail.doctor", {}, { signal: ctx.signal }),
+      )
     : null;
   const certificate = status.installed
     ? await optional("certificate status", () =>
@@ -220,7 +229,8 @@ export async function syncMailServer(ctx: JobContext, mailServerId: string): Pro
     })
     .where(eq(mailServers.id, mailServerId));
 
-  if (hostDomains) await reconcileDomains(ctx, row, serverId, primaryDomain, hostDomains.domains, now);
+  if (hostDomains)
+    await reconcileDomains(ctx, row, serverId, primaryDomain, hostDomains.domains, now);
   if (hostMailboxes) await reconcileMailboxes(ctx, serverId, hostMailboxes.mailboxes, now);
   if (hostAliases) await reconcileAliases(ctx, serverId, hostAliases.aliases, now);
 
@@ -381,7 +391,10 @@ async function reconcileMailboxes(
       .update(mailboxes)
       .set({ status: "error", lastSyncedAt: now, updatedAt: now })
       .where(eq(mailboxes.id, vanished.id));
-    await ctx.log_("warn", `${vanished.address} is no longer on the host; marked error, not deleted`);
+    await ctx.log_(
+      "warn",
+      `${vanished.address} is no longer on the host; marked error, not deleted`,
+    );
   }
 }
 
@@ -426,7 +439,10 @@ async function reconcileAliases(
     const domainName = splitAddress(address)[1];
     const mailDomainId = domainIds.get(domainName);
     if (!mailDomainId) {
-      await ctx.log_("warn", `alias ${address} is on the host but its domain is not known here; skipped`);
+      await ctx.log_(
+        "warn",
+        `alias ${address} is on the host but its domain is not known here; skipped`,
+      );
       continue;
     }
     await ctx.db.insert(mailAliases).values({
@@ -446,11 +462,17 @@ async function reconcileAliases(
       .update(mailAliases)
       .set({ status: "error", updatedAt: now })
       .where(eq(mailAliases.id, vanished.id));
-    await ctx.log_("warn", `alias ${vanished.address} is no longer on the host; marked error, not deleted`);
+    await ctx.log_(
+      "warn",
+      `alias ${vanished.address} is no longer on the host; marked error, not deleted`,
+    );
   }
 }
 
-async function mailDomainIdsByName(ctx: JobContext, serverId: string): Promise<Map<string, string>> {
+async function mailDomainIdsByName(
+  ctx: JobContext,
+  serverId: string,
+): Promise<Map<string, string>> {
   const rows = await ctx.db
     .select({ id: mailDomains.id, name: domains.name })
     .from(mailDomains)
@@ -762,7 +784,10 @@ const domainAdd: JobHandler = async (ctx) => {
       { signal: ctx.signal },
     );
     dnsStatus = await storeDns(ctx, p.mail_domain_id, report);
-    await ctx.log_("info", `${report.records.length} DNS records expected for ${p.name}; status ${dnsStatus}`);
+    await ctx.log_(
+      "info",
+      `${report.records.length} DNS records expected for ${p.name}; status ${dnsStatus}`,
+    );
   } catch (err) {
     if (err instanceof AgentOfflineError) throw err;
     await ctx.log_("warn", `could not read the DNS checklist for ${p.name}: ${describe(err)}`);
@@ -848,7 +873,12 @@ const mailboxRemove: JobHandler = async (ctx) => {
   const serverId = requireServer(ctx);
   const p = params<{ mailbox_id: string; address: string }>(ctx);
   try {
-    await ctx.hub.call(serverId, "mail.mailbox.remove", { address: p.address }, { signal: ctx.signal });
+    await ctx.hub.call(
+      serverId,
+      "mail.mailbox.remove",
+      { address: p.address },
+      { signal: ctx.signal },
+    );
   } catch (err) {
     if (!agentSaid(err, "not_found")) {
       if (!(err instanceof AgentOfflineError)) {

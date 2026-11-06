@@ -92,7 +92,11 @@ beforeAll(async () => {
   } as unknown as JobWorker);
 
   const [domain] = await handle.db
-    .select({ id: mailDomains.id, serverId: mailDomains.serverId, mailServerId: mailDomains.mailServerId })
+    .select({
+      id: mailDomains.id,
+      serverId: mailDomains.serverId,
+      mailServerId: mailDomains.mailServerId,
+    })
     .from(mailDomains)
     .limit(1);
   mailDomainId = domain!.id;
@@ -194,7 +198,9 @@ describe("mail helpers", () => {
 
   it("masks the setup token and any printed password before a line reaches the log", () => {
     expect(
-      redactInstallerLine("Open https://mail.example.com/console/setup#token=abc.DEF-123 to continue"),
+      redactInstallerLine(
+        "Open https://mail.example.com/console/setup#token=abc.DEF-123 to continue",
+      ),
     ).toBe("Open https://mail.example.com/console/setup#token=[redacted] to continue");
     expect(redactInstallerLine("Password (shown once): Tr0ub4dor&3")).toBe(
       "Password (shown once): [redacted]",
@@ -225,8 +231,22 @@ describe("mail.server.sync", () => {
     }));
     hub.answers.set("mail.doctor", () => ({
       checks: [
-        { id: "services", label: "Services", status: "pass", detail: "ok", remedy: null, help_url: null },
-        { id: "ptr", label: "Reverse DNS", status: "warn", detail: "not set", remedy: "set it", help_url: null },
+        {
+          id: "services",
+          label: "Services",
+          status: "pass",
+          detail: "ok",
+          remedy: null,
+          help_url: null,
+        },
+        {
+          id: "ptr",
+          label: "Reverse DNS",
+          status: "warn",
+          detail: "not set",
+          remedy: "set it",
+          help_url: null,
+        },
       ],
     }));
     hub.answers.set("mail.certificate.status", () => ({
@@ -265,7 +285,10 @@ describe("mail.server.sync", () => {
     const { result, logs } = await run("mail.server.sync", { mail_server_id: mailServerRowId });
     await expect(result).resolves.toEqual({ ok: true });
 
-    const [server] = await handle.db.select().from(mailServers).where(eq(mailServers.id, mailServerRowId));
+    const [server] = await handle.db
+      .select()
+      .from(mailServers)
+      .where(eq(mailServers.id, mailServerRowId));
     expect(server).toMatchObject({
       status: "installed",
       version: "0.3.2",
@@ -296,7 +319,11 @@ describe("mail.server.sync", () => {
       .select()
       .from(mailboxes)
       .where(eq(mailboxes.address, "ana@newbrand.example"));
-    expect(ana).toMatchObject({ mailDomainId: adopted!.mailDomain.id, displayName: "Ana", status: "active" });
+    expect(ana).toMatchObject({
+      mailDomainId: adopted!.mailDomain.id,
+      displayName: "Ana",
+      status: "active",
+    });
 
     // Vanished objects are marked, not deleted.
     const [security] = await handle.db
@@ -309,7 +336,9 @@ describe("mail.server.sync", () => {
       .from(mailAliases)
       .where(eq(mailAliases.address, "admin@futureforge.dev"));
     expect(admin?.status).toBe("active");
-    expect(logs.some((l) => l.includes("security@futureforge.dev is no longer on the host"))).toBe(true);
+    expect(logs.some((l) => l.includes("security@futureforge.dev is no longer on the host"))).toBe(
+      true,
+    );
   });
 
   it("fails on an unreachable host without touching the rows", async () => {
@@ -336,9 +365,33 @@ describe("mail.domain.dns_check", () => {
   it("stores the host's checklist and judges it on the required records", async () => {
     hub.answers.set("mail.domain.dns", () => ({
       records: [
-        { id: "MX:futureforge.dev", type: "MX", name: "futureforge.dev", expected: "10 mail.futureforge.dev.", actual: ["10 mail.futureforge.dev."], status: "pass", required: true },
-        { id: "TXT:yunori._domainkey.futureforge.dev", type: "TXT", name: "yunori._domainkey.futureforge.dev", expected: "v=DKIM1; p=KEY", actual: [], status: "fail", required: true },
-        { id: "TXT:_smtp._tls.futureforge.dev", type: "TXT", name: "_smtp._tls.futureforge.dev", expected: "v=TLSRPTv1", actual: [], status: "warn", required: false },
+        {
+          id: "MX:futureforge.dev",
+          type: "MX",
+          name: "futureforge.dev",
+          expected: "10 mail.futureforge.dev.",
+          actual: ["10 mail.futureforge.dev."],
+          status: "pass",
+          required: true,
+        },
+        {
+          id: "TXT:yunori._domainkey.futureforge.dev",
+          type: "TXT",
+          name: "yunori._domainkey.futureforge.dev",
+          expected: "v=DKIM1; p=KEY",
+          actual: [],
+          status: "fail",
+          required: true,
+        },
+        {
+          id: "TXT:_smtp._tls.futureforge.dev",
+          type: "TXT",
+          name: "_smtp._tls.futureforge.dev",
+          expected: "v=TLSRPTv1",
+          actual: [],
+          status: "warn",
+          required: false,
+        },
       ],
       zone_file: "futureforge.dev. IN MX 10 mail.futureforge.dev.",
     }));
@@ -349,7 +402,10 @@ describe("mail.domain.dns_check", () => {
     });
     await expect(result).resolves.toMatchObject({ overall: "fail", records: 3 });
 
-    const [row] = await handle.db.select().from(mailDomains).where(eq(mailDomains.id, mailDomainId));
+    const [row] = await handle.db
+      .select()
+      .from(mailDomains)
+      .where(eq(mailDomains.id, mailDomainId));
     expect(row!.dnsStatus).toBe("fail");
     expect(row!.dnsRecords).toHaveLength(3);
     expect(row!.zoneFile).toContain("IN MX");
@@ -385,7 +441,9 @@ describe("mail.domain.remove", () => {
       name: "gone.example",
     });
     await expect(result).resolves.toEqual({ ok: true });
-    expect(await handle.db.select().from(mailDomains).where(eq(mailDomains.id, row!.id))).toHaveLength(0);
+    expect(
+      await handle.db.select().from(mailDomains).where(eq(mailDomains.id, row!.id)),
+    ).toHaveLength(0);
     const [after] = await handle.db
       .select({ hasMail: domains.hasMail })
       .from(domains)

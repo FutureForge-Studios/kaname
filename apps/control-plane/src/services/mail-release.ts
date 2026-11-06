@@ -152,7 +152,9 @@ export class MailReleaseService {
         lastErr = err;
       }
     }
-    throw new Error(`Could not read the checksum of ${asset} for v${version}: ${describe(lastErr)}`);
+    throw new Error(
+      `Could not read the checksum of ${asset} for v${version}: ${describe(lastErr)}`,
+    );
   }
 
   private async json<T>(url: string): Promise<T> {
