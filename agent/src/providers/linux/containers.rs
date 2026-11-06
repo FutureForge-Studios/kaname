@@ -610,10 +610,10 @@ impl Containers for ContainerOps {
             let record = container_log_record(&source, line);
             if backlog.len() < lines {
                 backlog.push(record);
-                return Box::pin(async { Ok(()) });
+                return Box::pin(async { Ok::<(), ProviderError>(()) });
             }
             if !follow {
-                return Box::pin(async { Ok(()) });
+                return Box::pin(async { Ok::<(), ProviderError>(()) });
             }
             let stream = stream.clone();
             Box::pin(async move { send_record(stream.as_ref(), &record).await })
@@ -870,10 +870,12 @@ impl DockerClient {
     /// Takes one non-streaming sample and turns the two cumulative readings
     /// the daemon returns into a percentage.
     async fn stats(&self, ctx: &Ctx, id: &str) -> PResult<(f64, i64, i64)> {
-        let sample = Ctx::new(ctx.child().cancelled_token(), Some(Instant::now() + DOCKER_CALL_TIMEOUT));
-        let parsed: DockerStats = self
-            .get(&sample, &format!("/containers/{}/stats?stream=false", path_escape(id)))
-            .await?;
+        let parsed: DockerStats = tokio::time::timeout(
+            DOCKER_CALL_TIMEOUT,
+            self.get(ctx, &format!("/containers/{}/stats?stream=false", path_escape(id))),
+        )
+        .await
+        .map_err(|_| ProviderError::Timeout)??;
 
         let cpu_delta = parsed.cpu_stats.cpu_usage.total_usage as f64 - parsed.precpu_stats.cpu_usage.total_usage as f64;
         let system_delta = parsed.cpu_stats.system_cpu_usage as f64 - parsed.precpu_stats.system_cpu_usage as f64;
@@ -902,25 +904,6 @@ impl DockerClient {
     async fn resize_exec(&self, ctx: &Ctx, exec_id: &str, cols: i64, rows: i64) -> PResult<()> {
         let path = format!("/exec/{}/resize?h={rows}&w={cols}", path_escape(exec_id));
         self.post_empty(ctx, &path, None).await
-    }
-}
-
-/// `child().cancelled_token()`: a token tied to the parent context, so a
-/// sample stops when the call that asked for it does.
-trait ChildToken {
-    fn cancelled_token(&self) -> CancellationToken;
-}
-
-impl ChildToken for Ctx {
-    fn cancelled_token(&self) -> CancellationToken {
-        let token = CancellationToken::new();
-        let parent = self.clone();
-        let child = token.clone();
-        tokio::spawn(async move {
-            parent.done().await;
-            child.cancel();
-        });
-        token
     }
 }
 
