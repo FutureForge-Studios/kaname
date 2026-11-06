@@ -3,14 +3,14 @@ import pino from "pino";
 import { createDb, eq, type DbHandle } from "@kaname/db";
 import { migrateHandle } from "@kaname/db/migrate";
 import { seedDemo } from "@kaname/db/seed";
-import { jobs, mailAuthChecks, mailDomains, mailboxes } from "@kaname/db/schema";
+import { domains, jobs, mailAliases, mailDomains, mailServers, mailboxes } from "@kaname/db/schema";
 import { JOB_TYPES, type JobType } from "@kaname/contract";
 import { AgentOfflineError, AgentRpcError, type AgentHub } from "./agent/hub.js";
 import { loadConfig, resetConfigForTests } from "./config.js";
 import { createContext, type AppContext } from "./context.js";
 import { registerJobHandlers } from "./jobs/handlers.js";
+import { dnsStatusOf, redactInstallerLine, worstStatus } from "./jobs/mail.js";
 import type { JobContext, JobHandler, JobWorker } from "./jobs/worker.js";
-import { MailAuthChecker } from "./services/mail-auth.js";
 
 /* ------------------------------------------------------------------ *
  * Job handlers, driven directly.
@@ -21,8 +21,6 @@ import { MailAuthChecker } from "./services/mail-auth.js";
  * can come from. The agent is a stub that answers by method, so no
  * socket and no DNS is involved.
  * ------------------------------------------------------------------ */
-
-const ZONE_SERVER_NAME = "mail-01";
 
 /** Answers hub.call by method; anything not scripted is "unsupported". */
 class FakeHub {
@@ -35,7 +33,7 @@ class FakeHub {
   }
 
   capabilities(serverId: string): string[] {
-    return this.connected.has(serverId) ? ["systemd", "mail"] : [];
+    return this.connected.has(serverId) ? ["systemd", "yunori"] : [];
   }
 
   connectedServerIds(): string[] {
@@ -59,21 +57,12 @@ class FakeHub {
   }
 }
 
-/** The sim's kind of zone: what the mail host's own resolver would say. */
-function zone(entries: Record<string, string[]>) {
-  return ({ name, type }: { name: string; type: string }) => {
-    const values = entries[`${type.toUpperCase()} ${name.toLowerCase().replace(/\.$/, "")}`] ?? [];
-    return {
-      records: values.length ? [{ name, type, values, ttl: 300, resolver: "127.0.0.53" }] : [],
-    };
-  };
-}
-
 let handle: DbHandle;
 let ctx: AppContext;
 let hub: FakeHub;
 let handlers: Map<JobType, JobHandler>;
 let mailServerId: string;
+let mailServerRowId: string;
 let mailDomainId: string;
 
 beforeAll(async () => {
@@ -103,11 +92,12 @@ beforeAll(async () => {
   } as unknown as JobWorker);
 
   const [domain] = await handle.db
-    .select({ id: mailDomains.id, serverId: mailDomains.serverId })
+    .select({ id: mailDomains.id, serverId: mailDomains.serverId, mailServerId: mailDomains.mailServerId })
     .from(mailDomains)
     .limit(1);
   mailDomainId = domain!.id;
   mailServerId = domain!.serverId;
+  mailServerRowId = domain!.mailServerId;
   hub.connected.add(mailServerId);
 }, 120_000);
 
@@ -142,7 +132,7 @@ async function run(
   return { result: handler(jobCtx), logs, jobId: claimed.id };
 }
 
-async function mailboxRow(address: string, status: "provisioning" | "active" = "provisioning") {
+async function mailboxRow(address: string, status: "active" | "removing" = "active") {
   const [row] = await handle.db
     .insert(mailboxes)
     .values({
@@ -168,277 +158,291 @@ async function mailboxStatus(id: string): Promise<string | null> {
 describe("registration", () => {
   it("has a handler for every job type the contract can enqueue", () => {
     // A job type without a handler fails every operator who reaches it
-    // with "No handler registered" — this is the check that used to be
-    // missing for mail.auth.check.
+    // with "No handler registered".
     for (const type of JOB_TYPES) {
       expect(handlers.has(type), `${type} has no handler`).toBe(true);
     }
   });
 });
 
-describe("mail.mailbox.create", () => {
-  it("marks the row error when the host refuses, so it can be deleted and retried", async () => {
-    hub.answers.set("mail.mailbox.create", () => {
-      throw new AgentRpcError({ code: "internal", message: "doveadm pw failed" });
-    });
-    const id = await mailboxRow("broken@futureforge.dev");
+/* ------------------------------------------------------------------ *
+ * Pure helpers
+ * ------------------------------------------------------------------ */
 
-    const { result } = await run("mail.mailbox.create", {
-      mailbox_id: id,
-      address: "broken@futureforge.dev",
-      password: "a-long-enough-password-1",
-      quota_bytes: 0,
-    });
-    await expect(result).rejects.toBeInstanceOf(AgentRpcError);
-    expect(await mailboxStatus(id)).toBe("error");
+describe("mail helpers", () => {
+  it("ranks verdicts worst-first and says unknown for nothing", () => {
+    expect(worstStatus([])).toBe("unknown");
+    expect(worstStatus(["pass", "info"])).toBe("info");
+    expect(worstStatus(["pass", "warn", "fail", "pass"])).toBe("fail");
+    expect(worstStatus(["pass", "unknown"])).toBe("unknown");
   });
 
-  it("adopts a mailbox the host already has instead of failing", async () => {
-    hub.answers.set("mail.mailbox.create", () => {
-      throw new AgentRpcError({ code: "conflict", message: "mailbox already exists" });
+  it("judges DNS on required records only, unless none are", () => {
+    const rec = (status: "pass" | "fail" | "warn", required: boolean) => ({
+      id: "x",
+      type: "TXT",
+      name: "x",
+      expected: null,
+      actual: [],
+      status,
+      required,
     });
-    const id = await mailboxRow("existing@futureforge.dev");
+    expect(dnsStatusOf([rec("pass", true), rec("fail", false)])).toBe("pass");
+    expect(dnsStatusOf([rec("pass", true), rec("fail", true)])).toBe("fail");
+    expect(dnsStatusOf([rec("warn", false)])).toBe("warn");
+  });
 
-    const { result, logs } = await run("mail.mailbox.create", {
-      mailbox_id: id,
-      address: "existing@futureforge.dev",
-      password: "a-long-enough-password-1",
-      quota_bytes: 0,
-    });
+  it("masks the setup token and any printed password before a line reaches the log", () => {
+    expect(
+      redactInstallerLine("Open https://mail.example.com/console/setup#token=abc.DEF-123 to continue"),
+    ).toBe("Open https://mail.example.com/console/setup#token=[redacted] to continue");
+    expect(redactInstallerLine("Password (shown once): Tr0ub4dor&3")).toBe(
+      "Password (shown once): [redacted]",
+    );
+    expect(redactInstallerLine("relay password=hunter2 accepted")).toBe(
+      "relay password=[redacted] accepted",
+    );
+    expect(redactInstallerLine("Generating a password for hello@example.com")).toBe(
+      "Generating a password for hello@example.com",
+    );
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * mail.server.sync: the host is the source of truth
+ * ------------------------------------------------------------------ */
+
+describe("mail.server.sync", () => {
+  it("reads the host and reconciles domains, mailboxes and aliases it lists", async () => {
+    hub.answers.set("mail.status", () => ({
+      installed: true,
+      version: "0.3.2",
+      install_complete: true,
+      steps: [{ title: "Finish", status: "done", detail: null }],
+      services: [{ name: "stalwart", active: true }],
+      hostnames: ["mail.futureforge.dev"],
+      console_url: "https://mail.futureforge.dev/console",
+    }));
+    hub.answers.set("mail.doctor", () => ({
+      checks: [
+        { id: "services", label: "Services", status: "pass", detail: "ok", remedy: null, help_url: null },
+        { id: "ptr", label: "Reverse DNS", status: "warn", detail: "not set", remedy: "set it", help_url: null },
+      ],
+    }));
+    hub.answers.set("mail.certificate.status", () => ({
+      state: "valid",
+      covers: ["mail.futureforge.dev"],
+      issuer: "Let's Encrypt",
+      expires_at: "2027-01-01T00:00:00Z",
+      days_left: 60,
+      authority: null,
+      renews_at: null,
+      last_attempt: null,
+      next_attempt: null,
+    }));
+    hub.answers.set("mail.domain.list", () => ({
+      domains: [
+        { name: "futureforge.dev", dns_status: "pass", mailbox_count: 5 },
+        // Added in the Yunori console; Kaname has never heard of it.
+        { name: "newbrand.example", dns_status: "warn", mailbox_count: 1 },
+      ],
+    }));
+    hub.answers.set("mail.mailbox.list", () => ({
+      mailboxes: [
+        ...["hello", "detective", "billing", "noreply", "support"].map((local) => ({
+          address: `${local}@futureforge.dev`,
+          display_name: null,
+          aliases: [],
+        })),
+        { address: "Ana@newbrand.example", display_name: "Ana", aliases: [] },
+      ],
+    }));
+    // Only one of the four seeded aliases is still on the host.
+    hub.answers.set("mail.alias.list", () => ({
+      aliases: [{ address: "admin@futureforge.dev", mailbox: "detective@futureforge.dev" }],
+    }));
+
+    const { result, logs } = await run("mail.server.sync", { mail_server_id: mailServerRowId });
     await expect(result).resolves.toEqual({ ok: true });
-    expect(await mailboxStatus(id)).toBe("active");
-    expect(logs.some((line) => line.includes("already existed on the host"))).toBe(true);
+
+    const [server] = await handle.db.select().from(mailServers).where(eq(mailServers.id, mailServerRowId));
+    expect(server).toMatchObject({
+      status: "installed",
+      version: "0.3.2",
+      installComplete: true,
+      hostname: "mail.futureforge.dev",
+      health: "warn",
+    });
+    expect(server!.certificate?.state).toBe("valid");
+    expect(server!.lastSyncedAt).not.toBeNull();
+
+    const [adopted] = await handle.db
+      .select({ mailDomain: mailDomains, domain: domains })
+      .from(mailDomains)
+      .innerJoin(domains, eq(mailDomains.domainId, domains.id))
+      .where(eq(domains.name, "newbrand.example"));
+    expect(adopted).toBeDefined();
+    expect(adopted!.mailDomain).toMatchObject({
+      mailServerId: mailServerRowId,
+      status: "active",
+      dnsStatus: "warn",
+      isPrimary: false,
+    });
+    // The Kaname domain was created for it, unverified: nobody here proved ownership.
+    expect(adopted!.domain).toMatchObject({ verified: false, hasMail: true, status: "active" });
+    expect(logs).toContain("info: adopted mail domain newbrand.example from the host");
+
+    const [ana] = await handle.db
+      .select()
+      .from(mailboxes)
+      .where(eq(mailboxes.address, "ana@newbrand.example"));
+    expect(ana).toMatchObject({ mailDomainId: adopted!.mailDomain.id, displayName: "Ana", status: "active" });
+
+    // Vanished objects are marked, not deleted.
+    const [security] = await handle.db
+      .select({ status: mailAliases.status })
+      .from(mailAliases)
+      .where(eq(mailAliases.address, "security@futureforge.dev"));
+    expect(security?.status).toBe("error");
+    const [admin] = await handle.db
+      .select({ status: mailAliases.status })
+      .from(mailAliases)
+      .where(eq(mailAliases.address, "admin@futureforge.dev"));
+    expect(admin?.status).toBe("active");
+    expect(logs.some((l) => l.includes("security@futureforge.dev is no longer on the host"))).toBe(true);
   });
 
-  it("leaves a provisioning row alone when the agent drops mid-job", async () => {
-    const id = await mailboxRow("offline@futureforge.dev");
+  it("fails on an unreachable host without touching the rows", async () => {
     hub.connected.delete(mailServerId);
     try {
-      const { result } = await run("mail.mailbox.create", {
-        mailbox_id: id,
-        address: "offline@futureforge.dev",
-        password: "a-long-enough-password-1",
-        quota_bytes: 0,
-      });
+      const { result } = await run("mail.server.sync", { mail_server_id: mailServerRowId });
       await expect(result).rejects.toBeInstanceOf(AgentOfflineError);
     } finally {
       hub.connected.add(mailServerId);
     }
-    // The worker will park and retry this one; "error" would be a lie.
-    expect(await mailboxStatus(id)).toBe("provisioning");
+    const [server] = await handle.db
+      .select({ status: mailServers.status })
+      .from(mailServers)
+      .where(eq(mailServers.id, mailServerRowId));
+    expect(server?.status).toBe("installed");
   });
 });
 
-describe("mail.mailbox.delete", () => {
+/* ------------------------------------------------------------------ *
+ * Domains and DNS
+ * ------------------------------------------------------------------ */
+
+describe("mail.domain.dns_check", () => {
+  it("stores the host's checklist and judges it on the required records", async () => {
+    hub.answers.set("mail.domain.dns", () => ({
+      records: [
+        { id: "MX:futureforge.dev", type: "MX", name: "futureforge.dev", expected: "10 mail.futureforge.dev.", actual: ["10 mail.futureforge.dev."], status: "pass", required: true },
+        { id: "TXT:yunori._domainkey.futureforge.dev", type: "TXT", name: "yunori._domainkey.futureforge.dev", expected: "v=DKIM1; p=KEY", actual: [], status: "fail", required: true },
+        { id: "TXT:_smtp._tls.futureforge.dev", type: "TXT", name: "_smtp._tls.futureforge.dev", expected: "v=TLSRPTv1", actual: [], status: "warn", required: false },
+      ],
+      zone_file: "futureforge.dev. IN MX 10 mail.futureforge.dev.",
+    }));
+
+    const { result, logs } = await run("mail.domain.dns_check", {
+      mail_domain_id: mailDomainId,
+      name: "futureforge.dev",
+    });
+    await expect(result).resolves.toMatchObject({ overall: "fail", records: 3 });
+
+    const [row] = await handle.db.select().from(mailDomains).where(eq(mailDomains.id, mailDomainId));
+    expect(row!.dnsStatus).toBe("fail");
+    expect(row!.dnsRecords).toHaveLength(3);
+    expect(row!.zoneFile).toContain("IN MX");
+    expect(row!.dnsCheckedAt).not.toBeNull();
+    // One log line per record, levelled like the verdict.
+    expect(logs.filter((l) => l.startsWith("error: TXT yunori._domainkey"))).toHaveLength(1);
+    expect(logs.some((l) => l.includes("(optional)"))).toBe(true);
+  });
+});
+
+describe("mail.domain.remove", () => {
+  it("removes the record and clears has_mail when the host never had the domain", async () => {
+    const [kanameDomain] = await handle.db
+      .insert(domains)
+      .values({ name: "gone.example", status: "active", hasMail: true })
+      .returning({ id: domains.id });
+    const [row] = await handle.db
+      .insert(mailDomains)
+      .values({
+        domainId: kanameDomain!.id,
+        serverId: mailServerId,
+        mailServerId: mailServerRowId,
+        status: "removing",
+      })
+      .returning({ id: mailDomains.id });
+    hub.answers.set("mail.domain.remove", () => {
+      throw new AgentRpcError({ code: "not_found", message: "no such domain" });
+    });
+
+    const { result, logs } = await run("mail.domain.remove", {
+      mail_domain_id: row!.id,
+      domain_id: kanameDomain!.id,
+      name: "gone.example",
+    });
+    await expect(result).resolves.toEqual({ ok: true });
+    expect(await handle.db.select().from(mailDomains).where(eq(mailDomains.id, row!.id))).toHaveLength(0);
+    const [after] = await handle.db
+      .select({ hasMail: domains.hasMail })
+      .from(domains)
+      .where(eq(domains.id, kanameDomain!.id));
+    expect(after?.hasMail).toBe(false);
+    expect(logs.some((l) => l.includes("was not on the host"))).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * Mailboxes
+ * ------------------------------------------------------------------ */
+
+describe("mail.mailbox.remove", () => {
   it("removes the record when the host never had the account", async () => {
-    hub.answers.set("mail.mailbox.delete", () => {
+    hub.answers.set("mail.mailbox.remove", () => {
       throw new AgentRpcError({ code: "not_found", message: "mailbox ghost@futureforge.dev" });
     });
-    const id = await mailboxRow("ghost@futureforge.dev", "provisioning");
+    const id = await mailboxRow("ghost@futureforge.dev", "removing");
 
-    const { result, logs } = await run("mail.mailbox.delete", {
+    const { result, logs } = await run("mail.mailbox.remove", {
       mailbox_id: id,
       address: "ghost@futureforge.dev",
-      delete_maildir: false,
     });
     await expect(result).resolves.toEqual({ ok: true });
     expect(await mailboxStatus(id)).toBeNull();
     expect(logs.some((line) => line.includes("not present on the host"))).toBe(true);
   });
 
-  it("keeps the record when the host fails for any other reason", async () => {
-    hub.answers.set("mail.mailbox.delete", () => {
-      throw new AgentRpcError({ code: "permission_denied", message: "read-only userdb" });
+  it("keeps the record, marked, when the host fails for any other reason", async () => {
+    hub.answers.set("mail.mailbox.remove", () => {
+      throw new AgentRpcError({ code: "permission_denied", message: "engine refused" });
     });
-    const id = await mailboxRow("stuck@futureforge.dev", "active");
+    const id = await mailboxRow("stuck@futureforge.dev", "removing");
 
-    const { result } = await run("mail.mailbox.delete", {
+    const { result } = await run("mail.mailbox.remove", {
       mailbox_id: id,
       address: "stuck@futureforge.dev",
-      delete_maildir: false,
     });
     await expect(result).rejects.toBeInstanceOf(AgentRpcError);
-    expect(await mailboxStatus(id)).toBe("active");
-  });
-});
-
-describe("mail.mailbox.reset_password", () => {
-  it("passes revoke_sessions to the host and says so in the job log", async () => {
-    hub.answers.set("mail.mailbox.password", () => ({ ok: true }));
-
-    const revoked = await run("mail.mailbox.reset_password", {
-      address: "hello@futureforge.dev",
-      password: "a-long-enough-password-1",
-      revoke_sessions: true,
-    });
-    await expect(revoked.result).resolves.toMatchObject({ sessions_revoked: true });
-    expect(hub.calls.at(-1)).toMatchObject({
-      method: "mail.mailbox.password",
-      params: { address: "hello@futureforge.dev", revoke_sessions: true },
-    });
-    expect(revoked.logs.at(-1)).toContain("sessions revoked");
-
-    const kept = await run("mail.mailbox.reset_password", {
-      address: "hello@futureforge.dev",
-      password: "a-long-enough-password-1",
-      revoke_sessions: false,
-    });
-    await expect(kept.result).resolves.toMatchObject({ sessions_revoked: false });
-    expect(hub.calls.at(-1)).toMatchObject({ params: { revoke_sessions: false } });
-    expect(kept.logs.at(-1)).toContain("left open");
-  });
-});
-
-describe("mail.domain.provision", () => {
-  async function domainState() {
-    const rows = await handle.db
-      .select({ status: mailDomains.status, key: mailDomains.dkimPublicKey })
-      .from(mailDomains)
-      .where(eq(mailDomains.id, mailDomainId));
-    return rows[0]!;
-  }
-
-  it("reads the host's DKIM key and settles a provisioning row to active", async () => {
-    await handle.db
-      .update(mailDomains)
-      .set({ status: "provisioning", dkimPublicKey: null })
-      .where(eq(mailDomains.id, mailDomainId));
-    hub.answers.set("mail.dkim.read", () => ({
-      selector: "kaname",
-      public_key: "HOSTKEY",
-      key_bits: 2048,
-      txt_value: "v=DKIM1; k=rsa; p=HOSTKEY",
-    }));
-
-    const { result, logs } = await run("mail.domain.provision", {
-      mail_domain_id: mailDomainId,
-      domain: "futureforge.dev",
-    });
-    await expect(result).resolves.toMatchObject({ dkim_read: true });
-    expect(await domainState()).toEqual({ status: "active", key: "HOSTKEY" });
-    expect(logs.some((line) => line.includes("DKIM selector kaname"))).toBe(true);
+    expect(await mailboxStatus(id)).toBe("error");
   });
 
-  it("still marks the domain active when the host has no key yet", async () => {
-    await handle.db
-      .update(mailDomains)
-      .set({ status: "error", dkimPublicKey: null })
-      .where(eq(mailDomains.id, mailDomainId));
-    hub.answers.set("mail.dkim.read", () => {
-      throw new AgentRpcError({ code: "not_found", message: "no DKIM key for futureforge.dev" });
-    });
-
-    const { result, logs } = await run("mail.domain.provision", {
-      mail_domain_id: mailDomainId,
-      domain: "futureforge.dev",
-    });
-    await expect(result).resolves.toMatchObject({ dkim_read: false });
-    expect(await domainState()).toEqual({ status: "active", key: null });
-    expect(logs.some((line) => line.startsWith("warn: no DKIM key"))).toBe(true);
-  });
-
-  it("does not override a status the operator chose", async () => {
-    await handle.db
-      .update(mailDomains)
-      .set({ status: "disabled" })
-      .where(eq(mailDomains.id, mailDomainId));
-
-    const { result } = await run("mail.domain.provision", {
-      mail_domain_id: mailDomainId,
-      domain: "futureforge.dev",
-    });
-    await result;
-    expect((await domainState()).status).toBe("disabled");
-
-    await handle.db
-      .update(mailDomains)
-      .set({ status: "active" })
-      .where(eq(mailDomains.id, mailDomainId));
-  });
-});
-
-/* ------------------------------------------------------------------ *
- * The DNS-authentication engine, resolving through the host
- * ------------------------------------------------------------------ */
-
-const SIM_ZONE = {
-  "MX futureforge.dev": ["10 mail.futureforge.dev."],
-  "A mail.futureforge.dev": ["198.51.100.42"],
-  // Quoted as a host hands them back; the engine has to unquote.
-  "TXT futureforge.dev": ['"v=spf1 mx -all"'],
-  "TXT kaname._domainkey.futureforge.dev": ["v=DKIM1; k=rsa; p=HOSTKEY"],
-  "TXT _dmarc.futureforge.dev": ["v=DMARC1; p=quarantine; rua=mailto:dmarc@futureforge.dev"],
-  "PTR 42.100.51.198.in-addr.arpa": ["mail.futureforge.dev."],
-};
-
-describe("mail.auth.check", () => {
-  it("asks the host's resolver and records which vantage point answered", async () => {
-    hub.answers.set("dns.resolve", zone(SIM_ZONE));
-    hub.answers.set("mail.dkim.read", () => ({
-      selector: "kaname",
-      public_key: "HOSTKEY",
-      key_bits: 2048,
-      txt_value: "v=DKIM1; k=rsa; p=HOSTKEY",
-    }));
-
-    const { result, logs } = await run("mail.auth.check", { mail_domain_id: mailDomainId });
-    const summary = (await result) as { overall: string; resolver_used: string };
-    expect(summary.resolver_used).toBe(`host:${ZONE_SERVER_NAME}`);
-    // One log line per verdict, so the drawer reads like the page.
-    expect(
-      logs.filter((line) => /^(info|warn|error): \w+: (pass|warn|fail|unknown) — /.test(line)),
-    ).toHaveLength(8);
-
-    const rows = await handle.db
-      .select()
-      .from(mailAuthChecks)
-      .where(eq(mailAuthChecks.mailDomainId, mailDomainId));
-    const byCheck = new Map(rows.map((row) => [row.check, row]));
-
-    // The sim zone: the mail host is DNS-only with no SPF of its own.
-    expect(byCheck.get("mx")?.status).toBe("pass");
-    expect(byCheck.get("spf")?.status).toBe("pass");
-    expect(byCheck.get("dkim")?.status).toBe("pass");
-    expect(byCheck.get("dmarc")?.status).toBe("pass");
-    expect(byCheck.get("ptr")?.status).toBe("pass");
-    expect(byCheck.get("proxy_exposure")?.status).toBe("pass");
-    expect(byCheck.get("host_spf")?.status).toBe("fail");
-    expect(byCheck.get("host_spf")?.expected).toBe(
-      'mail.futureforge.dev.\t3600\tIN\tTXT\t"v=spf1 a -all"',
-    );
-    expect(rows.every((row) => row.resolverUsed === `host:${ZONE_SERVER_NAME}`)).toBe(true);
-
-    // Every lookup went to the host; nothing was asked of this process's resolver.
-    expect(hub.calls.some((call) => call.method === "dns.resolve")).toBe(true);
-    const asked = hub.calls
-      .filter((call) => call.method === "dns.resolve")
-      .map((call) => call.params as { name: string; type: string });
-    expect(asked).toContainEqual({ name: "42.100.51.198.in-addr.arpa", type: "PTR" });
-  });
-
-  it("turns an unusable resolver into a report rather than a crash", async () => {
-    const checker = new MailAuthChecker({ db: ctx.db, hub: hub.as() });
+  it("leaves the row alone when the host is merely unreachable", async () => {
+    const id = await mailboxRow("offline@futureforge.dev", "removing");
     hub.connected.delete(mailServerId);
     try {
-      const report = await checker.run(mailDomainId, {
-        checks: ["mx", "host_spf"],
-        resolver: "not-an-address",
+      const { result } = await run("mail.mailbox.remove", {
+        mailbox_id: id,
+        address: "offline@futureforge.dev",
       });
-      // The report carries every stored verdict; only the two asked for
-      // were re-run, and both say why they could not be.
-      const rerun = report.checks.filter((c) => c.check === "mx" || c.check === "host_spf");
-      expect(rerun.map((c) => c.status)).toEqual(["unknown", "unknown"]);
-      expect(rerun[0]?.detail).toContain("could not complete this check");
-
-      const [stored] = await handle.db
-        .select({ resolver: mailAuthChecks.resolverUsed })
-        .from(mailAuthChecks)
-        .where(eq(mailAuthChecks.mailDomainId, mailDomainId))
-        .then((rows) => rows.filter((row) => row.resolver?.includes("unusable resolver")));
-      expect(stored?.resolver).toBe("unusable resolver not-an-address");
+      await expect(result).rejects.toBeInstanceOf(AgentOfflineError);
     } finally {
       hub.connected.add(mailServerId);
     }
+    // The worker will park and retry this one; "error" would be a lie.
+    expect(await mailboxStatus(id)).toBe("removing");
   });
 });
 
@@ -456,7 +460,7 @@ describe("job params after completion", () => {
 
   it("redacts secret-looking keys once a job succeeds", async () => {
     const job = await ctx.queue.enqueue({
-      type: "mail.mailbox.reset_password",
+      type: "mail.alias.add",
       serverId: mailServerId,
       params: secret,
     });
@@ -470,7 +474,7 @@ describe("job params after completion", () => {
 
   it("keeps them while a retry is still coming, and redacts on the final failure", async () => {
     const job = await ctx.queue.enqueue({
-      type: "mail.mailbox.reset_password",
+      type: "mail.alias.add",
       serverId: mailServerId,
       params: secret,
     });
