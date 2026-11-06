@@ -588,17 +588,22 @@ impl Containers for ContainerOps {
 
         let lines = if p.lines <= 0 { 200 } else { p.lines as usize };
 
-        let mut query = url::form_urlencoded::Serializer::new(String::new());
-        query.append_pair("stdout", "1");
-        query.append_pair("stderr", "1");
-        query.append_pair("timestamps", "1");
-        query.append_pair("tail", &lines.to_string());
-        query.append_pair("follow", if p.follow { "true" } else { "false" });
-        if let Some(since) = p.since.as_deref().filter(|s| !s.is_empty()) {
-            let since = parse_since(since)?;
-            query.append_pair("since", &since.timestamp().to_string());
-        }
-        let path = format!("/containers/{}/logs?{}", path_escape(&p.id), query.finish());
+        // The serializer is not `Send`, so it lives and dies before the
+        // first await.
+        let query = {
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            query.append_pair("stdout", "1");
+            query.append_pair("stderr", "1");
+            query.append_pair("timestamps", "1");
+            query.append_pair("tail", &lines.to_string());
+            query.append_pair("follow", if p.follow { "true" } else { "false" });
+            if let Some(since) = p.since.as_deref().filter(|s| !s.is_empty()) {
+                let since = parse_since(since)?;
+                query.append_pair("since", &since.timestamp().to_string());
+            }
+            query.finish()
+        };
+        let path = format!("/containers/{}/logs?{}", path_escape(&p.id), query);
 
         let (response, conn_task) = ctx.run(client.open(Method::GET, &path, None)).await??;
         let body = response.into_body();

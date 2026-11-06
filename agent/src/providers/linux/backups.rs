@@ -18,7 +18,7 @@ use regex_lite::Regex;
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
-use super::common::{invalid, not_found, now_rfc3339, precondition, rfc3339, split_lines, unsupported};
+use super::common::{invalid, not_found, now_rfc3339, precondition, rfc3339, split_lines};
 use super::databases::{DatabaseOps, piped_command, spawn_error};
 use super::exec::{self, ExecOptions};
 use super::Shared;
