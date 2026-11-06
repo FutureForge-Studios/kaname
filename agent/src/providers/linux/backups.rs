@@ -7,7 +7,7 @@
 //! read a repository it does not already have the key for, and the
 //! password never travels over the socket or appears in an argv.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -515,6 +515,7 @@ fn count_forgotten(out: &str) -> i64 {
     #[derive(Deserialize)]
     struct Removed {
         #[serde(default)]
+        #[allow(dead_code)]
         id: String,
     }
     #[derive(Deserialize)]
@@ -528,7 +529,7 @@ fn count_forgotten(out: &str) -> i64 {
     let Some(Ok(groups)) = stream.next() else { return 0 };
     groups
         .iter()
-        .map(|g| g.remove.as_ref().map(|r| r.iter().filter(|x| !x.id.is_empty() || true).count()).unwrap_or(0) as i64)
+        .map(|g| g.remove.as_ref().map(Vec::len).unwrap_or(0) as i64)
         .sum()
 }
 
@@ -637,11 +638,6 @@ fn check_sql_identifier(name: &str) -> PResult<()> {
         return Err(invalid("database name contains an illegal character"));
     }
     Ok(())
-}
-
-#[allow(dead_code)]
-fn _secrets_dir(state_dir: &Path) -> PathBuf {
-    state_dir.join(BACKUP_SECRETS_DIR)
 }
 
 #[cfg(test)]
