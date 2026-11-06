@@ -88,7 +88,7 @@ impl Ssh for SshOps {
         let ssh_dir = account.home.join(".ssh");
         std::fs::create_dir_all(&ssh_dir).map_err(|e| wrap_fs_error(&ssh_dir, e))?;
         std::os::unix::fs::chown(&ssh_dir, Some(account.uid), Some(account.gid)).map_err(|e| wrap_fs_error(&ssh_dir, e))?;
-        std::fs::set_permissions(&ssh_dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))
+        std::fs::set_permissions(&ssh_dir, <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700))
             .map_err(|e| wrap_fs_error(&ssh_dir, e))?;
 
         let mut b = String::from("# Managed by Kaname. Edits are overwritten on the next key apply.\n");

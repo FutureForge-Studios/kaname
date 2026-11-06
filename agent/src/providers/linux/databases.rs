@@ -10,7 +10,6 @@
 
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
-use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -853,11 +852,9 @@ impl DatabaseOps {
 
 fn dump_command(p: &DbDumpParams) -> PResult<ExecOptions> {
     if is_postgres(&p.engine) {
-        let mut options = ExecOptions::new(
-            "pg_dump",
-            ["--no-owner", "--no-privileges", "--format=plain", &format!("--dbname={}", p.name)],
-        )
-        .c_locale();
+        let dbname = format!("--dbname={}", p.name);
+        let mut options =
+            ExecOptions::new("pg_dump", ["--no-owner", "--no-privileges", "--format=plain", dbname.as_str()]).c_locale();
         if let Some(account) = postgres_account() {
             options = options.user(account);
         }
@@ -875,8 +872,8 @@ fn dump_command(p: &DbDumpParams) -> PResult<ExecOptions> {
 
 fn restore_command(p: &DbRestoreParams) -> PResult<ExecOptions> {
     if is_postgres(&p.engine) {
-        let mut options =
-            ExecOptions::new("psql", ["-X", "-q", "-v", "ON_ERROR_STOP=1", &format!("--dbname={}", p.name)]).c_locale();
+        let dbname = format!("--dbname={}", p.name);
+        let mut options = ExecOptions::new("psql", ["-X", "-q", "-v", "ON_ERROR_STOP=1", dbname.as_str()]).c_locale();
         if let Some(account) = postgres_account() {
             options = options.user(account);
         }
