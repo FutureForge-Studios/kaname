@@ -212,7 +212,7 @@ impl Files for FileOps {
         ensure_target(&to, p.overwrite)?;
 
         let ctx = ctx.clone();
-        let (from, to) = blocking(move || {
+        let to = blocking(move || {
             if let Err(e) = std::fs::rename(&from, &to) {
                 // A rename across filesystems is refused by the kernel, so
                 // fall back to copy-then-delete rather than reporting a
@@ -223,10 +223,9 @@ impl Files for FileOps {
                 copy_tree(&ctx, &from, &to)?;
                 remove_all(&from).map_err(|e| wrap_fs_error(&from, e))?;
             }
-            Ok((from, to))
+            Ok(to)
         })
         .await?;
-        let _ = from;
         stat_entry(&self.0, &to)
     }
 
@@ -353,7 +352,7 @@ impl Files for FileOps {
             .map_err(|e| wrap_fs_error(&destination, e))?;
 
         let dest = destination.clone();
-        let result = with_progress(&s, move |ctx, progress| {
+        with_progress(ctx, &s, move |ctx, progress| {
             let outcome = match format {
                 ArchiveFormat::Zip => write_zip(&ctx, handle, &sources, &progress),
                 ArchiveFormat::TarGz | ArchiveFormat::TarZst => write_tar(&ctx, handle, format, &sources, &progress),
@@ -368,8 +367,7 @@ impl Files for FileOps {
                 }
             }
         })
-        .await;
-        result?;
+        .await?;
         stat_entry(&self.0, &destination)
     }
 
@@ -393,8 +391,7 @@ impl Files for FileOps {
             )));
         };
 
-        let _ = ctx;
-        with_progress(&s, move |ctx, progress| match kind {
+        with_progress(ctx, &s, move |ctx, progress| match kind {
             ExtractKind::Zip => extract_zip(&ctx, &source, &destination, p.overwrite, &progress),
             ExtractKind::Tar => extract_tar(&ctx, &source, &destination, p.overwrite, &progress),
         })
@@ -853,11 +850,12 @@ type Progress = Box<dyn Fn(&str) -> PResult<()> + Send + Sync>;
 /// stream. Progress is a separate task rather than an await inside the
 /// walk, because the walk is synchronous code on a blocking thread.
 async fn with_progress<T: Send + 'static>(
+    ctx: &Ctx,
     stream: &StreamRef,
     work: impl FnOnce(Ctx, Progress) -> PResult<T> + Send + 'static,
 ) -> PResult<T> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let ctx = Ctx::background();
+    let ctx = ctx.clone();
     let progress: Progress = Box::new(move |name: &str| {
         tx.send(format!("{name}\n"))
             .map_err(|_| ProviderError::Cancelled)
@@ -904,18 +902,34 @@ fn member_name(current: &Path, base: &str) -> String {
     name
 }
 
+/// Writes a compressed tar and hands the file back, trailer written, for
+/// the caller to sync. The compressor is finished by hand rather than on
+/// drop so an error in the trailer is reported instead of lost.
 fn write_tar(ctx: &Ctx, out: File, format: ArchiveFormat, sources: &[String], progress: &Progress) -> PResult<File> {
-    let encoder: Box<dyn Write + Send> = match format {
-        ArchiveFormat::TarZst => Box::new(
-            zstd::stream::write::Encoder::new(out, 3)
-                .map_err(|e| ProviderError::internal(format!("start zstd: {e}")))?
-                .auto_finish(),
-        ),
-        _ => Box::new(flate2::write::GzEncoder::new(out, flate2::Compression::default())),
-    };
-    // The encoder is finished by hand below so its trailer is written
-    // before the file is synced; `auto_finish` only covers the error path.
-    let mut archive = tar::Builder::new(encoder);
+    match format {
+        ArchiveFormat::TarZst => {
+            let encoder = zstd::stream::write::Encoder::new(out, 3)
+                .map_err(|e| ProviderError::internal(format!("start zstd: {e}")))?;
+            let mut archive = tar::Builder::new(encoder);
+            tar_into(ctx, &mut archive, sources, progress)?;
+            archive
+                .into_inner()
+                .and_then(|encoder| encoder.finish())
+                .map_err(|e| ProviderError::internal(format!("finish tar.zst: {e}")))
+        }
+        _ => {
+            let encoder = flate2::write::GzEncoder::new(out, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            tar_into(ctx, &mut archive, sources, progress)?;
+            archive
+                .into_inner()
+                .and_then(|encoder| encoder.finish())
+                .map_err(|e| ProviderError::internal(format!("finish tar.gz: {e}")))
+        }
+    }
+}
+
+fn tar_into<W: Write>(ctx: &Ctx, archive: &mut tar::Builder<W>, sources: &[String], progress: &Progress) -> PResult<()> {
     archive.follow_symlinks(false);
 
     for source in sources {
@@ -950,33 +964,7 @@ fn write_tar(ctx: &Ctx, out: File, format: ArchiveFormat, sources: &[String], pr
             progress(&name)?;
         }
     }
-
-    let encoder = archive
-        .into_inner()
-        .map_err(|e| ProviderError::internal(format!("finish tar: {e}")))?;
-    finish_encoder(encoder, format)
-}
-
-/// Writes the compression trailer and hands the file back for syncing.
-fn finish_encoder(encoder: Box<dyn Write + Send>, format: ArchiveFormat) -> PResult<File> {
-    // The boxed writer hides the concrete type, so it is dropped (which
-    // flushes the trailer for both gzip and auto-finishing zstd) and the
-    // file is reopened from its path by the caller through `sync_file`.
-    // To keep one code path, the trailer is forced by a flush first.
-    let mut encoder = encoder;
-    encoder
-        .flush()
-        .map_err(|e| ProviderError::internal(format!("finish {}: {e}", format_name(format))))?;
-    drop(encoder);
-    Err(ProviderError::internal("unreachable"))
-}
-
-fn format_name(format: ArchiveFormat) -> &'static str {
-    match format {
-        ArchiveFormat::TarGz => "tar.gz",
-        ArchiveFormat::TarZst => "tar.zst",
-        ArchiveFormat::Zip => "zip",
-    }
+    Ok(())
 }
 
 fn write_zip(ctx: &Ctx, out: File, sources: &[String], progress: &Progress) -> PResult<File> {
