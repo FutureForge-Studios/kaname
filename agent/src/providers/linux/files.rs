@@ -31,8 +31,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use super::common::{epoch_rfc3339, invalid, is_not_exist, not_found, unsupported};
 use super::exec::{sync_dir, write_atomic};
 use super::paths::{
-    self, DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, is_protected_root, parse_mode, validate_path, validate_paths, within,
-    wrap_fs_error,
+    self, DEFAULT_DIR_MODE, DEFAULT_FILE_MODE, is_protected_root, parse_mode, validate_path, validate_paths,
+    within, wrap_fs_error,
 };
 use super::{Shared, system};
 use crate::providers::*;
@@ -45,8 +45,8 @@ const TRANSFER_CHUNK: usize = 256 << 10;
 const EDITABLE_LIMIT: i64 = 2 << 20;
 
 const EDITABLE_EXTENSIONS: &[&str] = &[
-    ".conf", ".cfg", ".ini", ".json", ".yaml", ".yml", ".toml", ".env", ".sh", ".service", ".txt", ".md", ".html",
-    ".css", ".js", ".ts", ".py", ".php", ".sql", ".log", ".xml", ".key", ".pem", ".crt",
+    ".conf", ".cfg", ".ini", ".json", ".yaml", ".yml", ".toml", ".env", ".sh", ".service", ".txt", ".md",
+    ".html", ".css", ".js", ".ts", ".py", ".php", ".sql", ".log", ".xml", ".key", ".pem", ".crt",
 ];
 
 pub struct FileOps(pub Arc<Shared>);
@@ -99,7 +99,9 @@ impl Files for FileOps {
                     continue;
                 }
                 let child = paths::join(&target, &name);
-                let Ok(info) = std::fs::symlink_metadata(&child) else { continue };
+                let Ok(info) = std::fs::symlink_metadata(&child) else {
+                    continue;
+                };
                 listing.entries.push(describe(&shared, &child, &info, false));
             }
 
@@ -126,7 +128,11 @@ impl Files for FileOps {
             }
             let handle = File::open(&target).map_err(|e| wrap_fs_error(&target, e))?;
 
-            let limit = if p.max_bytes <= 0 { 1 << 20 } else { p.max_bytes as u64 };
+            let limit = if p.max_bytes <= 0 {
+                1 << 20
+            } else {
+                p.max_bytes as u64
+            };
             // Reading one byte past the cap is how truncation is detected
             // without a second stat that could race the writer.
             let mut raw = Vec::new();
@@ -202,7 +208,8 @@ impl Files for FileOps {
         }
         // Creation honours umask on the leaf, so the requested mode is
         // applied explicitly rather than approximately.
-        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode)).map_err(|e| wrap_fs_error(&target, e))?;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(mode))
+            .map_err(|e| wrap_fs_error(&target, e))?;
         stat_entry(&self.0, &target)
     }
 
@@ -355,7 +362,9 @@ impl Files for FileOps {
         with_progress(ctx, &s, move |ctx, progress| {
             let outcome = match format {
                 ArchiveFormat::Zip => write_zip(&ctx, handle, &sources, &progress),
-                ArchiveFormat::TarGz | ArchiveFormat::TarZst => write_tar(&ctx, handle, format, &sources, &progress),
+                ArchiveFormat::TarGz | ArchiveFormat::TarZst => {
+                    write_tar(&ctx, handle, format, &sources, &progress)
+                }
             };
             match outcome {
                 Ok(file) => file
@@ -401,12 +410,16 @@ impl Files for FileOps {
     async fn download(&self, ctx: &Ctx, p: FsDownloadParams, s: StreamRef) -> PResult<FsDownloadResult> {
         let target = validate_path(&p.path)?;
 
-        let info = tokio::fs::metadata(&target).await.map_err(|e| wrap_fs_error(&target, e))?;
+        let info = tokio::fs::metadata(&target)
+            .await
+            .map_err(|e| wrap_fs_error(&target, e))?;
         if info.is_dir() {
             return Err(invalid(format!("{target} is a directory; archive it first")));
         }
 
-        let mut handle = tokio::fs::File::open(&target).await.map_err(|e| wrap_fs_error(&target, e))?;
+        let mut handle = tokio::fs::File::open(&target)
+            .await
+            .map_err(|e| wrap_fs_error(&target, e))?;
         let mut buffer = vec![0u8; TRANSFER_CHUNK];
         let mut sent = 0i64;
         loop {
@@ -440,7 +453,11 @@ impl Files for FileOps {
         // The temp file is removed on every exit path; after a successful
         // rename there is nothing left under that name and the removal is
         // a no-op.
-        let temp_name = format!("{dir}/.{}.upload.{}", paths::base(&target), uuid::Uuid::new_v4().simple());
+        let temp_name = format!(
+            "{dir}/.{}.upload.{}",
+            paths::base(&target),
+            uuid::Uuid::new_v4().simple()
+        );
         let _guard = RemoveOnDrop(temp_name.clone());
         let mut temp = tokio::fs::OpenOptions::new()
             .create_new(true)
@@ -550,7 +567,11 @@ fn walk_usage(
         }
 
         let (bytes, inodes) = tree_size(ctx, &full);
-        let kind = if mounts.contains(&full) { "mount" } else { "directory" };
+        let kind = if mounts.contains(&full) {
+            "mount"
+        } else {
+            "directory"
+        };
         entries.push(StorageUsageEntry {
             path: full.clone(),
             bytes,
@@ -671,7 +692,9 @@ fn is_editable_mime(kind: &str, target: &str) -> bool {
 /// Samples the head of a file, which is the only reliable way to tell a
 /// config from a binary when the name carries no extension.
 fn is_text_file(target: &str) -> bool {
-    let Ok(mut handle) = File::open(target) else { return false };
+    let Ok(mut handle) = File::open(target) else {
+        return false;
+    };
     let mut head = [0u8; 1024];
     let mut n = 0;
     // A single read may come back short; keep going until the sample is
@@ -727,7 +750,11 @@ fn copy_tree(ctx: &Ctx, from: &str, to: &str) -> PResult<()> {
         let entry = entry.map_err(walk_error)?;
         ctx.check()?;
         let relative = relative_to(entry.path(), from);
-        let target = if relative.is_empty() { to.to_string() } else { paths::join(to, &relative) };
+        let target = if relative.is_empty() {
+            to.to_string()
+        } else {
+            paths::join(to, &relative)
+        };
 
         let info = entry.metadata().map_err(walk_error)?;
         if info.is_dir() {
@@ -769,12 +796,19 @@ fn copy_one(from: &Path, to: &Path, info: &std::fs::Metadata) -> PResult<()> {
         .map_err(|e| ProviderError::internal(format!("copy {from_s} to {to_s}: {e}")))?;
     drop(destination);
     let _ = std::os::unix::fs::chown(to, Some(info.uid()), Some(info.gid()));
-    filetime::set_file_times(to, filetime::FileTime::now(), filetime::FileTime::from_last_modification_time(info))
-        .map_err(|e| wrap_fs_error(&to_s, e))
+    filetime::set_file_times(
+        to,
+        filetime::FileTime::now(),
+        filetime::FileTime::from_last_modification_time(info),
+    )
+    .map_err(|e| wrap_fs_error(&to_s, e))
 }
 
 fn walk_error(e: walkdir::Error) -> ProviderError {
-    let path = e.path().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+    let path = e
+        .path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     match e.into_io_error() {
         Some(io) => wrap_fs_error(&path, io),
         None => ProviderError::internal(format!("walk {path}: filesystem loop")),
@@ -805,7 +839,10 @@ fn apply_to_tree(
 }
 
 fn count_tree(target: &str) -> i64 {
-    walkdir::WalkDir::new(target).into_iter().filter(|e| e.is_ok()).count() as i64
+    walkdir::WalkDir::new(target)
+        .into_iter()
+        .filter(|e| e.is_ok())
+        .count() as i64
 }
 
 /// Sums a whole subtree. An entry that vanishes or cannot be read
@@ -856,10 +893,8 @@ async fn with_progress<T: Send + 'static>(
 ) -> PResult<T> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let ctx = ctx.clone();
-    let progress: Progress = Box::new(move |name: &str| {
-        tx.send(format!("{name}\n"))
-            .map_err(|_| ProviderError::Cancelled)
-    });
+    let progress: Progress =
+        Box::new(move |name: &str| tx.send(format!("{name}\n")).map_err(|_| ProviderError::Cancelled));
     let relay = async {
         while let Some(line) = rx.recv().await {
             if stream.send(line.as_bytes(), Encoding::Utf8).await.is_err() {
@@ -905,7 +940,13 @@ fn member_name(current: &Path, base: &str) -> String {
 /// Writes a compressed tar and hands the file back, trailer written, for
 /// the caller to sync. The compressor is finished by hand rather than on
 /// drop so an error in the trailer is reported instead of lost.
-fn write_tar(ctx: &Ctx, out: File, format: ArchiveFormat, sources: &[String], progress: &Progress) -> PResult<File> {
+fn write_tar(
+    ctx: &Ctx,
+    out: File,
+    format: ArchiveFormat,
+    sources: &[String],
+    progress: &Progress,
+) -> PResult<File> {
     match format {
         ArchiveFormat::TarZst => {
             let encoder = zstd::stream::write::Encoder::new(out, 3)
@@ -929,7 +970,12 @@ fn write_tar(ctx: &Ctx, out: File, format: ArchiveFormat, sources: &[String], pr
     }
 }
 
-fn tar_into<W: Write>(ctx: &Ctx, archive: &mut tar::Builder<W>, sources: &[String], progress: &Progress) -> PResult<()> {
+fn tar_into<W: Write>(
+    ctx: &Ctx,
+    archive: &mut tar::Builder<W>,
+    sources: &[String],
+    progress: &Progress,
+) -> PResult<()> {
     archive.follow_symlinks(false);
 
     for source in sources {
@@ -957,9 +1003,9 @@ fn tar_into<W: Write>(ctx: &Ctx, archive: &mut tar::Builder<W>, sources: &[Strin
                     .set_path(&name)
                     .map_err(|e| ProviderError::internal(format!("describe {}: {e}", current.display())))?;
                 header.set_cksum();
-                archive
-                    .append(&header, std::io::empty())
-                    .map_err(|e| ProviderError::internal(format!("write header for {}: {e}", current.display())))?;
+                archive.append(&header, std::io::empty()).map_err(|e| {
+                    ProviderError::internal(format!("write header for {}: {e}", current.display()))
+                })?;
             }
             progress(&name)?;
         }
@@ -987,9 +1033,9 @@ fn write_zip(ctx: &Ctx, out: File, sources: &[String], progress: &Progress) -> P
             let options = zip::write::SimpleFileOptions::default().unix_permissions(info.mode() & 0o777);
             if info.is_dir() {
                 name.push('/');
-                archive
-                    .add_directory(&name, options)
-                    .map_err(|e| ProviderError::internal(format!("write header for {}: {e}", current.display())))?;
+                archive.add_directory(&name, options).map_err(|e| {
+                    ProviderError::internal(format!("write header for {}: {e}", current.display()))
+                })?;
                 progress(&name)?;
                 continue;
             }
@@ -997,9 +1043,9 @@ fn write_zip(ctx: &Ctx, out: File, sources: &[String], progress: &Progress) -> P
             let options = options
                 .compression_method(zip::CompressionMethod::Deflated)
                 .large_file(info.len() >= u32::MAX as u64);
-            archive
-                .start_file(&name, options)
-                .map_err(|e| ProviderError::internal(format!("write header for {}: {e}", current.display())))?;
+            archive.start_file(&name, options).map_err(|e| {
+                ProviderError::internal(format!("write header for {}: {e}", current.display()))
+            })?;
             progress(&name)?;
 
             let current_s = current.to_string_lossy();
@@ -1016,7 +1062,13 @@ fn write_zip(ctx: &Ctx, out: File, sources: &[String], progress: &Progress) -> P
 
 /* ------------------------------- extraction -------------------------- */
 
-fn extract_tar(ctx: &Ctx, source: &str, destination: &str, overwrite: bool, progress: &Progress) -> PResult<i64> {
+fn extract_tar(
+    ctx: &Ctx,
+    source: &str,
+    destination: &str,
+    overwrite: bool,
+    progress: &Progress,
+) -> PResult<i64> {
     let handle = File::open(source).map_err(|e| wrap_fs_error(source, e))?;
 
     let lowered = source.to_lowercase();
@@ -1074,7 +1126,13 @@ fn extract_tar(ctx: &Ctx, source: &str, destination: &str, overwrite: bool, prog
     Ok(extracted)
 }
 
-fn extract_zip(ctx: &Ctx, source: &str, destination: &str, overwrite: bool, progress: &Progress) -> PResult<i64> {
+fn extract_zip(
+    ctx: &Ctx,
+    source: &str,
+    destination: &str,
+    overwrite: bool,
+    progress: &Progress,
+) -> PResult<i64> {
     let handle = File::open(source).map_err(|e| wrap_fs_error(source, e))?;
     let mut archive =
         zip::ZipArchive::new(handle).map_err(|e| ProviderError::internal(format!("open {source}: {e}")))?;
@@ -1082,9 +1140,9 @@ fn extract_zip(ctx: &Ctx, source: &str, destination: &str, overwrite: bool, prog
     let mut extracted = 0i64;
     for index in 0..archive.len() {
         ctx.check()?;
-        let mut member = archive.by_index(index).map_err(|e| {
-            ProviderError::internal(format!("open member {index} in {source}: {e}"))
-        })?;
+        let mut member = archive
+            .by_index(index)
+            .map_err(|e| ProviderError::internal(format!("open member {index} in {source}: {e}")))?;
         let name = member.name().to_string();
         let target = contained_path(destination, &name)?;
 
@@ -1159,7 +1217,9 @@ pub fn contained_path(destination: &str, name: &str) -> PResult<String> {
 /// written through.
 pub fn contained_link(destination: &str, name: &str, linkname: &str) -> PResult<()> {
     if linkname.is_empty() {
-        return Err(invalid(format!("archive member {name:?} is a symlink with no target")));
+        return Err(invalid(format!(
+            "archive member {name:?} is a symlink with no target"
+        )));
     }
     if linkname.contains('\0') {
         return Err(invalid("archive member name contains a null byte"));
@@ -1220,11 +1280,19 @@ mod tests {
     }
 
     fn file(name: &'static str, body: &'static str) -> TarEntry {
-        TarEntry { name, body, linkname: "" }
+        TarEntry {
+            name,
+            body,
+            linkname: "",
+        }
     }
 
     fn link(name: &'static str, linkname: &'static str) -> TarEntry {
-        TarEntry { name, body: "", linkname }
+        TarEntry {
+            name,
+            body: "",
+            linkname,
+        }
     }
 
     /// Writes a member name byte for byte. The tar crate refuses to spell
@@ -1410,7 +1478,8 @@ mod tests {
             ),
         ];
         for (name, want) in cases {
-            let got = contained_path(DESTINATION, name).unwrap_or_else(|e| panic!("contained_path({name:?}): {e}"));
+            let got =
+                contained_path(DESTINATION, name).unwrap_or_else(|e| panic!("contained_path({name:?}): {e}"));
             assert_eq!(got, want, "contained_path({name:?})");
             assert!(within(&got, DESTINATION));
         }
@@ -1431,19 +1500,33 @@ mod tests {
             ("sibling", "a/link", "b.txt", true),
             ("child", "link", "assets/logo.png", true),
             ("back up and in again", "a/b/link", "../../assets/logo.png", true),
-            ("absolute but inside", "link", "/var/www/uploads/assets/logo.png", true),
+            (
+                "absolute but inside",
+                "link",
+                "/var/www/uploads/assets/logo.png",
+                true,
+            ),
             ("one level out", "link", "../escaped", false),
             ("far out", "a/b/link", "../../../../../../etc", false),
             ("out of the destination's parent", "link", "../../", false),
             ("absolute", "link", "/etc/shadow", false),
-            ("absolute onto a sibling directory", "link", "/var/www/uploads-old", false),
+            (
+                "absolute onto a sibling directory",
+                "link",
+                "/var/www/uploads-old",
+                false,
+            ),
             ("windows separators", "link", r"..\..\escaped", false),
             ("empty target", "link", "", false),
             ("null byte", "link", "assets\0/../../etc", false),
         ];
         for (name, member, linkname, ok) in cases {
             let result = contained_link(DESTINATION, member, linkname);
-            assert_eq!(result.is_ok(), ok, "{name}: contained_link({member:?} -> {linkname:?}) = {result:?}");
+            assert_eq!(
+                result.is_ok(),
+                ok,
+                "{name}: contained_link({member:?} -> {linkname:?}) = {result:?}"
+            );
         }
     }
 
@@ -1469,8 +1552,14 @@ mod tests {
         let target = root.path().join("keep.txt");
         std::fs::write(&target, "original\n").unwrap();
 
-        let err =
-            write_member(target.to_str().unwrap(), &mut "replacement".as_bytes(), 0o644, false, 11).unwrap_err();
+        let err = write_member(
+            target.to_str().unwrap(),
+            &mut "replacement".as_bytes(),
+            0o644,
+            false,
+            11,
+        )
+        .unwrap_err();
         assert!(matches!(err, ProviderError::Conflict(_)), "{err:?}");
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "original\n");
     }
@@ -1543,14 +1632,24 @@ mod tests {
         let ctx = Ctx::background();
 
         let listing = ops
-            .list(&ctx, FsListParams { path: s(root.path()), show_hidden: false, limit: 0 })
+            .list(
+                &ctx,
+                FsListParams {
+                    path: s(root.path()),
+                    show_hidden: false,
+                    limit: 0,
+                },
+            )
             .await
             .unwrap();
         let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["adir", "zdir", "a.txt", "b.txt"]);
         assert_eq!(listing.total, 4);
         assert!(!listing.truncated);
-        assert_eq!(listing.parent.as_deref(), Some(root.path().parent().unwrap().to_str().unwrap()));
+        assert_eq!(
+            listing.parent.as_deref(),
+            Some(root.path().parent().unwrap().to_str().unwrap())
+        );
         let a = listing.entries.iter().find(|e| e.name == "a.txt").unwrap();
         assert_eq!(a.kind, "file");
         assert_eq!(a.mime.as_deref(), Some("text/plain"));
@@ -1558,7 +1657,14 @@ mod tests {
         assert!(!a.owner.is_empty());
 
         let listing = ops
-            .list(&ctx, FsListParams { path: s(root.path()), show_hidden: true, limit: 2 })
+            .list(
+                &ctx,
+                FsListParams {
+                    path: s(root.path()),
+                    show_hidden: true,
+                    limit: 2,
+                },
+            )
             .await
             .unwrap();
         assert_eq!(listing.total, 5);
@@ -1576,22 +1682,67 @@ mod tests {
         let ops = FileOps(test_shared());
         let ctx = Ctx::background();
 
-        let r = ops.read(&ctx, FsReadParams { path: s(&text), max_bytes: 0 }).await.unwrap();
-        assert_eq!((r.content.as_str(), r.encoding.as_str(), r.truncated), ("héllo world\n", "utf8", false));
+        let r = ops
+            .read(
+                &ctx,
+                FsReadParams {
+                    path: s(&text),
+                    max_bytes: 0,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            (r.content.as_str(), r.encoding.as_str(), r.truncated),
+            ("héllo world\n", "utf8", false)
+        );
         assert_eq!(r.size, 13);
 
-        let r = ops.read(&ctx, FsReadParams { path: s(&binary), max_bytes: 0 }).await.unwrap();
+        let r = ops
+            .read(
+                &ctx,
+                FsReadParams {
+                    path: s(&binary),
+                    max_bytes: 0,
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(r.encoding, "base64");
         assert_eq!(BASE64.decode(r.content).unwrap(), [0u8, 1, 2, 255]);
 
-        let r = ops.read(&ctx, FsReadParams { path: s(&text), max_bytes: 5 }).await.unwrap();
+        let r = ops
+            .read(
+                &ctx,
+                FsReadParams {
+                    path: s(&text),
+                    max_bytes: 5,
+                },
+            )
+            .await
+            .unwrap();
         assert!(r.truncated);
         assert_eq!(r.size, 13);
 
-        let err = ops.read(&ctx, FsReadParams { path: s(root.path()), max_bytes: 0 }).await.unwrap_err();
+        let err = ops
+            .read(
+                &ctx,
+                FsReadParams {
+                    path: s(root.path()),
+                    max_bytes: 0,
+                },
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(err, ProviderError::InvalidParams(_)));
         let err = ops
-            .read(&ctx, FsReadParams { path: s(&root.path().join("missing")), max_bytes: 0 })
+            .read(
+                &ctx,
+                FsReadParams {
+                    path: s(&root.path().join("missing")),
+                    max_bytes: 0,
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::NotFound(_)));
@@ -1637,58 +1788,118 @@ mod tests {
 
         let dir = root.path().join("a/b/c");
         let entry = ops
-            .mkdir(&ctx, FsMkdirParams { path: s(&dir), mode: Some("0750".into()), parents: true })
+            .mkdir(
+                &ctx,
+                FsMkdirParams {
+                    path: s(&dir),
+                    mode: Some("0750".into()),
+                    parents: true,
+                },
+            )
             .await
             .unwrap();
-        assert_eq!((entry.kind.as_str(), entry.mode.as_str(), entry.child_count), ("directory", "0750", Some(0)));
+        assert_eq!(
+            (entry.kind.as_str(), entry.mode.as_str(), entry.child_count),
+            ("directory", "0750", Some(0))
+        );
         let err = ops
-            .mkdir(&ctx, FsMkdirParams { path: s(&dir), mode: None, parents: false })
+            .mkdir(
+                &ctx,
+                FsMkdirParams {
+                    path: s(&dir),
+                    mode: None,
+                    parents: false,
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::Conflict(_)), "{err:?}");
 
         let moved = root.path().join("a/moved.conf");
-        ops.r#move(&ctx, FsMoveParams { from: s(&target), to: s(&moved), overwrite: false })
-            .await
-            .unwrap();
+        ops.r#move(
+            &ctx,
+            FsMoveParams {
+                from: s(&target),
+                to: s(&moved),
+                overwrite: false,
+            },
+        )
+        .await
+        .unwrap();
         assert!(!target.exists() && moved.exists());
 
         let copy = root.path().join("copy");
         let entry = ops
-            .copy(&ctx, FsCopyParams { from: s(&root.path().join("a")), to: s(&copy), overwrite: false })
+            .copy(
+                &ctx,
+                FsCopyParams {
+                    from: s(&root.path().join("a")),
+                    to: s(&copy),
+                    overwrite: false,
+                },
+            )
             .await
             .unwrap();
         assert_eq!(entry.kind, "directory");
         assert_eq!(std::fs::read_to_string(copy.join("moved.conf")).unwrap(), "k=v\n");
         assert_eq!(std::fs::metadata(copy.join("b/c")).unwrap().mode() & 0o777, 0o750);
         let err = ops
-            .copy(&ctx, FsCopyParams { from: s(&root.path().join("a")), to: s(&copy), overwrite: false })
+            .copy(
+                &ctx,
+                FsCopyParams {
+                    from: s(&root.path().join("a")),
+                    to: s(&copy),
+                    overwrite: false,
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::Conflict(_)));
         let err = ops
             .copy(
                 &ctx,
-                FsCopyParams { from: s(&root.path().join("a")), to: s(&root.path().join("a/inner")), overwrite: true },
+                FsCopyParams {
+                    from: s(&root.path().join("a")),
+                    to: s(&root.path().join("a/inner")),
+                    overwrite: true,
+                },
             )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::InvalidParams(_)));
 
         let err = ops
-            .remove(&ctx, FsRemoveParams { paths: vec![s(&copy)], recursive: false })
+            .remove(
+                &ctx,
+                FsRemoveParams {
+                    paths: vec![s(&copy)],
+                    recursive: false,
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::PreconditionFailed(_)));
         // copy, copy/moved.conf, copy/b, copy/b/c
         let removed = ops
-            .remove(&ctx, FsRemoveParams { paths: vec![s(&copy), s(&root.path().join("nope"))], recursive: true })
+            .remove(
+                &ctx,
+                FsRemoveParams {
+                    paths: vec![s(&copy), s(&root.path().join("nope"))],
+                    recursive: true,
+                },
+            )
             .await
             .unwrap();
         assert_eq!(removed, 4);
         assert!(!copy.exists());
         let err = ops
-            .remove(&ctx, FsRemoveParams { paths: vec!["/usr".into()], recursive: true })
+            .remove(
+                &ctx,
+                FsRemoveParams {
+                    paths: vec!["/usr".into()],
+                    recursive: true,
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::PermissionDenied(_)), "{err:?}");
@@ -1703,19 +1914,40 @@ mod tests {
         let ops = FileOps(test_shared());
         let ctx = Ctx::background();
 
-        ops.chmod(&ctx, FsChmodParams { paths: vec![s(&dir)], mode: "0700".into(), recursive: false })
-            .await
-            .unwrap();
+        ops.chmod(
+            &ctx,
+            FsChmodParams {
+                paths: vec![s(&dir)],
+                mode: "0700".into(),
+                recursive: false,
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(std::fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
         assert_ne!(std::fs::metadata(dir.join("f")).unwrap().mode() & 0o777, 0o700);
 
-        ops.chmod(&ctx, FsChmodParams { paths: vec![s(&dir)], mode: "0755".into(), recursive: true })
-            .await
-            .unwrap();
+        ops.chmod(
+            &ctx,
+            FsChmodParams {
+                paths: vec![s(&dir)],
+                mode: "0755".into(),
+                recursive: true,
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(std::fs::metadata(dir.join("f")).unwrap().mode() & 0o777, 0o755);
 
         let err = ops
-            .chmod(&ctx, FsChmodParams { paths: vec![s(&dir)], mode: "rwx".into(), recursive: false })
+            .chmod(
+                &ctx,
+                FsChmodParams {
+                    paths: vec![s(&dir)],
+                    mode: "rwx".into(),
+                    recursive: false,
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::InvalidParams(_)));
@@ -1735,10 +1967,17 @@ mod tests {
         assert!(matches!(err, ProviderError::NotFound(_)));
 
         // Chowning to the caller's own account is always allowed.
-        let me = nix::unistd::User::from_uid(nix::unistd::getuid()).unwrap().unwrap();
+        let me = nix::unistd::User::from_uid(nix::unistd::getuid())
+            .unwrap()
+            .unwrap();
         ops.chown(
             &ctx,
-            FsChownParams { paths: vec![s(&dir)], owner: Some(me.name), group: None, recursive: true },
+            FsChownParams {
+                paths: vec![s(&dir)],
+                owner: Some(me.name),
+                group: None,
+                recursive: true,
+            },
         )
         .await
         .unwrap();
@@ -1759,7 +1998,11 @@ mod tests {
         let entry = ops
             .archive(
                 &ctx,
-                FsArchiveParams { paths: vec![s(&site)], destination: s(&archive), format: format.into() },
+                FsArchiveParams {
+                    paths: vec![s(&site)],
+                    destination: s(&archive),
+                    format: format.into(),
+                },
                 stream.clone(),
             )
             .await
@@ -1770,7 +2013,13 @@ mod tests {
         let want: Vec<String> = if format == "zip" {
             ["assets/app.js", "index.html", "site/", "site/assets/"]
                 .iter()
-                .map(|l| if l.starts_with("site") { l.to_string() } else { format!("site/{l}") })
+                .map(|l| {
+                    if l.starts_with("site") {
+                        l.to_string()
+                    } else {
+                        format!("site/{l}")
+                    }
+                })
                 .collect()
         } else {
             ["site", "site/assets", "site/assets/app.js", "site/index.html"]
@@ -1787,21 +2036,38 @@ mod tests {
         let count = ops
             .extract(
                 &ctx,
-                FsExtractParams { path: s(&archive), destination: s(&out), overwrite: false },
+                FsExtractParams {
+                    path: s(&archive),
+                    destination: s(&out),
+                    overwrite: false,
+                },
                 stream.clone(),
             )
             .await
             .unwrap();
         assert_eq!(count, 4, "{format} extracted members");
-        assert_eq!(std::fs::read_to_string(out.join("site/index.html")).unwrap(), "<h1>hi</h1>");
-        assert_eq!(std::fs::read_to_string(out.join("site/assets/app.js")).unwrap(), "console.log(1)");
-        assert_eq!(std::fs::metadata(out.join("site/assets/app.js")).unwrap().mode() & 0o777, 0o751);
+        assert_eq!(
+            std::fs::read_to_string(out.join("site/index.html")).unwrap(),
+            "<h1>hi</h1>"
+        );
+        assert_eq!(
+            std::fs::read_to_string(out.join("site/assets/app.js")).unwrap(),
+            "console.log(1)"
+        );
+        assert_eq!(
+            std::fs::metadata(out.join("site/assets/app.js")).unwrap().mode() & 0o777,
+            0o751
+        );
 
         // Extracting again without overwrite trips on the first file.
         let err = ops
             .extract(
                 &ctx,
-                FsExtractParams { path: s(&archive), destination: s(&out), overwrite: false },
+                FsExtractParams {
+                    path: s(&archive),
+                    destination: s(&out),
+                    overwrite: false,
+                },
                 stream.clone(),
             )
             .await
@@ -1884,13 +2150,21 @@ mod tests {
 
         let target = root.path().join("uploads/new.bin");
         let stream = Arc::new(Recorder {
-            inbox: tokio::sync::Mutex::new(VecDeque::from(vec![payload[..1000].to_vec(), payload[1000..].to_vec()])),
+            inbox: tokio::sync::Mutex::new(VecDeque::from(vec![
+                payload[..1000].to_vec(),
+                payload[1000..].to_vec(),
+            ])),
             ..Default::default()
         });
         let entry = ops
             .upload(
                 &ctx,
-                FsUploadParams { path: s(&target), size: payload.len() as i64, mode: Some("0640".into()), overwrite: false },
+                FsUploadParams {
+                    path: s(&target),
+                    size: payload.len() as i64,
+                    mode: Some("0640".into()),
+                    overwrite: false,
+                },
                 stream,
             )
             .await
@@ -1908,7 +2182,16 @@ mod tests {
             ..Default::default()
         });
         let err = ops
-            .upload(&ctx, FsUploadParams { path: s(&target), size: 5, mode: None, overwrite: true }, stream)
+            .upload(
+                &ctx,
+                FsUploadParams {
+                    path: s(&target),
+                    size: 5,
+                    mode: None,
+                    overwrite: true,
+                },
+                stream,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err:?}");
@@ -1917,7 +2200,16 @@ mod tests {
 
         let stream = Arc::new(Recorder::default());
         let err = ops
-            .upload(&ctx, FsUploadParams { path: s(&target), size: 0, mode: None, overwrite: false }, stream)
+            .upload(
+                &ctx,
+                FsUploadParams {
+                    path: s(&target),
+                    size: 0,
+                    mode: None,
+                    overwrite: false,
+                },
+                stream,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::Conflict(_)));
@@ -1935,16 +2227,42 @@ mod tests {
         let ops = FileOps(test_shared());
         let ctx = Ctx::background();
 
-        let usage = ops.usage(&ctx, FsUsageParams { path: s(root.path()), depth: 0 }).await.unwrap();
+        let usage = ops
+            .usage(
+                &ctx,
+                FsUsageParams {
+                    path: s(root.path()),
+                    depth: 0,
+                },
+            )
+            .await
+            .unwrap();
         assert_eq!(usage.total, 4015);
-        let labels: Vec<&str> = usage.entries.iter().map(|e| e.label.as_deref().unwrap()).collect();
+        let labels: Vec<&str> = usage
+            .entries
+            .iter()
+            .map(|e| e.label.as_deref().unwrap())
+            .collect();
         assert_eq!(labels, ["big", "small"]);
         assert_eq!(usage.entries[0].bytes, 4000);
         assert_eq!(usage.entries[0].inodes, Some(4));
         assert_eq!(usage.entries[0].kind, "directory");
 
-        let usage = ops.usage(&ctx, FsUsageParams { path: s(root.path()), depth: 2 }).await.unwrap();
-        let labels: Vec<&str> = usage.entries.iter().map(|e| e.label.as_deref().unwrap()).collect();
+        let usage = ops
+            .usage(
+                &ctx,
+                FsUsageParams {
+                    path: s(root.path()),
+                    depth: 2,
+                },
+            )
+            .await
+            .unwrap();
+        let labels: Vec<&str> = usage
+            .entries
+            .iter()
+            .map(|e| e.label.as_deref().unwrap())
+            .collect();
         assert_eq!(labels, ["big", "inner", "small"]);
         // A deeper breakdown never changes the total.
         assert_eq!(usage.total, 4015);
@@ -1956,7 +2274,10 @@ mod tests {
         std::fs::write(root.path().join("real"), "x").unwrap();
         std::os::unix::fs::symlink("real", root.path().join("link")).unwrap();
         let ops = FileOps(test_shared());
-        let entry = ops.stat(&Ctx::background(), root.path().join("link").to_str().unwrap()).await.unwrap();
+        let entry = ops
+            .stat(&Ctx::background(), root.path().join("link").to_str().unwrap())
+            .await
+            .unwrap();
         assert_eq!(entry.kind, "symlink");
         assert_eq!(entry.link_target.as_deref(), Some("real"));
         assert!(entry.mime.is_none());
@@ -1972,9 +2293,15 @@ mod tests {
         let noext = root.path().join("README");
         std::fs::write(&noext, "plain words").unwrap();
 
-        assert!(is_editable_mime(&mime_type(conf.to_str().unwrap()), conf.to_str().unwrap()));
+        assert!(is_editable_mime(
+            &mime_type(conf.to_str().unwrap()),
+            conf.to_str().unwrap()
+        ));
         assert_eq!(mime_type(blob.to_str().unwrap()), "application/octet-stream");
-        assert!(!is_editable_mime("application/octet-stream", blob.to_str().unwrap()));
+        assert!(!is_editable_mime(
+            "application/octet-stream",
+            blob.to_str().unwrap()
+        ));
         assert_eq!(mime_type(noext.to_str().unwrap()), "text/plain");
         assert!(is_textual(b""));
         assert!(!is_textual(b"a\0b"));

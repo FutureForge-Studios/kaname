@@ -36,8 +36,15 @@ const PTY_READ_BUFFER: usize = 32 << 10;
 
 /// The shells a login is allowed to land in. A passwd entry naming
 /// anything else falls back rather than executing it.
-const LOGIN_SHELLS: &[&str] =
-    &["/bin/bash", "/usr/bin/bash", "/bin/sh", "/usr/bin/sh", "/bin/zsh", "/usr/bin/zsh", "/bin/ash"];
+const LOGIN_SHELLS: &[&str] = &[
+    "/bin/bash",
+    "/usr/bin/bash",
+    "/bin/sh",
+    "/usr/bin/sh",
+    "/bin/zsh",
+    "/usr/bin/zsh",
+    "/bin/ash",
+];
 
 pub struct PtyOps(pub Arc<Shared>);
 
@@ -112,7 +119,10 @@ impl PtySessions {
     /// registered under the same id in the meantime stays.
     fn release(&self, id: &str, session: &Arc<PtySession>) {
         let mut sessions = self.sessions.lock();
-        if sessions.get(id).is_some_and(|current| Arc::ptr_eq(current, session)) {
+        if sessions
+            .get(id)
+            .is_some_and(|current| Arc::ptr_eq(current, session))
+        {
             sessions.remove(id);
         }
     }
@@ -134,7 +144,13 @@ impl PtySessions {
 
 #[async_trait]
 impl Pty for PtyOps {
-    async fn open(&self, ctx: &Ctx, session_id: &str, p: PtyOpenParams, s: StreamRef) -> PResult<PtyOpenResult> {
+    async fn open(
+        &self,
+        ctx: &Ctx,
+        session_id: &str,
+        p: PtyOpenParams,
+        s: StreamRef,
+    ) -> PResult<PtyOpenResult> {
         let account = resolve_account(p.user.as_deref())?;
 
         let mut workdir = match p.cwd.as_deref().filter(|c| !c.is_empty()) {
@@ -179,8 +195,14 @@ impl Pty for PtyOps {
             .env("USER", &account.name)
             .env("LOGNAME", &account.name)
             .env("SHELL", &shell)
-            .env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
-            .env("LANG", or_default(std::env::var("LANG").unwrap_or_default(), "C.UTF-8"));
+            .env(
+                "PATH",
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            )
+            .env(
+                "LANG",
+                or_default(std::env::var("LANG").unwrap_or_default(), "C.UTF-8"),
+            );
 
         let slave_out = pty.slave.try_clone()?;
         let slave_err = pty.slave.try_clone()?;
@@ -274,14 +296,21 @@ impl Pty for PtyOps {
 /// Wires the pty to the RPC stream in both directions and returns once
 /// either the shell exits, the operator disconnects, or the request is
 /// cancelled. Whichever happens first tears the other side down.
-async fn pump(ctx: &Ctx, session: &Arc<PtySession>, mut child: tokio::process::Child, stream: &dyn Stream) -> PResult<()> {
+async fn pump(
+    ctx: &Ctx,
+    session: &Arc<PtySession>,
+    mut child: tokio::process::Child,
+    stream: &dyn Stream,
+) -> PResult<()> {
     let master = &session.master;
 
     let reader = async {
         let mut buffer = vec![0u8; PTY_READ_BUFFER];
         loop {
             let mut guard = master.readable().await?;
-            match guard.try_io(|fd| nix::unistd::read(fd.as_raw_fd(), &mut buffer).map_err(std::io::Error::from)) {
+            match guard
+                .try_io(|fd| nix::unistd::read(fd.as_raw_fd(), &mut buffer).map_err(std::io::Error::from))
+            {
                 Ok(Ok(0)) => return Ok(()),
                 Ok(Ok(n)) => {
                     // Terminal output is arbitrary bytes, not text: base64
@@ -334,7 +363,9 @@ async fn write_all(master: &AsyncFd<OwnedFd>, data: &[u8]) -> PResult<()> {
     let mut offset = 0;
     while offset < data.len() {
         let mut guard = master.writable().await?;
-        match guard.try_io(|fd| nix::unistd::write(fd.get_ref(), &data[offset..]).map_err(std::io::Error::from)) {
+        match guard
+            .try_io(|fd| nix::unistd::write(fd.get_ref(), &data[offset..]).map_err(std::io::Error::from))
+        {
             Ok(Ok(n)) => offset += n,
             Ok(Err(e)) => return Err(ProviderError::internal(format!("write to terminal: {e}"))),
             Err(_would_block) => continue,
@@ -448,11 +479,19 @@ fn sanitize_term(term: &str) -> String {
     let allowed = term
         .bytes()
         .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_' || c == b'.');
-    if allowed { term.to_string() } else { "xterm-256color".to_string() }
+    if allowed {
+        term.to_string()
+    } else {
+        "xterm-256color".to_string()
+    }
 }
 
 fn or_default(value: String, fallback: &str) -> String {
-    if value.is_empty() { fallback.to_string() } else { value }
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value
+    }
 }
 
 /* --------------------------------- tests ------------------------------ */
@@ -552,7 +591,10 @@ mod tests {
         assert!(shared.ptys.lookup("s1").is_none(), "the session was not released");
         // The shell is gone: signalling its group finds nobody.
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(kill(Pid::from_raw(result.pid as i32), None).is_err(), "the shell outlived its session");
+        assert!(
+            kill(Pid::from_raw(result.pid as i32), None).is_err(),
+            "the shell outlived its session"
+        );
     }
 
     #[tokio::test]
