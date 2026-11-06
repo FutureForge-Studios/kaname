@@ -336,7 +336,7 @@ pub fn build_tree(all: Vec<ProcessInfo>, root_pid: Option<i64>) -> PResult<Vec<P
     // Iterative rather than recursive: a corrupted ppid chain on a busy
     // host must not be able to blow the stack of the agent.
     let mut visited: HashSet<i64> = HashSet::new();
-    for root in roots.iter().rev() {
+    for root in &roots {
         let mut stack: Vec<(i64, i64)> = vec![(*root, 0)];
         while let Some((pid, depth)) = stack.pop() {
             if !visited.insert(pid) {
