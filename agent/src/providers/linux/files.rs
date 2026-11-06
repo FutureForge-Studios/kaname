@@ -1181,3 +1181,803 @@ pub fn contained_link(destination: &str, name: &str, linkname: &str) -> PResult<
     }
     Ok(())
 }
+
+/* --------------------------------- tests ------------------------------ */
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::io::Write;
+
+    use super::*;
+
+    /* Zip-slip.
+     *
+     * An archive is attacker-controlled by the time it reaches a host: the
+     * operator uploads what a customer sent and asks the panel to unpack
+     * it. These tests build the hostile archives for real and assert on
+     * the filesystem afterwards, because the only claim worth making is
+     * that nothing landed outside the destination. */
+
+    /// The member names every extractor gets caught by. Each one is a real
+    /// shape from the zip-slip family.
+    const HOSTILE_MEMBERS: &[&str] = &[
+        "../escaped.txt",
+        "../../escaped.txt",
+        "../../../../../../../../etc/cron.d/escaped",
+        "/etc/cron.d/absolute",
+        "//etc/cron.d/doubled",
+        "nested/../../escaped.txt",
+        "./../escaped.txt",
+        r"..\escaped.txt",
+        r"..\..\windows\escaped.txt",
+    ];
+
+    struct TarEntry {
+        name: &'static str,
+        body: &'static str,
+        linkname: &'static str,
+    }
+
+    fn file(name: &'static str, body: &'static str) -> TarEntry {
+        TarEntry { name, body, linkname: "" }
+    }
+
+    fn link(name: &'static str, linkname: &'static str) -> TarEntry {
+        TarEntry { name, body: "", linkname }
+    }
+
+    /// Writes a member name byte for byte. The tar crate refuses to spell
+    /// `..` through its path setter, which is the right default for a
+    /// producer and useless for building the hostile input these tests
+    /// need, so the ustar name field is filled directly.
+    fn raw_name(header: &mut tar::Header, name: &str) {
+        let field = &mut header.as_old_mut().name;
+        field.fill(0);
+        field[..name.len()].copy_from_slice(name.as_bytes());
+    }
+
+    fn build_tar_gz(path: &Path, entries: &[TarEntry]) {
+        let handle = File::create(path).unwrap();
+        let gz = flate2::write::GzEncoder::new(handle, flate2::Compression::default());
+        let mut archive = tar::Builder::new(gz);
+        for entry in entries {
+            let mut header = tar::Header::new_gnu();
+            raw_name(&mut header, entry.name);
+            if entry.linkname.is_empty() {
+                header.set_mode(0o644);
+                header.set_entry_type(tar::EntryType::Regular);
+                header.set_size(entry.body.len() as u64);
+                header.set_cksum();
+                archive.append(&header, entry.body.as_bytes()).unwrap();
+            } else {
+                header.set_mode(0o777);
+                header.set_entry_type(tar::EntryType::Symlink);
+                header.set_size(0);
+                header.set_link_name_literal(entry.linkname).unwrap();
+                header.set_cksum();
+                archive.append(&header, std::io::empty()).unwrap();
+            }
+        }
+        archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    fn build_zip(path: &Path, entries: &[TarEntry]) {
+        let handle = File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(handle);
+        for entry in entries {
+            archive
+                .start_file(entry.name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(entry.body.as_bytes()).unwrap();
+        }
+        archive.finish().unwrap();
+    }
+
+    /// Walks the whole scratch area and fails on any file that is not
+    /// under the destination. It is deliberately blunt: it does not care
+    /// *how* the extractor handled a hostile member, only that the member
+    /// did not end up somewhere it could be executed from.
+    fn assert_nothing_outside(root: &Path, destination: &Path) {
+        for entry in walkdir::WalkDir::new(root) {
+            let entry = entry.unwrap();
+            if entry.file_type().is_dir() || entry.path() == root {
+                continue;
+            }
+            let ext = entry.path().extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext == "tgz" || ext == "zip" {
+                continue; // the archive we built
+            }
+            assert!(
+                entry.path().starts_with(destination),
+                "extraction wrote {}, which is outside the destination {}",
+                entry.path().display(),
+                destination.display()
+            );
+        }
+    }
+
+    fn no_progress() -> Progress {
+        Box::new(|_| Ok(()))
+    }
+
+    fn hostile_entries() -> Vec<TarEntry> {
+        HOSTILE_MEMBERS.iter().map(|name| file(name, "pwned\n")).collect()
+    }
+
+    fn assert_classic_landing_spots_are_empty(root: &Path) {
+        for escaped in [
+            root.join("escaped.txt"),
+            root.parent().unwrap().join("escaped.txt"),
+            root.join("windows").join("escaped.txt"),
+        ] {
+            assert!(
+                std::fs::symlink_metadata(&escaped).is_err(),
+                "{} was written outside the destination",
+                escaped.display()
+            );
+        }
+    }
+
+    #[test]
+    fn extract_tar_keeps_hostile_members_inside_the_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("dest");
+        let source = root.path().join("payload.tgz");
+        build_tar_gz(&source, &hostile_entries());
+        std::fs::create_dir_all(&destination).unwrap();
+
+        extract_tar(
+            &Ctx::background(),
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            true,
+            &no_progress(),
+        )
+        .unwrap();
+
+        assert_nothing_outside(root.path(), &destination);
+        // Nothing may have been created beside the destination either, so
+        // the classic landing spots are checked by name as well.
+        assert_classic_landing_spots_are_empty(root.path());
+    }
+
+    #[test]
+    fn extract_zip_keeps_hostile_members_inside_the_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("dest");
+        let source = root.path().join("payload.zip");
+        build_zip(&source, &hostile_entries());
+        std::fs::create_dir_all(&destination).unwrap();
+
+        extract_zip(
+            &Ctx::background(),
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            true,
+            &no_progress(),
+        )
+        .unwrap();
+
+        assert_nothing_outside(root.path(), &destination);
+        assert_classic_landing_spots_are_empty(root.path());
+    }
+
+    // A symlink member is the second half of the attack: the link itself
+    // is harmless, and the regular member written *through* it a moment
+    // later is what lands on /etc. Refusing the link is the only place
+    // this can be stopped, because by the time the second member is
+    // opened the kernel has already followed it.
+    #[test]
+    fn extract_tar_refuses_a_symlink_that_leaves_the_destination() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("dest");
+        let source = root.path().join("payload.tgz");
+        build_tar_gz(&source, &[link("pwn", "../../"), file("pwn/loot.txt", "owned\n")]);
+        std::fs::create_dir_all(&destination).unwrap();
+
+        let err = extract_tar(
+            &Ctx::background(),
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            true,
+            &no_progress(),
+        )
+        .expect_err("a symlink member pointing out of the destination was accepted");
+        assert!(matches!(err, ProviderError::PermissionDenied(_)), "{err:?}");
+        assert_nothing_outside(root.path(), &destination);
+    }
+
+    #[test]
+    fn contained_path_clamps_every_member_into_the_destination() {
+        const DESTINATION: &str = "/var/www/uploads";
+        let cases = [
+            ("index.html", "/var/www/uploads/index.html"),
+            ("a/b/c.txt", "/var/www/uploads/a/b/c.txt"),
+            ("./a/./b.txt", "/var/www/uploads/a/b.txt"),
+            // Every one of these is the same claim: whatever the member
+            // calls itself, it resolves under the destination and nowhere
+            // else.
+            ("../escaped.txt", "/var/www/uploads/escaped.txt"),
+            ("../../../../etc/shadow", "/var/www/uploads/etc/shadow"),
+            ("/etc/shadow", "/var/www/uploads/etc/shadow"),
+            ("//etc//shadow", "/var/www/uploads/etc/shadow"),
+            ("a/../../escaped.txt", "/var/www/uploads/escaped.txt"),
+            (r"..\escaped.txt", "/var/www/uploads/escaped.txt"),
+            (
+                r"..\..\..\windows\system32\drivers\etc\hosts",
+                "/var/www/uploads/windows/system32/drivers/etc/hosts",
+            ),
+        ];
+        for (name, want) in cases {
+            let got = contained_path(DESTINATION, name).unwrap_or_else(|e| panic!("contained_path({name:?}): {e}"));
+            assert_eq!(got, want, "contained_path({name:?})");
+            assert!(within(&got, DESTINATION));
+        }
+    }
+
+    #[test]
+    fn contained_path_refuses_a_null_byte_in_a_member_name() {
+        // A null byte truncates the name at whatever opens it, so the path
+        // that was checked and the path that is created stop being the same.
+        let err = contained_path("/var/www", "index.html\0/../../etc/shadow").unwrap_err();
+        assert!(matches!(err, ProviderError::InvalidParams(_)), "{err:?}");
+    }
+
+    #[test]
+    fn contained_link_separates_links_that_stay_from_links_that_leave() {
+        const DESTINATION: &str = "/var/www/uploads";
+        let cases = [
+            ("sibling", "a/link", "b.txt", true),
+            ("child", "link", "assets/logo.png", true),
+            ("back up and in again", "a/b/link", "../../assets/logo.png", true),
+            ("absolute but inside", "link", "/var/www/uploads/assets/logo.png", true),
+            ("one level out", "link", "../escaped", false),
+            ("far out", "a/b/link", "../../../../../../etc", false),
+            ("out of the destination's parent", "link", "../../", false),
+            ("absolute", "link", "/etc/shadow", false),
+            ("absolute onto a sibling directory", "link", "/var/www/uploads-old", false),
+            ("windows separators", "link", r"..\..\escaped", false),
+            ("empty target", "link", "", false),
+            ("null byte", "link", "assets\0/../../etc", false),
+        ];
+        for (name, member, linkname, ok) in cases {
+            let result = contained_link(DESTINATION, member, linkname);
+            assert_eq!(result.is_ok(), ok, "{name}: contained_link({member:?} -> {linkname:?}) = {result:?}");
+        }
+    }
+
+    // A member whose header understates its size is how a zip bomb gets
+    // past a size check: the header says four bytes, the stream keeps
+    // coming.
+    #[test]
+    fn write_member_refuses_a_member_bigger_than_its_header_claims() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("member.txt");
+        let body = "this body is very much longer than four bytes";
+
+        let err = write_member(target.to_str().unwrap(), &mut body.as_bytes(), 0o644, true, 4).unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err:?}");
+        // The partial file is unlinked outright: a header which lied never
+        // yields the member it was hiding.
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn write_member_refuses_to_overwrite_when_not_asked() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("keep.txt");
+        std::fs::write(&target, "original\n").unwrap();
+
+        let err =
+            write_member(target.to_str().unwrap(), &mut "replacement".as_bytes(), 0o644, false, 11).unwrap_err();
+        assert!(matches!(err, ProviderError::Conflict(_)), "{err:?}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "original\n");
+    }
+
+    /* The verbs themselves, against a scratch tree. */
+
+    fn test_shared() -> Arc<Shared> {
+        let (events, _rx) = tokio::sync::mpsc::channel(1);
+        Arc::new(Shared {
+            opts: Options {
+                agent_version: "test".into(),
+                state_dir: std::env::temp_dir(),
+            },
+            caps: Default::default(),
+            cap_list: Vec::new(),
+            docker: None,
+            rollback: super::super::rollback::RollbackGuard::new(),
+            names: Default::default(),
+            events,
+            last_metrics: parking_lot::Mutex::new(None),
+            ptys: super::super::pty::PtySessions::default(),
+        })
+    }
+
+    /// A stream that remembers what was sent and plays back a fixed set of
+    /// chunks, then reports EOF.
+    #[derive(Default)]
+    struct Recorder {
+        inbox: tokio::sync::Mutex<VecDeque<Vec<u8>>>,
+        sent: parking_lot::Mutex<Vec<(Vec<u8>, Encoding)>>,
+    }
+
+    #[async_trait]
+    impl Stream for Recorder {
+        async fn send(&self, data: &[u8], enc: Encoding) -> PResult<()> {
+            self.sent.lock().push((data.to_vec(), enc));
+            Ok(())
+        }
+        async fn recv(&self) -> PResult<Option<Vec<u8>>> {
+            Ok(self.inbox.lock().await.pop_front())
+        }
+    }
+
+    impl Recorder {
+        fn lines(&self) -> Vec<String> {
+            self.sent
+                .lock()
+                .iter()
+                .filter(|(_, enc)| *enc == Encoding::Utf8)
+                .map(|(d, _)| String::from_utf8_lossy(d).trim_end().to_string())
+                .collect()
+        }
+    }
+
+    fn s(p: &Path) -> String {
+        p.to_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn list_sorts_directories_first_and_applies_hidden_and_limit() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["b.txt", "a.txt", ".hidden", "zdir/", "adir/"] {
+            if let Some(dir) = name.strip_suffix('/') {
+                std::fs::create_dir(root.path().join(dir)).unwrap();
+            } else {
+                std::fs::write(root.path().join(name), "x").unwrap();
+            }
+        }
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+
+        let listing = ops
+            .list(&ctx, FsListParams { path: s(root.path()), show_hidden: false, limit: 0 })
+            .await
+            .unwrap();
+        let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["adir", "zdir", "a.txt", "b.txt"]);
+        assert_eq!(listing.total, 4);
+        assert!(!listing.truncated);
+        assert_eq!(listing.parent.as_deref(), Some(root.path().parent().unwrap().to_str().unwrap()));
+        let a = listing.entries.iter().find(|e| e.name == "a.txt").unwrap();
+        assert_eq!(a.kind, "file");
+        assert_eq!(a.mime.as_deref(), Some("text/plain"));
+        assert!(a.is_editable);
+        assert!(!a.owner.is_empty());
+
+        let listing = ops
+            .list(&ctx, FsListParams { path: s(root.path()), show_hidden: true, limit: 2 })
+            .await
+            .unwrap();
+        assert_eq!(listing.total, 5);
+        assert!(listing.truncated);
+        assert_eq!(listing.entries.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn read_detects_text_and_binary_and_truncates() {
+        let root = tempfile::tempdir().unwrap();
+        let text = root.path().join("notes.txt");
+        let binary = root.path().join("blob");
+        std::fs::write(&text, "héllo world\n").unwrap();
+        std::fs::write(&binary, [0u8, 1, 2, 255]).unwrap();
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+
+        let r = ops.read(&ctx, FsReadParams { path: s(&text), max_bytes: 0 }).await.unwrap();
+        assert_eq!((r.content.as_str(), r.encoding.as_str(), r.truncated), ("héllo world\n", "utf8", false));
+        assert_eq!(r.size, 13);
+
+        let r = ops.read(&ctx, FsReadParams { path: s(&binary), max_bytes: 0 }).await.unwrap();
+        assert_eq!(r.encoding, "base64");
+        assert_eq!(BASE64.decode(r.content).unwrap(), [0u8, 1, 2, 255]);
+
+        let r = ops.read(&ctx, FsReadParams { path: s(&text), max_bytes: 5 }).await.unwrap();
+        assert!(r.truncated);
+        assert_eq!(r.size, 13);
+
+        let err = ops.read(&ctx, FsReadParams { path: s(root.path()), max_bytes: 0 }).await.unwrap_err();
+        assert!(matches!(err, ProviderError::InvalidParams(_)));
+        let err = ops
+            .read(&ctx, FsReadParams { path: s(&root.path().join("missing")), max_bytes: 0 })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn write_mkdir_move_copy_remove_round_trip() {
+        let root = tempfile::tempdir().unwrap();
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+
+        let target = root.path().join("etc/app/app.conf");
+        let entry = ops
+            .write(
+                &ctx,
+                FsWriteParams {
+                    path: s(&target),
+                    content: BASE64.encode("key=value\n"),
+                    encoding: "base64".into(),
+                    mode: Some("0600".into()),
+                    create_parents: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(entry.mode, "0600");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "key=value\n");
+
+        // A rewrite without a mode keeps the file's own.
+        ops.write(
+            &ctx,
+            FsWriteParams {
+                path: s(&target),
+                content: "k=v\n".into(),
+                encoding: "utf8".into(),
+                mode: None,
+                create_parents: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::metadata(&target).unwrap().mode() & 0o777, 0o600);
+
+        let dir = root.path().join("a/b/c");
+        let entry = ops
+            .mkdir(&ctx, FsMkdirParams { path: s(&dir), mode: Some("0750".into()), parents: true })
+            .await
+            .unwrap();
+        assert_eq!((entry.kind.as_str(), entry.mode.as_str(), entry.child_count), ("directory", "0750", Some(0)));
+        let err = ops
+            .mkdir(&ctx, FsMkdirParams { path: s(&dir), mode: None, parents: false })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::Conflict(_)), "{err:?}");
+
+        let moved = root.path().join("a/moved.conf");
+        ops.r#move(&ctx, FsMoveParams { from: s(&target), to: s(&moved), overwrite: false })
+            .await
+            .unwrap();
+        assert!(!target.exists() && moved.exists());
+
+        let copy = root.path().join("copy");
+        let entry = ops
+            .copy(&ctx, FsCopyParams { from: s(&root.path().join("a")), to: s(&copy), overwrite: false })
+            .await
+            .unwrap();
+        assert_eq!(entry.kind, "directory");
+        assert_eq!(std::fs::read_to_string(copy.join("moved.conf")).unwrap(), "k=v\n");
+        assert_eq!(std::fs::metadata(copy.join("b/c")).unwrap().mode() & 0o777, 0o750);
+        let err = ops
+            .copy(&ctx, FsCopyParams { from: s(&root.path().join("a")), to: s(&copy), overwrite: false })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::Conflict(_)));
+        let err = ops
+            .copy(
+                &ctx,
+                FsCopyParams { from: s(&root.path().join("a")), to: s(&root.path().join("a/inner")), overwrite: true },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::InvalidParams(_)));
+
+        let err = ops
+            .remove(&ctx, FsRemoveParams { paths: vec![s(&copy)], recursive: false })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)));
+        // copy, copy/moved.conf, copy/b, copy/b/c
+        let removed = ops
+            .remove(&ctx, FsRemoveParams { paths: vec![s(&copy), s(&root.path().join("nope"))], recursive: true })
+            .await
+            .unwrap();
+        assert_eq!(removed, 4);
+        assert!(!copy.exists());
+        let err = ops
+            .remove(&ctx, FsRemoveParams { paths: vec!["/usr".into()], recursive: true })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::PermissionDenied(_)), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn chmod_and_chown_walk_trees_only_when_asked() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("tree");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("f"), "x").unwrap();
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+
+        ops.chmod(&ctx, FsChmodParams { paths: vec![s(&dir)], mode: "0700".into(), recursive: false })
+            .await
+            .unwrap();
+        assert_eq!(std::fs::metadata(&dir).unwrap().mode() & 0o777, 0o700);
+        assert_ne!(std::fs::metadata(dir.join("f")).unwrap().mode() & 0o777, 0o700);
+
+        ops.chmod(&ctx, FsChmodParams { paths: vec![s(&dir)], mode: "0755".into(), recursive: true })
+            .await
+            .unwrap();
+        assert_eq!(std::fs::metadata(dir.join("f")).unwrap().mode() & 0o777, 0o755);
+
+        let err = ops
+            .chmod(&ctx, FsChmodParams { paths: vec![s(&dir)], mode: "rwx".into(), recursive: false })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::InvalidParams(_)));
+
+        let err = ops
+            .chown(
+                &ctx,
+                FsChownParams {
+                    paths: vec![s(&dir)],
+                    owner: Some("no-such-user-kaname".into()),
+                    group: None,
+                    recursive: false,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::NotFound(_)));
+
+        // Chowning to the caller's own account is always allowed.
+        let me = nix::unistd::User::from_uid(nix::unistd::getuid()).unwrap().unwrap();
+        ops.chown(
+            &ctx,
+            FsChownParams { paths: vec![s(&dir)], owner: Some(me.name), group: None, recursive: true },
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn archive_round_trip(format: &str, suffix: &str) {
+        let root = tempfile::tempdir().unwrap();
+        let site = root.path().join("site");
+        std::fs::create_dir_all(site.join("assets")).unwrap();
+        std::fs::write(site.join("index.html"), "<h1>hi</h1>").unwrap();
+        std::fs::write(site.join("assets/app.js"), "console.log(1)").unwrap();
+        std::fs::set_permissions(site.join("assets/app.js"), std::fs::Permissions::from_mode(0o751)).unwrap();
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+
+        let archive = root.path().join(format!("site.{suffix}"));
+        let stream = Arc::new(Recorder::default());
+        let entry = ops
+            .archive(
+                &ctx,
+                FsArchiveParams { paths: vec![s(&site)], destination: s(&archive), format: format.into() },
+                stream.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(entry.size > 0);
+        let mut lines = stream.lines();
+        lines.sort();
+        let want: Vec<String> = if format == "zip" {
+            ["assets/app.js", "index.html", "site/", "site/assets/"]
+                .iter()
+                .map(|l| if l.starts_with("site") { l.to_string() } else { format!("site/{l}") })
+                .collect()
+        } else {
+            ["site", "site/assets", "site/assets/app.js", "site/index.html"]
+                .iter()
+                .map(|l| l.to_string())
+                .collect()
+        };
+        let mut want = want;
+        want.sort();
+        assert_eq!(lines, want, "{format} progress lines");
+
+        let out = root.path().join("out");
+        let stream = Arc::new(Recorder::default());
+        let count = ops
+            .extract(
+                &ctx,
+                FsExtractParams { path: s(&archive), destination: s(&out), overwrite: false },
+                stream.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(count, 4, "{format} extracted members");
+        assert_eq!(std::fs::read_to_string(out.join("site/index.html")).unwrap(), "<h1>hi</h1>");
+        assert_eq!(std::fs::read_to_string(out.join("site/assets/app.js")).unwrap(), "console.log(1)");
+        assert_eq!(std::fs::metadata(out.join("site/assets/app.js")).unwrap().mode() & 0o777, 0o751);
+
+        // Extracting again without overwrite trips on the first file.
+        let err = ops
+            .extract(
+                &ctx,
+                FsExtractParams { path: s(&archive), destination: s(&out), overwrite: false },
+                stream.clone(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::Conflict(_)), "{format}: {err:?}");
+    }
+
+    #[tokio::test]
+    async fn archives_round_trip_in_every_format() {
+        archive_round_trip("tar.gz", "tar.gz").await;
+        archive_round_trip("tar.zst", "tar.zst").await;
+        archive_round_trip("zip", "zip").await;
+    }
+
+    #[tokio::test]
+    async fn archive_rejects_unknown_formats_and_extract_unknown_suffixes() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("x.rar"), "x").unwrap();
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+        let stream = Arc::new(Recorder::default());
+
+        let err = ops
+            .archive(
+                &ctx,
+                FsArchiveParams {
+                    paths: vec![s(root.path())],
+                    destination: s(&root.path().join("out.7z")),
+                    format: "7z".into(),
+                },
+                stream.clone(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::InvalidParams(_)));
+
+        let err = ops
+            .extract(
+                &ctx,
+                FsExtractParams {
+                    path: s(&root.path().join("x.rar")),
+                    destination: s(&root.path().join("out")),
+                    overwrite: false,
+                },
+                stream,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::Unsupported(_)));
+    }
+
+    #[tokio::test]
+    async fn download_streams_base64_chunks_and_upload_assembles_them() {
+        let root = tempfile::tempdir().unwrap();
+        let big = root.path().join("big.bin");
+        let payload: Vec<u8> = (0..(TRANSFER_CHUNK + 10)).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&big, &payload).unwrap();
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+
+        let stream = Arc::new(Recorder::default());
+        let result = ops
+            .download(&ctx, FsDownloadParams { path: s(&big) }, stream.clone())
+            .await
+            .unwrap();
+        assert_eq!(result.size as usize, payload.len());
+        assert_eq!(result.mime, "application/octet-stream");
+        let sent = stream.sent.lock();
+        assert_eq!(sent.len(), 2);
+        assert!(sent.iter().all(|(_, enc)| *enc == Encoding::Base64));
+        let joined: Vec<u8> = sent.iter().flat_map(|(d, _)| d.clone()).collect();
+        assert_eq!(joined, payload);
+        drop(sent);
+
+        let err = ops
+            .download(&ctx, FsDownloadParams { path: s(root.path()) }, stream.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::InvalidParams(_)));
+
+        let target = root.path().join("uploads/new.bin");
+        let stream = Arc::new(Recorder {
+            inbox: tokio::sync::Mutex::new(VecDeque::from(vec![payload[..1000].to_vec(), payload[1000..].to_vec()])),
+            ..Default::default()
+        });
+        let entry = ops
+            .upload(
+                &ctx,
+                FsUploadParams { path: s(&target), size: payload.len() as i64, mode: Some("0640".into()), overwrite: false },
+                stream,
+            )
+            .await
+            .unwrap();
+        assert_eq!(entry.size as usize, payload.len());
+        assert_eq!(entry.mode, "0640");
+        assert_eq!(std::fs::read(&target).unwrap(), payload);
+        // No temp file survives beside the result.
+        assert_eq!(std::fs::read_dir(target.parent().unwrap()).unwrap().count(), 1);
+
+        // A declared size that the chunks exceed is refused, and the
+        // existing file is untouched.
+        let stream = Arc::new(Recorder {
+            inbox: tokio::sync::Mutex::new(VecDeque::from(vec![vec![1u8; 10]])),
+            ..Default::default()
+        });
+        let err = ops
+            .upload(&ctx, FsUploadParams { path: s(&target), size: 5, mode: None, overwrite: true }, stream)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err:?}");
+        assert_eq!(std::fs::read(&target).unwrap(), payload);
+        assert_eq!(std::fs::read_dir(target.parent().unwrap()).unwrap().count(), 1);
+
+        let stream = Arc::new(Recorder::default());
+        let err = ops
+            .upload(&ctx, FsUploadParams { path: s(&target), size: 0, mode: None, overwrite: false }, stream)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ProviderError::Conflict(_)));
+    }
+
+    #[tokio::test]
+    async fn usage_reports_directories_with_their_full_recursive_size() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("big/inner")).unwrap();
+        std::fs::create_dir_all(root.path().join("small")).unwrap();
+        std::fs::write(root.path().join("big/inner/x"), vec![0u8; 3000]).unwrap();
+        std::fs::write(root.path().join("big/y"), vec![0u8; 1000]).unwrap();
+        std::fs::write(root.path().join("small/z"), vec![0u8; 10]).unwrap();
+        std::fs::write(root.path().join("loose"), vec![0u8; 5]).unwrap();
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+
+        let usage = ops.usage(&ctx, FsUsageParams { path: s(root.path()), depth: 0 }).await.unwrap();
+        assert_eq!(usage.total, 4015);
+        let labels: Vec<&str> = usage.entries.iter().map(|e| e.label.as_deref().unwrap()).collect();
+        assert_eq!(labels, ["big", "small"]);
+        assert_eq!(usage.entries[0].bytes, 4000);
+        assert_eq!(usage.entries[0].inodes, Some(4));
+        assert_eq!(usage.entries[0].kind, "directory");
+
+        let usage = ops.usage(&ctx, FsUsageParams { path: s(root.path()), depth: 2 }).await.unwrap();
+        let labels: Vec<&str> = usage.entries.iter().map(|e| e.label.as_deref().unwrap()).collect();
+        assert_eq!(labels, ["big", "inner", "small"]);
+        // A deeper breakdown never changes the total.
+        assert_eq!(usage.total, 4015);
+    }
+
+    #[tokio::test]
+    async fn stat_describes_symlinks_without_following_them() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("real"), "x").unwrap();
+        std::os::unix::fs::symlink("real", root.path().join("link")).unwrap();
+        let ops = FileOps(test_shared());
+        let entry = ops.stat(&Ctx::background(), root.path().join("link").to_str().unwrap()).await.unwrap();
+        assert_eq!(entry.kind, "symlink");
+        assert_eq!(entry.link_target.as_deref(), Some("real"));
+        assert!(entry.mime.is_none());
+    }
+
+    #[test]
+    fn editable_rule_combines_size_mime_and_a_text_sample() {
+        let root = tempfile::tempdir().unwrap();
+        let conf = root.path().join("nginx.conf");
+        std::fs::write(&conf, "server {}").unwrap();
+        let blob = root.path().join("blob.bin");
+        std::fs::write(&blob, [0u8, 159, 146, 150]).unwrap();
+        let noext = root.path().join("README");
+        std::fs::write(&noext, "plain words").unwrap();
+
+        assert!(is_editable_mime(&mime_type(conf.to_str().unwrap()), conf.to_str().unwrap()));
+        assert_eq!(mime_type(blob.to_str().unwrap()), "application/octet-stream");
+        assert!(!is_editable_mime("application/octet-stream", blob.to_str().unwrap()));
+        assert_eq!(mime_type(noext.to_str().unwrap()), "text/plain");
+        assert!(is_textual(b""));
+        assert!(!is_textual(b"a\0b"));
+        assert!(!is_textual(&[0xff, 0xfe]));
+    }
+}
