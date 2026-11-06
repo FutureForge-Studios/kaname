@@ -372,14 +372,14 @@ describe("mailboxes", () => {
     expect(dump).toContain("mailbox.created");
     expect(dump).not.toContain(needle);
     // Belt and braces: the whole database, as text.
-    const everything = await handle.db.execute(
+    const everything = (await handle.db.execute(
       sql`select count(*)::int as hits from (
         select params::text as t from jobs
         union all select result::text from jobs
         union all select coalesce(after::text, '') || coalesce(metadata::text, '') from audit_events
       ) x where t like ${"%" + needle + "%"}`,
-    );
-    expect((everything.rows[0] as { hits: number }).hits).toBe(0);
+    )) as unknown as { rows: { hits: number }[] };
+    expect(everything.rows[0]!.hits).toBe(0);
   });
 
   it("refuses the same address in a different case before asking the host", async () => {
@@ -559,7 +559,9 @@ describe("aliases", () => {
     expect(res.statusCode, res.body).toBe(202);
     const { job } = data<{ job: Job }>(res);
     expect(job.type).toBe("mail.alias.add");
-    expect(job.params).toMatchObject({ alias: "team@futureforge.dev", mailbox: "hello@futureforge.dev" });
+    expect(job.target_label).toBe("team@futureforge.dev");
+    const [stored] = await handle.db.select({ params: jobs.params }).from(jobs).where(eq(jobs.id, job.id));
+    expect(stored!.params).toMatchObject({ alias: "team@futureforge.dev", mailbox: "hello@futureforge.dev" });
   });
 });
 
