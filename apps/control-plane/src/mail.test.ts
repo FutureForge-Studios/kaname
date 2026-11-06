@@ -238,7 +238,7 @@ describe("deploy", () => {
     const all = data<Server[]>(await get("/api/v1/servers?per_page=50"));
     target = all.find((s) => s.id !== mailServer.server_id)!;
     expect(target).toBeDefined();
-    targetDomain = data<Domain[]>(await get("/api/v1/domains?has_mail=false&per_page=1"))[0]!;
+    targetDomain = data<Domain[]>(await get("/api/v1/domains?per_page=50")).find((d) => !d.has_mail)!;
     expect(targetDomain).toBeDefined();
   });
 
@@ -308,8 +308,10 @@ describe("deploy", () => {
     expect(res.statusCode).toBe(409);
     expect(error(res).message).toContain("already has a mail server");
 
+    // Adopting needs the host to advertise yunori, which this one does not.
     const adopt = await send("POST", "/api/v1/mail-servers/adopt", { server_id: target.id });
-    expect(adopt.statusCode).toBe(409);
+    expect(adopt.statusCode).toBe(501);
+    expect(error(adopt).code).toBe("agent_unsupported");
   });
 
   it("forgets a record that hosts nothing", async () => {
@@ -376,7 +378,7 @@ describe("mailboxes", () => {
       sql`select count(*)::int as hits from (
         select params::text as t from jobs
         union all select result::text from jobs
-        union all select coalesce(after::text, '') || coalesce(metadata::text, '') from audit_events
+        union all select coalesce(diff::text, '') || coalesce(metadata::text, '') from audit_events
       ) x where t like ${"%" + needle + "%"}`,
     )) as unknown as { rows: { hits: number }[] };
     expect(everything.rows[0]!.hits).toBe(0);
@@ -462,7 +464,7 @@ describe("mail domains", () => {
   });
 
   it("adds a domain as a job and marks the Kaname domain as receiving mail", async () => {
-    const candidate = data<Domain[]>(await get("/api/v1/domains?has_mail=false&per_page=1"))[0]!;
+    const candidate = data<Domain[]>(await get("/api/v1/domains?per_page=50")).find((d) => !d.has_mail)!;
     const res = await send("POST", "/api/v1/mail-domains", {
       domain_id: candidate.id,
       server_id: mailServer.server_id,
