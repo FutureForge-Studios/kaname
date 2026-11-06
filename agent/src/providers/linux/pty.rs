@@ -224,7 +224,10 @@ impl Pty for PtyOps {
             .ok_or_else(|| ProviderError::internal(format!("start {shell} for {}: no pid", account.name)))?;
 
         set_nonblocking(&pty.master)?;
-        let master = AsyncFd::new(pty.master)?;
+        // SAFETY: `OwnedFd` owns the descriptor, which is neither replaced
+        // nor closed while the AsyncFd holds it.
+        let master = unsafe { AsyncFd::register(pty.master) }
+            .map_err(|e| ProviderError::internal(format!("watch the terminal: {e}")))?;
         let session = Arc::new(PtySession {
             master,
             pid: Pid::from_raw(pid as i32),
