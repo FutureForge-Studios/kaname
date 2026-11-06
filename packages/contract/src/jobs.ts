@@ -84,15 +84,17 @@ export const JOB_TYPES = [
   // deployments
   "deployment.run",
   "deployment.rollback",
-  // mail
-  "mail.mailbox.create",
-  "mail.mailbox.update",
-  "mail.mailbox.delete",
-  "mail.mailbox.reset_password",
-  "mail.alias.apply",
-  "mail.forwarder.apply",
-  "mail.auth.check",
-  "mail.domain.provision",
+  // mail (Yunori Mail Server)
+  "mail.server.deploy",
+  "mail.server.update",
+  "mail.server.sync",
+  "mail.certificate.renew",
+  "mail.domain.add",
+  "mail.domain.remove",
+  "mail.domain.dns_check",
+  "mail.mailbox.remove",
+  "mail.alias.add",
+  "mail.alias.remove",
   // databases
   "db.database.create",
   "db.database.delete",
@@ -440,21 +442,57 @@ export const JOB_SPECS: Record<JobType, JobTypeSpec> = {
     destructive: true,
   },
 
-  "mail.mailbox.create": {
-    label: "Create mailbox",
+  "mail.server.deploy": {
+    label: "Deploy Yunori Mail Server",
+    permission: "email.servers:write",
+    idempotent: false,
+    maxAttempts: 1,
+    timeoutMs: 30 * M,
+  },
+  "mail.server.update": {
+    label: "Update Yunori Mail Server",
+    permission: "email.servers:exec",
+    idempotent: false,
+    maxAttempts: 1,
+    timeoutMs: 15 * M,
+  },
+  "mail.server.sync": {
+    label: "Check mail server",
+    permission: "email.servers:read",
+    idempotent: true,
+    maxAttempts: 2,
+    timeoutMs: 3 * M,
+  },
+  "mail.certificate.renew": {
+    label: "Renew mail certificate",
+    permission: "email.servers:exec",
+    idempotent: true,
+    maxAttempts: 1,
+    timeoutMs: 5 * M,
+  },
+  "mail.domain.add": {
+    label: "Add mail domain",
     permission: "email.mailboxes:write",
     idempotent: false,
     maxAttempts: 1,
     timeoutMs: 2 * M,
   },
-  "mail.mailbox.update": {
-    label: "Update mailbox",
-    permission: "email.mailboxes:write",
+  "mail.domain.remove": {
+    label: "Remove mail domain",
+    permission: "email.mailboxes:delete",
+    idempotent: true,
+    maxAttempts: 1,
+    timeoutMs: 2 * M,
+    destructive: true,
+  },
+  "mail.domain.dns_check": {
+    label: "Check mail DNS records",
+    permission: "email.servers:exec",
     idempotent: true,
     maxAttempts: 2,
     timeoutMs: 2 * M,
   },
-  "mail.mailbox.delete": {
+  "mail.mailbox.remove": {
     label: "Delete mailbox",
     permission: "email.mailboxes:delete",
     idempotent: true,
@@ -462,40 +500,19 @@ export const JOB_SPECS: Record<JobType, JobTypeSpec> = {
     timeoutMs: 5 * M,
     destructive: true,
   },
-  "mail.mailbox.reset_password": {
-    label: "Reset mailbox password",
-    permission: "email.mailboxes:write",
+  "mail.alias.add": {
+    label: "Add alias",
+    permission: "email.routing:write",
     idempotent: false,
     maxAttempts: 1,
     timeoutMs: 60 * S,
   },
-  "mail.alias.apply": {
-    label: "Apply aliases",
-    permission: "email.routing:write",
+  "mail.alias.remove": {
+    label: "Remove alias",
+    permission: "email.routing:delete",
     idempotent: true,
-    maxAttempts: 2,
-    timeoutMs: 60 * S,
-  },
-  "mail.forwarder.apply": {
-    label: "Apply forwarders",
-    permission: "email.routing:write",
-    idempotent: true,
-    maxAttempts: 2,
-    timeoutMs: 60 * S,
-  },
-  "mail.auth.check": {
-    label: "Check mail DNS authentication",
-    permission: "email.auth:exec",
-    idempotent: true,
-    maxAttempts: 2,
-    timeoutMs: 2 * M,
-  },
-  "mail.domain.provision": {
-    label: "Provision mail domain",
-    permission: "email.mailboxes:write",
-    idempotent: false,
     maxAttempts: 1,
-    timeoutMs: 5 * M,
+    timeoutMs: 60 * S,
   },
 
   "db.database.create": {

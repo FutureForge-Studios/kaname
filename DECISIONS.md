@@ -331,9 +331,10 @@ of thing that looks like "PGlite is broken on Windows" the second time someone h
 
 ## KD-018 — The method registry is contract-checked at build time, but structs are not generated
 
-**Decision.** `packages/contract` emits `agent/internal/rpc/methods.json`; the Go agent embeds
-it and a test asserts the live registry matches — same method names, same stream modes, same
-capability requirements, same protocol constants. Go structs stay hand-written.
+**Decision.** `packages/contract` emits `agent/methods.json`; the agent embeds it and a test
+asserts the live registry matches — same method names, same stream modes, same capability
+requirements, same protocol constants. Payload structs stay hand-written (Go then, Rust now:
+KD-033).
 
 **Why not full codegen.** KD-007 anticipated generating Go structs from JSON Schema. Having
 built both sides, the payoff was not there: the payload structs are stable and read better
@@ -632,3 +633,109 @@ channel, shown in Settings — it never throws into the publisher and never disa
 did for release manifests and ACME. `nodemailer` is a new runtime dependency, kept external in the
 bundle like the other native-adjacent ones; its `sendmail` transport, which spawns a process, is
 not used and must not be — the control plane still has no `child_process`.
+
+---
+
+## KD-033 — The agent is Rust; KD-001 is superseded
+
+**Decision.** `kanamed` is a single statically-linked Rust binary (musl, cross-linked with zig,
+the same recipe Yunori Mail Server ships with). The Go module is gone. The wire protocol, the
+state directory, enrollment, the asset names and the systemd unit are unchanged, so a fleet
+updates in place.
+
+**Alternatives.** Keep Go (KD-001 still argued for it on velocity); rewrite only the mail
+provider in Rust as a sidecar and keep the Go agent for everything else.
+
+**Why.** FutureForge's infrastructure products are converging on one language: Yunori Mail Server
+is Rust, and the mail module now drives it (KD-034). One toolchain, one set of release recipes,
+one static-binary story, and the parsers that read Yunori's CLI can be shared verbatim between
+the two products. Rust also closes the class of bugs the Go agent had to guard against by
+convention: a stream that writes after cancellation, a child process that outlives its request,
+a path check skipped on one verb. Ownership and `Drop` make those structural. The surface is the
+same 109 verbs behind the same conformance test, so the port was a translation, not a redesign.
+
+**What was kept, deliberately.** The provider seam (KD-010) with a Linux and a simulated
+implementation; argv-only execution with no shell anywhere; the path guard that denies the
+agent's own key material; the 32-chunk stream window and half-window acks; the raw `r||s` P-256
+challenge signature WebCrypto verifies; the 6-hour deadline clamp; the `unsupported`-before-exec
+capability gate. The sidecar alternative lost because it would have left two agents on one host
+sharing one identity.
+
+**Cost accepted.** A longer compile than `go build`, and a cross-link step for arm64. Both are
+confined to CI and the control-plane image.
+
+---
+
+## KD-034 — Mail is Yunori Mail Server; Kaname does not own a mail stack
+
+**Decision.** Kaname no longer writes Postfix or Dovecot configuration. A managed host runs
+Yunori Mail Server (`yunori-mail`, which drives an unmodified Stalwart), and Kaname deploys it,
+shows what it reports and sends it the mutations an operator asks for. The host advertises the
+`yunori` capability when the binary is present; the `mail`, `postfix` and `dovecot` capabilities
+are gone. The agent talks to Yunori through exactly one interface: the `yunori-mail` CLI with an
+argv slice, which is the root interface that product sanctions and the one place its invariants
+(vault-sealed secrets, hash-chained audit, DNS verified against public resolvers) are enforced.
+The agent never reads Yunori's database or vault and never talks to Stalwart's API.
+
+**Alternatives.** Keep the Postfix/Dovecot map-file provider; talk to Stalwart's JMAP management
+API directly with the admin credential from Yunori's vault; add a loopback machine API to
+`yunori-mail` first.
+
+**Why.** The map-file provider was Kaname re-implementing a mail server's control plane
+(deliverability checks, DKIM, queue parsing) that Yunori already does better, from the host's
+vantage point, with verification instead of self-attestation. Reaching into the vault would make
+Kaname a second administrator the audit ledger does not know about. A machine API in Yunori is
+the right long-term answer and is the follow-up this decision leaves open: until then the CLI's
+`--json` output is used where it exists (`preflight`, `doctor`) and its list formats are parsed
+with tests pinned to the exact print statements of the version this ships against.
+
+**What changed in the model.** Forwarders are gone (Yunori aliases deliver to a mailbox on the
+same server; an external destination is a client-side rule, not a transport one). Mail DNS
+authentication is Yunori's record checklist, not Kaname's checker, so `mail_auth_checks` and the
+checker service were deleted rather than adapted. Mail logs are a live journal tail, not rows.
+Deploying Yunori is a job that downloads a release archive the control plane resolved from the
+Yunori feed, verifies its SHA-256 on the host, installs the binary and runs the unattended
+installer; the one-time console setup link it prints is handed to the operator once and redacted
+from the job log.
+
+---
+
+## KD-035 — A mailbox credential crosses one response and is never persisted
+
+**Decision.** Creating a mailbox and resetting its password are the two host-touching mutations
+that are **not** jobs. The route calls the agent synchronously, returns the generated password in
+that one HTTPS response, and never writes it anywhere: not the row, not the job table, not the
+audit record, not the log.
+
+**Alternatives.** A job whose result carries the password; the operator chooses the password in
+the form (the Postfix-era design); an invite link.
+
+**Why.** Yunori generates mailbox passwords on the host and prints each once; there is no CLI path
+for a chosen password, and that is a good property, not a gap. A job result is a persisted row
+that outlives the moment, visible to anyone who can read jobs, which is a wider audience than the
+person who created the mailbox. KD-008 exists so that a host mutation survives a control-plane
+restart and reports honestly; a credential handoff that must not survive anything is the one
+mutation where that guarantee is the wrong one. Invite links are Yunori's own self-service portal
+and remain available there.
+
+**The same rule for deployment.** The console setup link and the first mailbox's password from
+a Yunori deployment live in an in-memory, once-only, fifteen-minute handoff in the control plane
+and are redacted from the job log; the job log says where to find them.
+
+---
+
+## KD-036 — The panel wears the Yunori design
+
+**Decision.** The token sheet carries the Yunori design (yunori.email): warm paper light theme as
+the default, a navy-ink dark theme, the torii accent, Geist and Geist Mono, Fraunces for page
+titles. Every `--kn-*` token name is unchanged, so the component kit and fifty thousand lines of
+pages did not move.
+
+**Why.** Kaname and Yunori Mail Server are now one operator's two consoles for the same host, and
+an operator who opens Yunori's console from Kaname's Email page should not feel a seam. The
+design-system rules that matter for an infrastructure panel (status colour means status, two
+status axes never collapsed, monospace for anything you would grep, density) are unchanged;
+only the palette and the type changed.
+
+**Cost accepted.** Light became the default, which inverts KD-005's assumption; the contrast
+table in `docs/design-system.md` was redone for both themes rather than trusted.

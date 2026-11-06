@@ -56,9 +56,9 @@ security thesis.
 | ORM / migrations             | Drizzle ORM + drizzle-kit                                                                                       | SQL-shaped, no query-engine binary, works over both drivers.                                                                            |
 | Job queue                    | Postgres `SELECT ... FOR UPDATE SKIP LOCKED`                                                                    | One fewer daemon to self-host than Redis/BullMQ; our job rate is tens/minute, not thousands/second.                                     |
 | Control plane to UI realtime | SSE for events/jobs, WebSocket for PTY only                                                                     | SSE reconnects for free and is one-way, which is all a job feed needs.                                                                  |
-| Agent                        | **Go 1.22+**, single static binary `kanamed`                                                                    | ~12 MB static binary, no runtime on the managed box, first-class systemd/dbus + Docker SDK, trivial cross-compile from any dev machine. |
+| Agent                        | **Rust** (stable), single static musl binary `kanamed` (KD-033)                                                 | No runtime on the managed box, one toolchain with Yunori Mail Server, structural cancellation and process ownership, zig cross-link.      |
 | Control plane to agent       | Agent-dialed **WSS + mTLS**, multiplexed typed RPC                                                              | No inbound port on managed hosts, works behind NAT/CGNAT, gives bidirectional streams (logs, PTY) on one connection.                    |
-| Contract                     | Zod schemas in `@kaname/contract`, shared by UI + control plane; generated JSON Schema consumed by the Go agent | One definition of every payload; the Go side gets generated structs so drift is a build error.                                          |
+| Contract                     | Zod schemas in `@kaname/contract`, shared by UI + control plane; a generated manifest the Rust agent embeds      | One definition of every payload; the agent's conformance test fails the build on drift.                                                 |
 
 ### Repo layout
 
@@ -71,7 +71,7 @@ kaname/
 │   ├── contract/            Zod: REST contract, agent RPC contract, shared enums
 │   ├── db/                  Drizzle schema, migrations, seed, repositories
 │   └── ui/                  Design tokens + shared component kit
-├── agent/                   Go module: kanamed
+├── agent/                   Rust crate: kanamed
 │   ├── cmd/kanamed/
 │   └── internal/{rpc,providers,enroll,pty,collect}
 ├── infra/                   docker-compose, systemd units, install.sh, caddy samples
@@ -80,8 +80,8 @@ kaname/
 └── DECISIONS.md
 ```
 
-pnpm workspaces + Turborepo for the TS side; the Go module is standalone and built by
-`turbo run build --filter=agent` shelling out to `go build`.
+pnpm workspaces + Turborepo for the TS side; the Rust crate is standalone and built by
+`turbo run build --filter=@kaname/agent` shelling out to `cargo`.
 
 ---
 
@@ -105,9 +105,9 @@ pnpm workspaces + Turborepo for the TS side; the Go module is standalone and bui
 └───────────────┬──────────────────────────────────────────────────┘
                 │  WSS + mTLS, agent-initiated, multiplexed RPC
 ┌───────────────▼──────────────────────────────────────────────────┐
-│  Agent — kanamed (Go), one per managed host, runs as root        │
+│  Agent — kanamed (Rust), one per managed host, runs as root      │
 │  The ONLY thing that touches systemd, the container socket,      │
-│  package managers, nginx/dovecot/postfix config, the filesystem. │
+│  package managers, nginx config, yunori-mail, the filesystem.    │
 │  Exposes a narrow versioned verb list. Binds no port.            │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -280,12 +280,12 @@ Single-tenant: no `org_id`. All tables have `id uuid pk default gen_random_uuid(
 
 **Email**
 
-- `mail_domains` — domain_id, server_id, status, dkim_selector, dkim_public_key, catchall_target
-- `mailboxes` — mail_domain_id, local_part, address, display_name, quota_bytes, used_bytes, status, last_login_at
-- `mail_aliases` — mail_domain_id, address, destinations[], enabled
-- `mail_forwarders` — mail_domain_id, source, destination, keep_copy, enabled
-- `mail_auth_checks` — mail_domain_id, check, status (`pass`|`warn`|`fail`|`unknown`), expected, actual, remediation, checked_at
-- `mail_log_entries` — server_id, ts, queue_id, from, to, status, relay, delay, dsn, message
+Mail is Yunori Mail Server on the host (KD-034); these rows mirror what it reports.
+
+- `mail_servers` — server_id, status, version, install_complete, hostname, primary_domain, admin_email, sending_mode, relay_provider, steps jsonb, services jsonb, checks jsonb, health, certificate jsonb, last_synced_at
+- `mail_domains` — domain_id, server_id, mail_server_id, is_primary, status, dns_status, dns_records jsonb, zone_file, dns_checked_at
+- `mailboxes` — mail_domain_id, local_part, address, display_name, quota_bytes, status
+- `mail_aliases` — mail_domain_id, address, mailbox_id, mailbox_address, status
 
 **Databases**
 
@@ -354,11 +354,12 @@ Base: `/api/v1`. JSON only. Auth: `__Host-kaname_session` cookie (browser) or
 /files           ?server_id=&path= · list/stat/read/write/mkdir/move/copy/delete/chmod/chown/archive/extract/upload/download
 /ftp-accounts    CRUD · /:id/{reset-password,sessions}
 /storage         ?server_id= usage breakdown
-/mailboxes       CRUD · /:id/{reset-password,quota}
+/mail-servers    list · deploy · adopt · /:id/{sync,update,preflight,deploy-secrets,certificate/renew}
+/mail-releases   /latest — the yunori-mail release the deploy job hands to the host
+/mail-domains    CRUD · /:id/dns · /:id/dns/check
+/mailboxes       CRUD · /:id/reset-password  (create and reset are synchronous: KD-035)
 /mail-aliases    CRUD
-/mail-forwarders CRUD
-/mail-auth       ?domain_id= · /check · /:check/fix
-/mail-logs       ?server_id= search + tail
+/mail-logs       /tail?server_id= live journal
 /db-instances    list · /:id/{databases,users}
 /databases       CRUD · /:id/{dump,restore,size}
 /db-users        CRUD · /:id/grants
@@ -512,7 +513,7 @@ drawer, toasts), command palette, auth screens, Command Center.
 2. Monitoring, Logs, Terminal — proves streaming.
 3. Files, FTP/SFTP, Storage.
 4. Websites (sites, domains, DNS, SSL, deployments).
-5. Email (mailboxes, aliases, forwarders, **DNS authentication**, mail logs).
+5. Email (Yunori Mail Server: servers, domains with the **DNS checklist**, mailboxes, aliases, health, logs).
 6. Databases (MySQL/MariaDB and PostgreSQL).
 7. Security (firewall, threats, SSH, audit).
 8. Backups.
@@ -522,21 +523,16 @@ drawer, toasts), command palette, auth screens, Command Center.
 audit-chain verification test, RBAC matrix test, `install.sh` + systemd units + docker-compose,
 docs.
 
-### The mail DNS-authentication check (called out because it is where real setups break)
+### Mail DNS authentication is Yunori's checklist (called out because it is where real setups break)
 
-`mail_auth_checks` runs a named check list per mail domain, and each failure carries a human
-remediation, not a raw record dump:
-
-| Check            | Fails when                                                                                                           | Remediation shown                                                                           |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `mx`             | MX missing, points elsewhere, or the MX host has no A record                                                         | the exact MX record to add                                                                  |
-| `host_spf`       | the **mail hostname** has no SPF TXT of its own, separate from the apex                                              | `mail.example.com. IN TXT "v=spf1 a -all"`                                                  |
-| `spf`            | apex SPF missing, multiple SPF records, `?all`/`+all`, more than 10 lookups                                          | a merged record proposal                                                                    |
-| `dkim`           | selector missing, key mismatch against the agent's local key, key under 1024-bit                                     | the exact selector TXT read from the host                                                   |
-| `dmarc`          | missing, `p=none` with no `rua`, or a syntax error                                                                   | a staged policy proposal                                                                    |
-| `ptr`            | reverse DNS missing or not matching HELO                                                                             | the value to set at the provider                                                            |
-| `proxy_exposure` | the mail hostname resolves into a proxy/CDN range (e.g. Cloudflare orange-cloud) or is covered by a proxied wildcard | "set `mail.example.com` to DNS-only — proxying breaks SMTP and hides your real IP from SPF" |
-| `tls`            | STARTTLS unavailable or the cert does not cover the HELO name                                                        | a cert issuance action                                                                      |
+Kaname once ran its own named check list (`mx`, `host_spf`, `spf`, `dkim`, `dmarc`, `ptr`,
+`proxy_exposure`, `tls`). It no longer does: Yunori Mail Server verifies the records each domain
+needs against public resolvers, from the mail host itself, and `yunori-mail domain dns` reports
+every record with its expected value, what was found and whether it is required. The agent reads
+that report (`mail.domain.dns`), the control plane caches it on `mail_domains`, and the Domains
+page shows it with copy buttons and the zone file. The checks Kaname used to run for the mail host
+(PTR, port 25, blocklists, the certificate actually served) come from `yunori-mail doctor --json`
+on the Health page. See KD-034.
 
 ---
 

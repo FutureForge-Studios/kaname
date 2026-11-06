@@ -453,7 +453,7 @@ function TotpCard({ user, onChanged }: { user: User | null; onChanged: () => voi
  * DOM node rather than a thousand rects.
  */
 const QR_LIGHT = "#ffffff";
-const QR_DARK = "#0b0c0e";
+const QR_DARK = "#121621";
 const QR_QUIET_ZONE = 4;
 
 function QrCode({ value, size = 180 }: { value: string; size?: number }) {

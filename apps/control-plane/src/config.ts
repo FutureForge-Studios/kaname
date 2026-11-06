@@ -137,6 +137,11 @@ const schema = z.object({
   KANAME_COMPOSE_PROJECT: z.string().default("kaname"),
 
   KANAME_UPDATE_MANIFEST_URL: z.string().optional(),
+
+  /** Where yunori-mail releases are read from; defaults to yunori.email/server. */
+  KANAME_YUNORI_FEED: z.string().optional(),
+  /** Pins the yunori-mail release Kaname deploys instead of the newest one. */
+  KANAME_YUNORI_VERSION: z.string().optional(),
 });
 
 /** Where releases are published. One constant, mirrored in install.sh. */

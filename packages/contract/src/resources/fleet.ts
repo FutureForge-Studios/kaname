@@ -339,6 +339,7 @@ export const commandCenterSummary = z.object({
         "backup_failed",
         "service_failed",
         "mail_auth_failing",
+        "mail_server_unhealthy",
         "threat_spike",
         "job_failed",
         "update_available",

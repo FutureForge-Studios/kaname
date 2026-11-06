@@ -35,9 +35,8 @@ export const serverCapability = z.enum([
   "mysql",
   "mariadb",
   "postgres",
-  "mail",
-  "dovecot",
-  "postfix",
+  /** Yunori Mail Server (yunori-mail + Stalwart) is installed on the host. */
+  "yunori",
   "nftables",
   "iptables",
   "ufw",
@@ -161,29 +160,41 @@ export const transferProtocol = z.enum(["sftp", "ftps"]);
  * Email
  * ------------------------------------------------------------------ */
 
-export const mailAuthCheck = z.enum([
-  "mx",
-  "host_spf",
-  "spf",
-  "dkim",
-  "dmarc",
-  "ptr",
-  "tls",
-  "proxy_exposure",
-]);
-export type MailAuthCheck = z.infer<typeof mailAuthCheck>;
-
 export const checkStatus = z.enum(["pass", "warn", "fail", "unknown"]);
 export type CheckStatus = z.infer<typeof checkStatus>;
 
-export const mailDeliveryStatus = z.enum([
-  "sent",
-  "deferred",
-  "bounced",
-  "rejected",
-  "received",
-  "quarantined",
+/**
+ * A Yunori Mail Server check verdict. The same vocabulary yunori-mail's
+ * console speaks (`console/src/api/types.ts` there), with `info` for a
+ * finding that is neither good nor bad.
+ */
+export const mailCheckStatus = z.enum(["pass", "warn", "fail", "info", "unknown"]);
+export type MailCheckStatus = z.infer<typeof mailCheckStatus>;
+
+/** Kaname's own lifecycle for a Yunori Mail Server on a managed host. */
+export const mailServerStatus = z.enum([
+  "not_installed",
+  "deploying",
+  "installing",
+  "installed",
+  "error",
 ]);
+export type MailServerStatus = z.infer<typeof mailServerStatus>;
+
+export const mailSendingMode = z.enum(["direct", "relay"]);
+export type MailSendingMode = z.infer<typeof mailSendingMode>;
+
+/** Relay providers yunori-mail knows the SMTP rules for. */
+export const mailRelayProvider = z.enum([
+  "ses",
+  "resend",
+  "postmark",
+  "mailgun",
+  "smtp2go",
+  "brevo",
+  "custom",
+]);
+export type MailRelayProvider = z.infer<typeof mailRelayProvider>;
 
 /* ------------------------------------------------------------------ *
  * Databases

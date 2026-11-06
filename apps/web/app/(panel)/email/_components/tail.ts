@@ -4,7 +4,8 @@ import { API_BASE, ApiError, encodeParams, redirectToLogin, type AnyErrorCode } 
 /* ------------------------------------------------------------------ *
  * The live mail transport tail.
  *
- * `/mail-logs/tail` streams raw Postfix lines as named SSE frames — it
+ * `/mail-logs/tail` streams raw lines from the mail engine (Stalwart,
+ * driven by yunori-mail) as named SSE frames — it
  * is a different shape from both the multiplexed `/events` feed and the
  * structured `/logs/tail`, so it gets its own reader rather than a flag
  * on somebody else's.
