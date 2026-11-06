@@ -6,7 +6,14 @@ import type { WebSocket } from "ws";
 import { createDb, eq, sql, type DbHandle } from "@kaname/db";
 import { migrateHandle } from "@kaname/db/migrate";
 import { seedDemo } from "@kaname/db/seed";
-import { auditEvents, jobs, mailAliases, mailDomains, mailServers, mailboxes } from "@kaname/db/schema";
+import {
+  auditEvents,
+  jobs,
+  mailAliases,
+  mailDomains,
+  mailServers,
+  mailboxes,
+} from "@kaname/db/schema";
 import type {
   Domain,
   Job,
@@ -22,7 +29,11 @@ import { createContext, type AppContext } from "./context.js";
 import { buildServer } from "./server.js";
 import { bootstrap } from "./bootstrap.js";
 import { isUniqueViolation } from "./routes/mail.js";
-import { DEPLOY_SECRETS_TTL_MS, deploySecretsKey, relayPasswordKey } from "./services/mail-secrets.js";
+import {
+  DEPLOY_SECRETS_TTL_MS,
+  deploySecretsKey,
+  relayPasswordKey,
+} from "./services/mail-secrets.js";
 
 /* ------------------------------------------------------------------ *
  * The Email routes against Yunori Mail Server.
@@ -142,7 +153,12 @@ class FakeSocket extends EventEmitter {
       const id = String(frame.id);
       const fn = answers[method];
       if (!fn) {
-        this.receive({ t: "res", id, ok: false, error: { code: "unsupported", message: `no ${method}` } });
+        this.receive({
+          t: "res",
+          id,
+          ok: false,
+          error: { code: "unsupported", message: `no ${method}` },
+        });
         return;
       }
       try {
@@ -238,7 +254,9 @@ describe("deploy", () => {
     const all = data<Server[]>(await get("/api/v1/servers?per_page=50"));
     target = all.find((s) => s.id !== mailServer.server_id)!;
     expect(target).toBeDefined();
-    targetDomain = data<Domain[]>(await get("/api/v1/domains?per_page=50")).find((d) => !d.has_mail)!;
+    targetDomain = data<Domain[]>(await get("/api/v1/domains?per_page=50")).find(
+      (d) => !d.has_mail,
+    )!;
     expect(targetDomain).toBeDefined();
   });
 
@@ -430,7 +448,10 @@ describe("mailboxes", () => {
     expect(error(res).message).toContain("mailbox exists in the engine");
     // Nothing was written for a mailbox the host refused.
     expect(
-      await handle.db.select().from(mailboxes).where(eq(mailboxes.address, "ghost@futureforge.dev")),
+      await handle.db
+        .select()
+        .from(mailboxes)
+        .where(eq(mailboxes.address, "ghost@futureforge.dev")),
     ).toHaveLength(0);
   });
 
@@ -464,7 +485,9 @@ describe("mail domains", () => {
   });
 
   it("adds a domain as a job and marks the Kaname domain as receiving mail", async () => {
-    const candidate = data<Domain[]>(await get("/api/v1/domains?per_page=50")).find((d) => !d.has_mail)!;
+    const candidate = data<Domain[]>(await get("/api/v1/domains?per_page=50")).find(
+      (d) => !d.has_mail,
+    )!;
     const res = await send("POST", "/api/v1/mail-domains", {
       domain_id: candidate.id,
       server_id: mailServer.server_id,
@@ -472,7 +495,9 @@ describe("mail domains", () => {
     expect(res.statusCode, res.body).toBe(202);
     expect(data<{ job: Job }>(res).job.type).toBe("mail.domain.add");
 
-    const list = data<MailDomain[]>(await get(`/api/v1/mail-domains?server_id=${mailServer.server_id}`));
+    const list = data<MailDomain[]>(
+      await get(`/api/v1/mail-domains?server_id=${mailServer.server_id}`),
+    );
     added = list.find((d) => d.domain_id === candidate.id)!;
     expect(added.status).toBe("provisioning");
     expect(added.is_primary).toBe(false);
@@ -511,7 +536,10 @@ describe("mail domains", () => {
   it("serves the cached DNS report with the record the UI offers to copy", async () => {
     const res = await get(`/api/v1/mail-domains/${domain.id}/dns`);
     expect(res.statusCode).toBe(200);
-    const report = data<{ overall: string; records: { type: string; status: string; expected: string | null }[] }>(res);
+    const report = data<{
+      overall: string;
+      records: { type: string; status: string; expected: string | null }[];
+    }>(res);
     expect(report.overall).toBe("fail");
     const dkim = report.records.find((r) => r.status === "fail");
     expect(dkim?.type).toBe("TXT");
@@ -562,8 +590,14 @@ describe("aliases", () => {
     const { job } = data<{ job: Job }>(res);
     expect(job.type).toBe("mail.alias.add");
     expect(job.target_label).toBe("team@futureforge.dev");
-    const [stored] = await handle.db.select({ params: jobs.params }).from(jobs).where(eq(jobs.id, job.id));
-    expect(stored!.params).toMatchObject({ alias: "team@futureforge.dev", mailbox: "hello@futureforge.dev" });
+    const [stored] = await handle.db
+      .select({ params: jobs.params })
+      .from(jobs)
+      .where(eq(jobs.id, job.id));
+    expect(stored!.params).toMatchObject({
+      alias: "team@futureforge.dev",
+      mailbox: "hello@futureforge.dev",
+    });
   });
 });
 
@@ -596,7 +630,12 @@ describe("mail log tail", () => {
       expect(frame.method).toBe("mail.logs");
       expect(frame.params).toMatchObject({ lines: 5, follow: true });
       const id = String(frame.id);
-      socket.receive({ t: "chk", id, seq: 0, data: "stalwart[1]: delivered to hello@futureforge.dev\n" });
+      socket.receive({
+        t: "chk",
+        id,
+        seq: 0,
+        data: "stalwart[1]: delivered to hello@futureforge.dev\n",
+      });
       socket.receive({ t: "res", id, ok: true, result: { records: [] } });
       socket.receive({ t: "end", id, ok: true });
     };
