@@ -26,8 +26,8 @@ pub const DEFAULT_DIR_MODE: u32 = 0o755;
 /// not be able to end the host.
 pub static PROTECTED_ROOTS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     [
-        "/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/proc", "/root", "/sbin", "/sys", "/usr",
-        "/var",
+        "/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib32", "/lib64", "/proc", "/root", "/sbin", "/sys",
+        "/usr", "/var",
     ]
     .into_iter()
     .collect()
@@ -56,7 +56,10 @@ pub fn validate_paths(raws: &[String]) -> Result<Vec<String>, ProviderError> {
 /// `check_path` takes a resolver rather than calling the filesystem
 /// itself, so the escape rule can be proved against a link that leaves
 /// the tree without a host that carries one.
-pub fn check_path(raw: &str, resolve: impl Fn(&str) -> std::io::Result<String>) -> Result<String, ProviderError> {
+pub fn check_path(
+    raw: &str,
+    resolve: impl Fn(&str) -> std::io::Result<String>,
+) -> Result<String, ProviderError> {
     if raw.is_empty() {
         return Err(invalid("path is required"));
     }
@@ -71,9 +74,12 @@ pub fn check_path(raw: &str, resolve: impl Fn(&str) -> std::io::Result<String>) 
     }
 
     let cleaned = clean(raw);
-    let resolved = resolve(&cleaned).map_err(|e| ProviderError::Internal(format!("resolve {cleaned}: {e}")))?;
+    let resolved =
+        resolve(&cleaned).map_err(|e| ProviderError::Internal(format!("resolve {cleaned}: {e}")))?;
     if resolved.contains("/../") || resolved.ends_with("/..") {
-        return Err(ProviderError::PermissionDenied(format!("path escapes through a symlink: {raw}")));
+        return Err(ProviderError::PermissionDenied(format!(
+            "path escapes through a symlink: {raw}"
+        )));
     }
     Ok(cleaned)
 }
@@ -128,7 +134,9 @@ pub fn wrap_fs_error(target: &str, err: std::io::Error) -> ProviderError {
         // classify it *as* "exists", and the other order would report a
         // directory that still has files in it as "already exists".
         Some(libc::ENOTEMPTY) => return ProviderError::PreconditionFailed(format!("{target} is not empty")),
-        Some(libc::ENOSPC) => return ProviderError::PreconditionFailed(format!("no space left for {target}")),
+        Some(libc::ENOSPC) => {
+            return ProviderError::PreconditionFailed(format!("no space left for {target}"));
+        }
         _ => {}
     }
     match err.kind() {
@@ -240,7 +248,10 @@ mod tests {
             ("bare traversal", "../../etc/shadow"),
             ("traversal out of a legitimate root", "/var/www/../../etc/shadow"),
             ("traversal wearing a dot segment", "/var/www/./../../etc"),
-            ("traversal that lands back inside", "/var/www/site/../site/index.html"),
+            (
+                "traversal that lands back inside",
+                "/var/www/site/../site/index.html",
+            ),
             ("trailing traversal", "/var/www/.."),
             ("traversal off the root", "/.."),
             ("null byte truncation", "/var/www/index.html\0.jpg"),
@@ -279,12 +290,25 @@ mod tests {
             // Nothing in the agent percent-decodes a path, so this names a
             // directory that is literally called "..%2f..". Decoding it
             // would be the bug; treating it as one opaque segment is the fix.
-            ("percent-encoded traversal is not a traversal", "/var/www/..%2f..", "/var/www/..%2f.."),
-            ("a name that merely starts with dots", "/var/www/...cache", "/var/www/...cache"),
-            ("spaces and unicode", "/srv/données/mon site", "/srv/données/mon site"),
+            (
+                "percent-encoded traversal is not a traversal",
+                "/var/www/..%2f..",
+                "/var/www/..%2f..",
+            ),
+            (
+                "a name that merely starts with dots",
+                "/var/www/...cache",
+                "/var/www/...cache",
+            ),
+            (
+                "spaces and unicode",
+                "/srv/données/mon site",
+                "/srv/données/mon site",
+            ),
         ];
         for (name, raw, want) in cases {
-            let got = check_path(raw, no_symlinks).unwrap_or_else(|e| panic!("{name}: rejected {raw:?}: {e}"));
+            let got =
+                check_path(raw, no_symlinks).unwrap_or_else(|e| panic!("{name}: rejected {raw:?}: {e}"));
             assert_eq!(got, want, "{name}");
         }
     }
@@ -308,7 +332,8 @@ mod tests {
     #[test]
     fn check_path_accepts_a_symlink_that_stays_inside() {
         let resolve = |_: &str| Ok("/srv/real/uploads".to_string());
-        let got = check_path("/var/www/uploads", resolve).expect("a link that stays on the host was rejected");
+        let got =
+            check_path("/var/www/uploads", resolve).expect("a link that stays on the host was rejected");
         // The guard returns the requested path, not the resolved one: the
         // caller asked about /var/www/uploads and that is what it must
         // open, or a later chmod would land on the link's target instead.
@@ -330,18 +355,28 @@ mod tests {
     #[test]
     fn validate_path_is_wired_to_the_guard() {
         for raw in ["", "relative", "/etc/../etc", "/etc\0"] {
-            assert!(validate_path(raw).is_err(), "validate_path({raw:?}) accepted a path check_path rejects");
+            assert!(
+                validate_path(raw).is_err(),
+                "validate_path({raw:?}) accepted a path check_path rejects"
+            );
         }
         assert_eq!(validate_path("/").unwrap(), "/");
     }
 
     #[test]
     fn validate_paths_rejects_the_whole_batch_for_one_bad_member() {
-        assert!(matches!(validate_paths(&[]), Err(ProviderError::InvalidParams(_))));
+        assert!(matches!(
+            validate_paths(&[]),
+            Err(ProviderError::InvalidParams(_))
+        ));
         // fs.remove and fs.chmod take a batch. Returning the good paths
         // alongside an error would let a caller that ignores the error
         // act on half of a request it never validated.
-        let batch = ["/var/www".to_string(), "/var/www/../../etc".to_string(), "/etc/hosts".to_string()];
+        let batch = [
+            "/var/www".to_string(),
+            "/var/www/../../etc".to_string(),
+            "/etc/hosts".to_string(),
+        ];
         assert!(validate_paths(&batch).is_err());
     }
 
@@ -370,7 +405,13 @@ mod tests {
         for raw in ["", "rwxr-xr-x", "0999", "-1", "17777", "0x1ff", " 644", "+644"] {
             assert!(parse_mode(raw).is_err(), "parse_mode({raw:?}) was accepted");
         }
-        for (raw, want) in [("644", 0o644), ("0644", 0o644), ("0755", 0o755), ("4755", 0o4755), ("0", 0)] {
+        for (raw, want) in [
+            ("644", 0o644),
+            ("0644", 0o644),
+            ("0755", 0o755),
+            ("4755", 0o4755),
+            ("0", 0),
+        ] {
             assert_eq!(parse_mode(raw).unwrap(), want, "parse_mode({raw:?})");
         }
     }
@@ -382,33 +423,54 @@ mod tests {
     fn wrap_fs_error_maps_onto_the_provider_variants() {
         use std::io::{Error, ErrorKind};
         let cases: Vec<(&str, &str, Error, fn(&ProviderError) -> bool)> = vec![
-            ("missing", "/var/www/missing", Error::from(ErrorKind::NotFound), |e| {
-                matches!(e, ProviderError::NotFound(_))
-            }),
-            ("unreadable", "/etc/shadow", Error::from(ErrorKind::PermissionDenied), |e| {
-                matches!(e, ProviderError::PermissionDenied(_))
-            }),
-            ("already there", "/var/www/index.html", Error::from(ErrorKind::AlreadyExists), |e| {
-                matches!(e, ProviderError::Conflict(_))
-            }),
-            ("non-empty directory", "/var/www", Error::from_raw_os_error(libc::ENOTEMPTY), |e| {
-                matches!(e, ProviderError::PreconditionFailed(_))
-            }),
-            ("disk full", "/var/www/upload", Error::from_raw_os_error(libc::ENOSPC), |e| {
-                matches!(e, ProviderError::PreconditionFailed(_))
-            }),
+            (
+                "missing",
+                "/var/www/missing",
+                Error::from(ErrorKind::NotFound),
+                |e| matches!(e, ProviderError::NotFound(_)),
+            ),
+            (
+                "unreadable",
+                "/etc/shadow",
+                Error::from(ErrorKind::PermissionDenied),
+                |e| matches!(e, ProviderError::PermissionDenied(_)),
+            ),
+            (
+                "already there",
+                "/var/www/index.html",
+                Error::from(ErrorKind::AlreadyExists),
+                |e| matches!(e, ProviderError::Conflict(_)),
+            ),
+            (
+                "non-empty directory",
+                "/var/www",
+                Error::from_raw_os_error(libc::ENOTEMPTY),
+                |e| matches!(e, ProviderError::PreconditionFailed(_)),
+            ),
+            (
+                "disk full",
+                "/var/www/upload",
+                Error::from_raw_os_error(libc::ENOSPC),
+                |e| matches!(e, ProviderError::PreconditionFailed(_)),
+            ),
         ];
         for (name, path, err, want) in cases {
             let got = wrap_fs_error(path, err);
             assert!(want(&got), "{name}: mapped to {got:?}");
-            assert!(got.to_string().contains(path), "{name}: the mapped error {got} does not name the path");
+            assert!(
+                got.to_string().contains(path),
+                "{name}: the mapped error {got} does not name the path"
+            );
         }
 
         // An error with no variant of its own must still reach the panel
         // rather than being flattened into one of the above.
         let got = wrap_fs_error("/var/www", Error::other("the device reported a checksum failure"));
         assert!(matches!(got, ProviderError::Internal(_)), "{got:?}");
-        assert!(got.to_string().contains("checksum failure"), "an unrecognised error lost its cause: {got}");
+        assert!(
+            got.to_string().contains("checksum failure"),
+            "an unrecognised error lost its cause: {got}"
+        );
     }
 
     #[test]

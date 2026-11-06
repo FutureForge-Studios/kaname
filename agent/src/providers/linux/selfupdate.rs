@@ -122,7 +122,10 @@ pub fn swap(binary: &Path, staged: &Path, backup: &Path) -> PResult<()> {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
     if let Some(parent) = backup.parent() {
-        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent)?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)?;
     }
     copy_file(binary, backup, 0o700)
         .map_err(|e| ProviderError::internal(format!("keeping a copy of the current binary: {e}")))?;
@@ -145,7 +148,12 @@ fn copy_file(from: &Path, to: &Path, mode: u32) -> std::io::Result<()> {
 }
 
 /// The `system.selfUpdate` verb for the real provider.
-pub async fn self_update(shared: &Arc<Shared>, ctx: &Ctx, p: SelfUpdateParams, s: StreamRef) -> PResult<SelfUpdateResult> {
+pub async fn self_update(
+    shared: &Arc<Shared>,
+    ctx: &Ctx,
+    p: SelfUpdateParams,
+    s: StreamRef,
+) -> PResult<SelfUpdateResult> {
     let binary = std::env::current_exe()
         .map_err(|e| ProviderError::internal(format!("finding the running agent binary: {e}")))?;
     let binary = std::fs::canonicalize(&binary)
@@ -162,9 +170,17 @@ pub async fn self_update(shared: &Arc<Shared>, ctx: &Ctx, p: SelfUpdateParams, s
     ctx.run(download(&client, &p.url, &p.sha256, &staged)).await??;
     say(s.as_ref(), "sha256 verified").await;
 
-    say(s.as_ref(), format!("keeping the current binary at {}", backup.display())).await;
+    say(
+        s.as_ref(),
+        format!("keeping the current binary at {}", backup.display()),
+    )
+    .await;
     swap(&binary, &staged, &backup)?;
-    say(s.as_ref(), format!("installed {} at {}", p.version, binary.display())).await;
+    say(
+        s.as_ref(),
+        format!("installed {} at {}", p.version, binary.display()),
+    )
+    .await;
     say(
         s.as_ref(),
         format!(
@@ -246,7 +262,10 @@ mod tests {
         assert_eq!(std::fs::read(&dst).unwrap(), payload);
         // Verified, but not yet runnable: that is swap's decision to make.
         let mode = std::fs::metadata(&dst).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "the staged download is {mode:o}, want 0600 until it is swapped in");
+        assert_eq!(
+            mode, 0o600,
+            "the staged download is {mode:o}, want 0600 until it is swapped in"
+        );
     }
 
     #[tokio::test]
@@ -255,7 +274,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dst = dir.path().join("kanamed.new");
 
-        let err = download(&client(), &url, &digest(b"expected"), &dst).await.unwrap_err();
+        let err = download(&client(), &url, &digest(b"expected"), &dst)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains(DIGEST_MISMATCH), "{err}");
         // The whole point: nothing is left behind that could be swapped in.
         assert!(!dst.exists(), "the rejected download is still on disk");
@@ -265,7 +286,9 @@ mod tests {
     async fn download_refuses_a_short_digest() {
         let url = serve(b"payload".to_vec(), 200).await;
         let dir = tempfile::tempdir().unwrap();
-        let err = download(&client(), &url, "abc123", &dir.path().join("x")).await.unwrap_err();
+        let err = download(&client(), &url, "abc123", &dir.path().join("x"))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("64-character"), "{err}");
     }
 
@@ -293,7 +316,10 @@ mod tests {
         swap(&binary, &staged, &backup).unwrap();
 
         assert_eq!(std::fs::read_to_string(&binary).unwrap(), "new build");
-        assert_eq!(std::fs::metadata(&binary).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(
+            std::fs::metadata(&binary).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), "old build");
         // The staged file is consumed by the rename, so a second swap
         // cannot silently re-apply a stale download.
