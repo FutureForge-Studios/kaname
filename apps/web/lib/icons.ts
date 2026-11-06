@@ -102,6 +102,7 @@ export const ATTENTION_ICONS: Record<AttentionKind, IconComponent> = {
   backup_failed: Archive,
   service_failed: Cog,
   mail_auth_failing: MailCheck,
+  mail_server_unhealthy: MailCheck,
   threat_spike: ShieldAlert,
   job_failed: AlertTriangle,
   update_available: PackageCheck,
