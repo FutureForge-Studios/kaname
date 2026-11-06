@@ -20,9 +20,9 @@ use flate2::write::GzEncoder;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
+use super::Shared;
 use super::common::{invalid, not_found, precondition, split_lines, unsupported};
 use super::exec::{self, ExecOptions};
-use super::Shared;
 use crate::providers::*;
 
 /// Field separator for psql's unaligned output. A unit separator cannot
@@ -32,7 +32,14 @@ const PSQL_SEPARATOR: &str = "\x1f";
 const DUMP_PROGRESS_STRIDE: u64 = 8 << 20;
 
 /// Schemas that belong to the engine rather than to the operator.
-const SYSTEM_SCHEMAS: &[&str] = &["information_schema", "mysql", "performance_schema", "sys", "template0", "template1"];
+const SYSTEM_SCHEMAS: &[&str] = &[
+    "information_schema",
+    "mysql",
+    "performance_schema",
+    "sys",
+    "template0",
+    "template1",
+];
 
 fn is_system_schema(name: &str) -> bool {
     SYSTEM_SCHEMAS.contains(&name)
@@ -66,7 +73,11 @@ impl Databases for DatabaseOps {
         let mut instances = Vec::with_capacity(2);
 
         if self.0.has(cap::MYSQL) || self.0.has(cap::MARIADB) {
-            let engine = if self.0.has(cap::MARIADB) && !self.0.has(cap::MYSQL) { "mariadb" } else { "mysql" };
+            let engine = if self.0.has(cap::MARIADB) && !self.0.has(cap::MYSQL) {
+                "mariadb"
+            } else {
+                "mysql"
+            };
             instances.push(self.mysql_instance(ctx, engine).await);
         }
         if self.0.has(cap::POSTGRES) {
@@ -181,7 +192,14 @@ impl Databases for DatabaseOps {
             self.mysql(ctx, "", &format!("{statement};")).await?;
         }
 
-        let databases = self.list_databases(ctx, DbEngineParams { engine: p.engine.clone() }).await?;
+        let databases = self
+            .list_databases(
+                ctx,
+                DbEngineParams {
+                    engine: p.engine.clone(),
+                },
+            )
+            .await?;
         if let Some(database) = databases.into_iter().find(|d| d.name == p.name) {
             return Ok(database);
         }
@@ -200,10 +218,20 @@ impl Databases for DatabaseOps {
             )));
         }
         if is_postgres(&p.engine) {
-            self.psql(ctx, "postgres", &format!("DROP DATABASE IF EXISTS {};", quote_pg(&p.name))).await?;
+            self.psql(
+                ctx,
+                "postgres",
+                &format!("DROP DATABASE IF EXISTS {};", quote_pg(&p.name)),
+            )
+            .await?;
             return Ok(());
         }
-        self.mysql(ctx, "", &format!("DROP DATABASE IF EXISTS {};", quote_mysql(&p.name))).await?;
+        self.mysql(
+            ctx,
+            "",
+            &format!("DROP DATABASE IF EXISTS {};", quote_mysql(&p.name)),
+        )
+        .await?;
         Ok(())
     }
 
@@ -232,15 +260,23 @@ impl Databases for DatabaseOps {
         }
 
         let rows = match self
-            .mysql(ctx, "", "SELECT User, Host, plugin, Super_priv, account_locked FROM mysql.user ORDER BY User, Host;")
+            .mysql(
+                ctx,
+                "",
+                "SELECT User, Host, plugin, Super_priv, account_locked FROM mysql.user ORDER BY User, Host;",
+            )
             .await
         {
             Ok(rows) => rows,
             // Older MySQL has no account_locked column; ask again without it
             // rather than failing the whole page.
             Err(_) => {
-                self.mysql(ctx, "", "SELECT User, Host, plugin, Super_priv FROM mysql.user ORDER BY User, Host;")
-                    .await?
+                self.mysql(
+                    ctx,
+                    "",
+                    "SELECT User, Host, plugin, Super_priv FROM mysql.user ORDER BY User, Host;",
+                )
+                .await?
             }
         };
 
@@ -269,8 +305,11 @@ impl Databases for DatabaseOps {
 
     async fn create_user(&self, ctx: &Ctx, p: DbUserCreateParams) -> PResult<DbUserInfo> {
         if is_postgres(&p.engine) {
-            let statement =
-                format!("CREATE ROLE {} LOGIN PASSWORD {};", quote_pg(&p.username), literal(&p.password));
+            let statement = format!(
+                "CREATE ROLE {} LOGIN PASSWORD {};",
+                quote_pg(&p.username),
+                literal(&p.password)
+            );
             self.psql(ctx, "postgres", &statement).await?;
             return Ok(DbUserInfo {
                 username: p.username,
@@ -302,7 +341,11 @@ impl Databases for DatabaseOps {
 
         if is_postgres(&p.engine) {
             if let Some(password) = password {
-                statements.push(format!("ALTER ROLE {} PASSWORD {};", quote_pg(&p.username), literal(password)));
+                statements.push(format!(
+                    "ALTER ROLE {} PASSWORD {};",
+                    quote_pg(&p.username),
+                    literal(password)
+                ));
             }
             if let Some(can_login) = p.can_login {
                 let access = if can_login { "LOGIN" } else { "NOLOGIN" };
@@ -322,10 +365,17 @@ impl Databases for DatabaseOps {
         check_host_pattern(&p.host_pattern)?;
         let account = format!("{}@{}", literal(&p.username), literal(&p.host_pattern));
         if let Some(password) = password {
-            statements.push(format!("ALTER USER {account} IDENTIFIED BY {};", literal(password)));
+            statements.push(format!(
+                "ALTER USER {account} IDENTIFIED BY {};",
+                literal(password)
+            ));
         }
         if let Some(can_login) = p.can_login {
-            let state = if can_login { "ACCOUNT UNLOCK" } else { "ACCOUNT LOCK" };
+            let state = if can_login {
+                "ACCOUNT UNLOCK"
+            } else {
+                "ACCOUNT LOCK"
+            };
             statements.push(format!("ALTER USER {account} {state};"));
         }
         if !statements.is_empty() {
@@ -341,14 +391,23 @@ impl Databases for DatabaseOps {
 
     async fn delete_user(&self, ctx: &Ctx, p: DbUserDeleteParams) -> PResult<()> {
         if is_postgres(&p.engine) {
-            self.psql(ctx, "postgres", &format!("DROP ROLE IF EXISTS {};", quote_pg(&p.username))).await?;
+            self.psql(
+                ctx,
+                "postgres",
+                &format!("DROP ROLE IF EXISTS {};", quote_pg(&p.username)),
+            )
+            .await?;
             return Ok(());
         }
         check_host_pattern(&p.host_pattern)?;
         self.mysql(
             ctx,
             "",
-            &format!("DROP USER IF EXISTS {}@{};", literal(&p.username), literal(&p.host_pattern)),
+            &format!(
+                "DROP USER IF EXISTS {}@{};",
+                literal(&p.username),
+                literal(&p.host_pattern)
+            ),
         )
         .await?;
         Ok(())
@@ -371,7 +430,9 @@ impl Databases for DatabaseOps {
                 return Ok(());
             }
 
-            let mut grants = vec![format!("GRANT CONNECT, TEMPORARY ON DATABASE {database} TO {user};")];
+            let mut grants = vec![format!(
+                "GRANT CONNECT, TEMPORARY ON DATABASE {database} TO {user};"
+            )];
             if privileges.iter().any(|p| p == "ALL") {
                 grants.extend([
                     format!("GRANT ALL PRIVILEGES ON DATABASE {database} TO {user};"),
@@ -398,7 +459,15 @@ impl Databases for DatabaseOps {
 
         // A user with no grants makes REVOKE an error, which is not a failure
         // of this call, so its result is deliberately not fatal.
-        if self.mysql(ctx, "", &format!("REVOKE ALL PRIVILEGES ON {scope} FROM {account};")).await.is_err() {
+        if self
+            .mysql(
+                ctx,
+                "",
+                &format!("REVOKE ALL PRIVILEGES ON {scope} FROM {account};"),
+            )
+            .await
+            .is_err()
+        {
             tracing::debug!(user = %p.username, database = %p.database, "nothing to revoke before applying grants");
         }
         if privileges.is_empty() {
@@ -406,7 +475,10 @@ impl Databases for DatabaseOps {
             return Ok(());
         }
 
-        let statement = format!("GRANT {} ON {scope} TO {account};\nFLUSH PRIVILEGES;", privileges.join(", "));
+        let statement = format!(
+            "GRANT {} ON {scope} TO {account};\nFLUSH PRIVILEGES;",
+            privileges.join(", ")
+        );
         self.mysql(ctx, "", &statement).await?;
         Ok(())
     }
@@ -416,7 +488,11 @@ impl Databases for DatabaseOps {
     async fn size(&self, ctx: &Ctx, p: DbSizeParams) -> PResult<DbSizeResult> {
         if is_postgres(&p.engine) {
             let rows = self
-                .psql(ctx, "postgres", &format!("SELECT pg_database_size({})::bigint;", literal(&p.name)))
+                .psql(
+                    ctx,
+                    "postgres",
+                    &format!("SELECT pg_database_size({})::bigint;", literal(&p.name)),
+                )
                 .await?;
             let Some(row) = rows.first() else {
                 return Err(not_found(format!("database {}", p.name)));
@@ -457,7 +533,9 @@ impl Databases for DatabaseOps {
         }
 
         let mut cmd = piped_command(&options)?;
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| spawn_error(&options.name, e))?;
         let mut stdout = child.stdout.take().expect("piped");
         let mut stderr = child.stderr.take().expect("piped");
@@ -495,7 +573,10 @@ impl Databases for DatabaseOps {
             let mut written: u64 = 0;
             let mut reported: u64 = 0;
             loop {
-                let n = stdout.read(&mut buffer).await.map_err(|e| ProviderError::internal(format!("read dump: {e}")))?;
+                let n = stdout
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|e| ProviderError::internal(format!("read dump: {e}")))?;
                 if n == 0 {
                     break;
                 }
@@ -520,16 +601,21 @@ impl Databases for DatabaseOps {
         if outcome.is_err() {
             let _ = child.start_kill();
         }
-        let status = child.wait().await.map_err(|e| ProviderError::internal(format!("waiting for {}: {e}", options.name)));
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| ProviderError::internal(format!("waiting for {}: {e}", options.name)));
         let written = writer.await.unwrap_or_else(|e| Err(std::io::Error::other(e)));
         let stderr_text = stderr_task.await.unwrap_or_default();
 
         let failure = match (outcome, status) {
             (Err(e), _) => Some(e),
             (Ok(()), Err(e)) => Some(e),
-            (Ok(()), Ok(status)) if !status.success() => {
-                Some(exec::exec_error(&options.name, exec::tail(&stderr_text, exec::EXEC_OUTPUT_LIMIT), status.code()))
-            }
+            (Ok(()), Ok(status)) if !status.success() => Some(exec::exec_error(
+                &options.name,
+                exec::tail(&stderr_text, exec::EXEC_OUTPUT_LIMIT),
+                status.code(),
+            )),
             _ => None,
         };
         if let Some(err) = failure {
@@ -569,7 +655,9 @@ impl Databases for DatabaseOps {
 
         let options = restore_command(&p)?;
         let mut cmd = piped_command(&options)?;
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| spawn_error(&options.name, e))?;
         let mut stdin = child.stdin.take().expect("piped");
         let stdout = child.stdout.take().expect("piped");
@@ -580,7 +668,11 @@ impl Databases for DatabaseOps {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
         let source_path = p.source.clone();
         let reader = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
-            let mut input: Box<dyn Read> = if gzipped { Box::new(GzDecoder::new(source)) } else { Box::new(source) };
+            let mut input: Box<dyn Read> = if gzipped {
+                Box::new(GzDecoder::new(source))
+            } else {
+                Box::new(source)
+            };
             let mut buffer = vec![0u8; 64 << 10];
             loop {
                 let n = input.read(&mut buffer)?;
@@ -604,7 +696,8 @@ impl Databases for DatabaseOps {
         // Both of the client's streams are relayed to the operator and kept
         // as a tail for the error report.
         let (lines_tx, mut lines_rx) = tokio::sync::mpsc::channel::<String>(256);
-        let pump = |reader: Box<dyn tokio::io::AsyncRead + Unpin + Send>, tx: tokio::sync::mpsc::Sender<String>| async move {
+        let pump = |reader: Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+                    tx: tokio::sync::mpsc::Sender<String>| async move {
             let mut lines = BufReader::new(reader).lines();
             while let Ok(Some(line)) = lines.next_line().await {
                 if tx.send(line).await.is_err() {
@@ -639,13 +732,19 @@ impl Databases for DatabaseOps {
         let _ = feeder.await;
         if let Ok(Err(e)) = reader.await {
             if gzipped {
-                return Err(ProviderError::internal(format!("open {source_path} as gzip: {e}")));
+                return Err(ProviderError::internal(format!(
+                    "open {source_path} as gzip: {e}"
+                )));
             }
             return Err(wrap_fs_error(&source_path, e));
         }
 
         if !status.success() {
-            return Err(exec::exec_error(&options.name, exec::tail(&captured, exec::EXEC_OUTPUT_LIMIT), status.code()));
+            return Err(exec::exec_error(
+                &options.name,
+                exec::tail(&captured, exec::EXEC_OUTPUT_LIMIT),
+                status.code(),
+            ));
         }
         Ok(())
     }
@@ -714,7 +813,9 @@ impl DatabaseOps {
             if index == 0 && !row.is_empty() {
                 instance.version = row[0].clone();
             } else if row.len() == 2 {
-                let Ok(value) = row[1].parse::<i64>() else { continue };
+                let Ok(value) = row[1].parse::<i64>() else {
+                    continue;
+                };
                 match row[0].as_str() {
                     "Uptime" => instance.uptime_seconds = Some(value),
                     "Threads_connected" => instance.connections = Some(value),
@@ -791,7 +892,9 @@ impl DatabaseOps {
         else {
             return 0;
         };
-        rows.first().map(|row| first(row).parse().unwrap_or(0)).unwrap_or(0)
+        rows.first()
+            .map(|row| first(row).parse().unwrap_or(0))
+            .unwrap_or(0)
     }
 
     /* ------------------------------- clients ----------------------------- */
@@ -803,13 +906,20 @@ impl DatabaseOps {
             return Err(unsupported("no mysql client is installed"));
         };
 
-        let mut args = vec!["--batch".to_string(), "--raw".into(), "--skip-column-names".into(), "--connect-timeout=10".into()];
+        let mut args = vec![
+            "--batch".to_string(),
+            "--raw".into(),
+            "--skip-column-names".into(),
+            "--connect-timeout=10".into(),
+        ];
         if !database.is_empty() {
             args.push(format!("--database={database}"));
         }
         let out = exec::run_with(
             ctx,
-            ExecOptions::new(binary, args).stdin(format!("{statements}\n")).c_locale(),
+            ExecOptions::new(binary, args)
+                .stdin(format!("{statements}\n"))
+                .c_locale(),
         )
         .await?;
 
@@ -836,7 +946,9 @@ impl DatabaseOps {
         if !database.is_empty() {
             args.push(format!("--dbname={database}"));
         }
-        let mut options = ExecOptions::new("psql", args).stdin(format!("{statements}\n")).c_locale();
+        let mut options = ExecOptions::new("psql", args)
+            .stdin(format!("{statements}\n"))
+            .c_locale();
         if let Some(account) = postgres_account() {
             options = options.user(account);
         }
@@ -853,8 +965,11 @@ impl DatabaseOps {
 fn dump_command(p: &DbDumpParams) -> PResult<ExecOptions> {
     if is_postgres(&p.engine) {
         let dbname = format!("--dbname={}", p.name);
-        let mut options =
-            ExecOptions::new("pg_dump", ["--no-owner", "--no-privileges", "--format=plain", dbname.as_str()]).c_locale();
+        let mut options = ExecOptions::new(
+            "pg_dump",
+            ["--no-owner", "--no-privileges", "--format=plain", dbname.as_str()],
+        )
+        .c_locale();
         if let Some(account) = postgres_account() {
             options = options.user(account);
         }
@@ -865,7 +980,14 @@ fn dump_command(p: &DbDumpParams) -> PResult<ExecOptions> {
     };
     Ok(ExecOptions::new(
         binary,
-        ["--single-transaction", "--quick", "--routines", "--triggers", "--databases", &p.name],
+        [
+            "--single-transaction",
+            "--quick",
+            "--routines",
+            "--triggers",
+            "--databases",
+            &p.name,
+        ],
     )
     .c_locale())
 }
@@ -873,7 +995,8 @@ fn dump_command(p: &DbDumpParams) -> PResult<ExecOptions> {
 fn restore_command(p: &DbRestoreParams) -> PResult<ExecOptions> {
     if is_postgres(&p.engine) {
         let dbname = format!("--dbname={}", p.name);
-        let mut options = ExecOptions::new("psql", ["-X", "-q", "-v", "ON_ERROR_STOP=1", dbname.as_str()]).c_locale();
+        let mut options =
+            ExecOptions::new("psql", ["-X", "-q", "-v", "ON_ERROR_STOP=1", dbname.as_str()]).c_locale();
         if let Some(account) = postgres_account() {
             options = options.user(account);
         }
@@ -888,7 +1011,10 @@ fn restore_command(p: &DbRestoreParams) -> PResult<ExecOptions> {
 /// The system user the cluster trusts. If it is absent the agent stays root
 /// and lets the engine decide.
 fn postgres_account() -> Option<&'static str> {
-    nix::unistd::User::from_name("postgres").ok().flatten().map(|_| "postgres")
+    nix::unistd::User::from_name("postgres")
+        .ok()
+        .flatten()
+        .map(|_| "postgres")
 }
 
 /// Prefers the MariaDB-named tools when the MySQL-named ones are gone,
@@ -924,7 +1050,10 @@ pub(crate) fn piped_command(o: &ExecOptions) -> PResult<Command> {
     }
     if o.clear_env {
         cmd.env_clear();
-        cmd.env("PATH", std::env::var("PATH").unwrap_or_else(|_| "/usr/sbin:/usr/bin:/sbin:/bin".into()));
+        cmd.env(
+            "PATH",
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/sbin:/usr/bin:/sbin:/bin".into()),
+        );
     }
     if o.c_locale {
         cmd.env("LC_ALL", "C").env("LANG", "C");
@@ -955,7 +1084,9 @@ pub(crate) fn piped_command(o: &ExecOptions) -> PResult<Command> {
 pub(crate) fn spawn_error(name: &str, e: std::io::Error) -> ProviderError {
     match e.kind() {
         std::io::ErrorKind::NotFound => unsupported(format!("{name} is not installed")),
-        std::io::ErrorKind::PermissionDenied => ProviderError::PermissionDenied(format!("cannot run {name}: {e}")),
+        std::io::ErrorKind::PermissionDenied => {
+            ProviderError::PermissionDenied(format!("cannot run {name}: {e}"))
+        }
         _ => ProviderError::internal(format!("starting {name}: {e}")),
     }
 }
@@ -1002,7 +1133,10 @@ fn check_charset(value: &str) -> PResult<()> {
     if value.is_empty() || value.len() > 64 {
         return Err(invalid("character set must be between 1 and 64 characters"));
     }
-    if !value.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.')) {
+    if !value
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.'))
+    {
         return Err(invalid("character set contains an illegal character"));
     }
     Ok(())
@@ -1056,8 +1190,14 @@ mod tests {
 
     #[test]
     fn identifiers_are_quoted_by_doubling_the_quote_character() {
-        assert_eq!(quote_mysql("app`; DROP DATABASE x; --"), "`app``; DROP DATABASE x; --`");
-        assert_eq!(quote_pg("app\"; DROP DATABASE x; --"), "\"app\"\"; DROP DATABASE x; --\"");
+        assert_eq!(
+            quote_mysql("app`; DROP DATABASE x; --"),
+            "`app``; DROP DATABASE x; --`"
+        );
+        assert_eq!(
+            quote_pg("app\"; DROP DATABASE x; --"),
+            "\"app\"\"; DROP DATABASE x; --\""
+        );
     }
 
     #[test]
@@ -1083,7 +1223,10 @@ mod tests {
 
     #[test]
     fn postgres_table_privileges_keep_only_table_verbs() {
-        let privileges: Vec<String> = ["SELECT", "INDEX", "TRIGGER", "EXECUTE"].iter().map(|s| s.to_string()).collect();
+        let privileges: Vec<String> = ["SELECT", "INDEX", "TRIGGER", "EXECUTE"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(postgres_table_privileges(&privileges), "SELECT, TRIGGER");
     }
 

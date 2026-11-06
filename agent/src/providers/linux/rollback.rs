@@ -258,7 +258,10 @@ mod tests {
         // A window that has already fired is spent: confirming it afterwards
         // must say so rather than silently succeeding, or the panel would show
         // a change as kept that the host has already thrown away.
-        assert!(is_not_found(&guard.confirm(&token).await), "confirming a lapsed window succeeded");
+        assert!(
+            is_not_found(&guard.confirm(&token).await),
+            "confirming a lapsed window succeeded"
+        );
         guard.stop().await;
     }
 
@@ -284,7 +287,10 @@ mod tests {
 
         let token = guard.arm("firewall", 1, spy.revert()).await.unwrap().unwrap();
         for wrong in ["", "not-a-token", &format!("{token}0"), &token[1..]] {
-            assert!(is_not_found(&guard.confirm(wrong).await), "confirm({wrong:?}) did not report not found");
+            assert!(
+                is_not_found(&guard.confirm(wrong).await),
+                "confirm({wrong:?}) did not report not found"
+            );
         }
         // The real window is untouched by the failed attempts and still fires.
         spy.await_revert().await;
@@ -302,11 +308,21 @@ mod tests {
         let first_token = guard.arm("firewall", 1, first.revert()).await.unwrap().unwrap();
         let second_token = guard.arm("firewall", 1, second.revert()).await.unwrap().unwrap();
 
-        assert_ne!(first_token, second_token, "both applies were handed the same token");
-        assert_eq!(guard.armed_count(), 1, "more than one revert is armed for one scope");
+        assert_ne!(
+            first_token, second_token,
+            "both applies were handed the same token"
+        );
+        assert_eq!(
+            guard.armed_count(),
+            1,
+            "more than one revert is armed for one scope"
+        );
         // The superseded token is dead, so a late confirm for the first apply
         // cannot cancel the second apply's window.
-        assert!(is_not_found(&guard.confirm(&first_token).await), "the superseded token confirmed");
+        assert!(
+            is_not_found(&guard.confirm(&first_token).await),
+            "the superseded token confirmed"
+        );
 
         second.await_revert().await;
         assert_eq!(first.calls(), 0, "the superseded revert ran");
@@ -320,7 +336,11 @@ mod tests {
         let guard = RollbackGuard::new();
         let (firewall, ssh) = (RevertSpy::new(), RevertSpy::new());
 
-        let firewall_token = guard.arm("firewall", 1, firewall.revert()).await.unwrap().unwrap();
+        let firewall_token = guard
+            .arm("firewall", 1, firewall.revert())
+            .await
+            .unwrap()
+            .unwrap();
         let _ssh_token = guard.arm("ssh", 1, ssh.revert()).await.unwrap().unwrap();
         assert_eq!(guard.armed_count(), 2, "two scopes should hold two reverts");
 

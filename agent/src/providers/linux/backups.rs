@@ -18,10 +18,10 @@ use regex_lite::Regex;
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
+use super::Shared;
 use super::common::{invalid, not_found, now_rfc3339, precondition, rfc3339, split_lines};
 use super::databases::{DatabaseOps, piped_command, spawn_error};
 use super::exec::{self, ExecOptions};
-use super::Shared;
 use crate::providers::*;
 
 /// Where password references resolve to, under the agent's state dir.
@@ -98,7 +98,9 @@ impl Backups for BackupOps {
             for database in &p.databases {
                 check_engine_name(&database.engine)?;
                 check_sql_identifier(&database.name)?;
-                let destination = staging.0.join(format!("{}-{}.sql", database.engine, database.name));
+                let destination = staging
+                    .0
+                    .join(format!("{}-{}.sql", database.engine, database.name));
                 DatabaseOps(self.0.clone())
                     .dump(
                         ctx,
@@ -143,15 +145,21 @@ impl Backups for BackupOps {
             ..Default::default()
         };
 
-        self.stream(ctx, Some(stream.as_ref()), &environment, &args, |message, raw| match message.message_type.as_str() {
-            "summary" => {
-                snapshot.id = message.snapshot_id.clone();
-                snapshot.bytes = message.total_bytes_processed;
-                snapshot.file_count = message.total_files_processed;
-            }
-            "error" => tracing::warn!(message = %truncate_string(raw, 500), "restic reported an error"),
-            _ => {}
-        })
+        self.stream(
+            ctx,
+            Some(stream.as_ref()),
+            &environment,
+            &args,
+            |message, raw| match message.message_type.as_str() {
+                "summary" => {
+                    snapshot.id = message.snapshot_id.clone();
+                    snapshot.bytes = message.total_bytes_processed;
+                    snapshot.file_count = message.total_files_processed;
+                }
+                "error" => tracing::warn!(message = %truncate_string(raw, 500), "restic reported an error"),
+                _ => {}
+            },
+        )
         .await?;
 
         if snapshot.id.is_empty() {
@@ -216,7 +224,12 @@ impl Backups for BackupOps {
 
     /* ------------------------------- restore ------------------------------ */
 
-    async fn restore(&self, ctx: &Ctx, p: BackupRestoreParams, stream: StreamRef) -> PResult<BackupRestoreResult> {
+    async fn restore(
+        &self,
+        ctx: &Ctx,
+        p: BackupRestoreParams,
+        stream: StreamRef,
+    ) -> PResult<BackupRestoreResult> {
         let environment = self.environment(&p.repository, &p.password_ref)?;
         check_snapshot_id(&p.snapshot_id)?;
         std::fs::create_dir_all(&p.target).map_err(|e| wrap_fs_error(&p.target, e))?;
@@ -231,8 +244,13 @@ impl Backups for BackupOps {
             }
         }
 
-        let mut args: Vec<String> =
-            vec!["restore".into(), p.snapshot_id.clone(), "--target".into(), p.target.clone(), "--json".into()];
+        let mut args: Vec<String> = vec![
+            "restore".into(),
+            p.snapshot_id.clone(),
+            "--target".into(),
+            p.target.clone(),
+            "--json".into(),
+        ];
         for include in &p.include {
             if include.contains('\0') {
                 return Err(invalid("include patterns may not contain a null byte"));
@@ -261,7 +279,12 @@ impl Backups for BackupOps {
 
     /* -------------------------------- verify ------------------------------ */
 
-    async fn verify(&self, ctx: &Ctx, p: BackupVerifyParams, stream: StreamRef) -> PResult<BackupVerifyResult> {
+    async fn verify(
+        &self,
+        ctx: &Ctx,
+        p: BackupVerifyParams,
+        stream: StreamRef,
+    ) -> PResult<BackupVerifyResult> {
         let environment = self.environment(&p.repository, &p.password_ref)?;
         check_snapshot_id(&p.snapshot_id)?;
 
@@ -272,7 +295,10 @@ impl Backups for BackupOps {
 
         // `check` proves the repository's structure; reading a subset proves
         // the packs actually decrypt. Neither alone is a verification.
-        let check: Vec<String> = ["check", "--read-data-subset=5%"].iter().map(|s| s.to_string()).collect();
+        let check: Vec<String> = ["check", "--read-data-subset=5%"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         if let Err(err) = self.relay(ctx, stream.as_ref(), &environment, &check).await {
             result.ok = false;
             result.errors.push(err.to_string());
@@ -367,7 +393,9 @@ impl BackupOps {
         }
 
         let mut cmd = piped_command(&options)?;
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| spawn_error("restic", e))?;
         let stdout = child.stdout.take().expect("piped");
         let mut stderr = child.stderr.take().expect("piped");
@@ -436,21 +464,34 @@ impl BackupOps {
         };
         let stderr_text = stderr_task.await.unwrap_or_default();
         if !status.success() {
-            return Err(exec::exec_error("restic", exec::tail(&stderr_text, exec::EXEC_OUTPUT_LIMIT), status.code()));
+            return Err(exec::exec_error(
+                "restic",
+                exec::tail(&stderr_text, exec::EXEC_OUTPUT_LIMIT),
+                status.code(),
+            ));
         }
         Ok(captured)
     }
 
     /// Relays every line restic prints, for the verbs whose output is for the
     /// operator rather than for parsing.
-    async fn relay(&self, ctx: &Ctx, out: &dyn Stream, environment: &Environment, args: &[String]) -> PResult<String> {
+    async fn relay(
+        &self,
+        ctx: &Ctx,
+        out: &dyn Stream,
+        environment: &Environment,
+        args: &[String],
+    ) -> PResult<String> {
         self.stream(ctx, Some(out), environment, args, |_, _| {}).await
     }
 
     /// Initialises a repository the first time it is used, so a new
     /// destination does not need a manual `restic init` on the host.
     async fn ensure_repository(&self, ctx: &Ctx, environment: &Environment) -> PResult<()> {
-        if exec::run_with(ctx, restic(&["cat", "config"], environment)).await.is_ok() {
+        if exec::run_with(ctx, restic(&["cat", "config"], environment))
+            .await
+            .is_ok()
+        {
             return Ok(());
         }
         exec::run_with(ctx, restic(&["init"], environment)).await?;
@@ -458,7 +499,12 @@ impl BackupOps {
     }
 
     async fn repository_size(&self, ctx: &Ctx, environment: &Environment) -> i64 {
-        let Ok(out) = exec::run_with(ctx, restic(&["stats", "--json", "--mode", "raw-data"], environment)).await else {
+        let Ok(out) = exec::run_with(
+            ctx,
+            restic(&["stats", "--json", "--mode", "raw-data"], environment),
+        )
+        .await
+        else {
             return 0;
         };
         #[derive(Deserialize)]
@@ -466,7 +512,9 @@ impl BackupOps {
             #[serde(default)]
             total_size: i64,
         }
-        serde_json::from_str::<Stats>(&out).map(|s| s.total_size).unwrap_or(0)
+        serde_json::from_str::<Stats>(&out)
+            .map(|s| s.total_size)
+            .unwrap_or(0)
     }
 
     /// Resolves the password reference to a file the agent holds and builds
@@ -534,7 +582,9 @@ fn count_forgotten(out: &str) -> i64 {
 }
 
 fn parse_human_bytes(value: &str, unit: &str) -> i64 {
-    let Ok(amount) = value.parse::<f64>() else { return 0 };
+    let Ok(amount) = value.parse::<f64>() else {
+        return 0;
+    };
     let multiplier: f64 = match unit {
         "B" => 1.0,
         "KiB" => (1u64 << 10) as f64,
@@ -582,7 +632,10 @@ pub fn check_secret_ref(reference: &str) -> PResult<()> {
     if reference.contains(['/', '\\']) || reference.contains("..") || reference.contains('\0') {
         return Err(invalid("password_ref must be a bare name, not a path"));
     }
-    if !reference.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'_')) {
+    if !reference
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'_'))
+    {
         return Err(invalid("password_ref contains an illegal character"));
     }
     Ok(())
@@ -634,7 +687,10 @@ fn check_sql_identifier(name: &str) -> PResult<()> {
     if name.is_empty() || name.len() > 63 {
         return Err(invalid("database name must be between 1 and 63 characters"));
     }
-    if !name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-')) {
+    if !name
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+    {
         return Err(invalid("database name contains an illegal character"));
     }
     Ok(())
@@ -648,7 +704,16 @@ mod tests {
     fn a_password_ref_is_a_bare_name() {
         assert!(check_secret_ref("nightly").is_ok());
         assert!(check_secret_ref("site-a.v2_key").is_ok());
-        for hostile in ["", "../shadow", "/etc/shadow", "a/b", "a\\b", "a b", "ref\0", "$(x)"] {
+        for hostile in [
+            "",
+            "../shadow",
+            "/etc/shadow",
+            "a/b",
+            "a\\b",
+            "a b",
+            "ref\0",
+            "$(x)",
+        ] {
             assert!(check_secret_ref(hostile).is_err(), "{hostile:?} was accepted");
         }
     }
@@ -701,15 +766,19 @@ repository contains 3 packs
 
     #[test]
     fn the_restored_sentence_is_parsed_when_there_is_no_summary() {
-        let m = RESTORED_SUMMARY.captures("restored 12 files/dirs (3.5 MiB) in 1s").unwrap();
+        let m = RESTORED_SUMMARY
+            .captures("restored 12 files/dirs (3.5 MiB) in 1s")
+            .unwrap();
         assert_eq!(&m[1], "12");
         assert_eq!(parse_human_bytes(&m[2], &m[3]), (3.5 * 1048576.0) as i64);
     }
 
     #[test]
     fn restic_messages_decode_loosely() {
-        let m: ResticMessage =
-            serde_json::from_str(r#"{"message_type":"summary","snapshot_id":"abc","total_bytes_processed":10}"#).unwrap();
+        let m: ResticMessage = serde_json::from_str(
+            r#"{"message_type":"summary","snapshot_id":"abc","total_bytes_processed":10}"#,
+        )
+        .unwrap();
         assert_eq!(m.message_type, "summary");
         assert_eq!(m.snapshot_id, "abc");
         assert_eq!(m.total_bytes_processed, 10);
