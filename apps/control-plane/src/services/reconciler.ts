@@ -1,5 +1,14 @@
-import { and, eq, isNull, lt, sql } from "@kaname/db";
-import { alerts, containers, serverMetrics, servers, services, settings } from "@kaname/db/schema";
+import { and, eq, inArray, isNull, lt, sql } from "@kaname/db";
+import {
+  alerts,
+  containers,
+  jobs,
+  mailServers,
+  serverMetrics,
+  servers,
+  services,
+  settings,
+} from "@kaname/db/schema";
 import type { HealthState, MetricsSample, ThreatObservation } from "@kaname/contract";
 import type { AppContext } from "../context.js";
 
@@ -11,6 +20,9 @@ import type { AppContext } from "../context.js";
  * `servers.connection` and `servers.health`, which is what keeps them
  * from drifting apart into a single confusing dot (PLAN.md 2.6).
  * ------------------------------------------------------------------ */
+
+/** How old a mail server's last sync may be before a hello triggers another. */
+const MAIL_SYNC_STALE_MS = 10 * 60_000;
 
 export class Reconciler {
   private timer: NodeJS.Timeout | null = null;
@@ -39,6 +51,9 @@ export class Reconciler {
         events.publish("servers", "server.connected", { server_id: serverId, ...info }, serverId);
         // A reconnect is the right moment to refresh cached inventory.
         void this.syncInventory(serverId);
+        void this.reconcileMail(serverId, info.capabilities).catch((err) =>
+          log.error({ err, serverId }, "mail reconcile failed"),
+        );
       })().catch((err) => log.error({ err, serverId }, "connect reconcile failed"));
     });
 
@@ -172,6 +187,78 @@ export class Reconciler {
       default:
         this.ctx.log.debug({ serverId, topic }, "unhandled agent event topic");
     }
+  }
+
+  /* ------------------------------ mail ------------------------------- */
+
+  /**
+   * A host that advertises Yunori Mail Server is managed from here
+   * without being asked (KD-023): a record is created on the first
+   * hello and a sync queued, so a server installed by hand, or deployed
+   * before the record was forgotten, shows up on the Email pages the
+   * moment its agent connects. An existing record is re-read when its
+   * last sync is older than ten minutes; that is the staleness the
+   * "synced N ago" control is honest about (KD-012).
+   */
+  async reconcileMail(serverId: string, capabilities: readonly string[]): Promise<void> {
+    const { db, queue, events, log } = this.ctx;
+    if (!capabilities.includes("yunori")) return;
+
+    const [existing] = await db
+      .select()
+      .from(mailServers)
+      .where(eq(mailServers.serverId, serverId))
+      .limit(1);
+
+    let mailServerId: string;
+    if (!existing) {
+      const [row] = await db
+        .insert(mailServers)
+        .values({ serverId, status: "installed" })
+        .onConflictDoNothing({ target: mailServers.serverId })
+        .returning({ id: mailServers.id });
+      if (!row) return;
+      mailServerId = row.id;
+      log.info({ serverId, mailServerId }, "adopted a Yunori Mail Server the agent advertised");
+      events.publish(
+        "servers",
+        "mail_server.adopted",
+        { mail_server_id: mailServerId, server_id: serverId },
+        serverId,
+      );
+    } else {
+      // A deploy in flight owns the row; its handler syncs when it is done.
+      if (existing.status === "deploying" || existing.status === "installing") return;
+      const stale =
+        !existing.lastSyncedAt || Date.now() - existing.lastSyncedAt.getTime() > MAIL_SYNC_STALE_MS;
+      if (!stale) return;
+      mailServerId = existing.id;
+    }
+
+    // One sync at a time per host: an agent that flaps must not queue a
+    // sync per reconnect.
+    const pending = await db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.serverId, serverId),
+          eq(jobs.type, "mail.server.sync"),
+          inArray(jobs.status, ["queued", "running"]),
+        ),
+      )
+      .limit(1);
+    if (pending[0]) return;
+
+    const job = await queue.enqueue({
+      type: "mail.server.sync",
+      serverId,
+      targetType: "mail_server",
+      targetId: mailServerId,
+      params: { mail_server_id: mailServerId },
+      createdByName: "reconciler",
+    });
+    events.publish("jobs", "job.queued", job, serverId);
   }
 
   /* ---------------------------- inventory ---------------------------- */

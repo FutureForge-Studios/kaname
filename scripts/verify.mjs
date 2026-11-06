@@ -4,9 +4,9 @@
  *
  *   pnpm verify
  *
- * Runs, in order: the contract manifest emit (so the Go conformance
- * test compares against current schemas), typecheck for every TS
- * package, the Go build and tests, then every test suite. Prints a
+ * Runs, in order: the contract manifest emit (so the agent's Rust
+ * conformance test compares against current schemas), typecheck for
+ * every TS package, the Rust format/lint/build, then every test suite. Prints a
  * summary rather than a wall of output, and exits non-zero on the first
  * category that fails.
  * ------------------------------------------------------------------ */
@@ -26,13 +26,13 @@ const steps = [
   { name: "typecheck ui", cwd: "packages/ui", cmd: bin("tsc"), args: ["--noEmit"] },
   { name: "typecheck control-plane", cwd: "apps/control-plane", cmd: bin("tsc"), args: ["--noEmit"] },
   { name: "typecheck web", cwd: "apps/web", cmd: bin("tsc"), args: ["--noEmit"], optional: () => !existsSync(join(root, "apps/web/tsconfig.json")) },
-  { name: "go vet", cwd: "agent", cmd: "go", args: ["vet", "./..."] },
-  { name: "go build", cwd: "agent", cmd: "go", args: ["build", "./..."] },
-  { name: "go build (linux/amd64)", cwd: "agent", cmd: "go", args: ["build", "-o", process.platform === "win32" ? "NUL" : "/dev/null", "./cmd/kanamed"], env: { GOOS: "linux", GOARCH: "amd64", CGO_ENABLED: "0" } },
+  { name: "cargo fmt", cwd: "agent", cmd: "cargo", args: ["fmt", "--check"] },
+  { name: "cargo clippy", cwd: "agent", cmd: "cargo", args: ["clippy", "--all-targets", "--locked", "--", "-D", "warnings"] },
+  { name: "cargo build", cwd: "agent", cmd: "cargo", args: ["build", "--locked"] },
   { name: "test contract", cwd: "packages/contract", cmd: bin("vitest"), args: ["run"] },
   { name: "test ui", cwd: "packages/ui", cmd: bin("vitest"), args: ["run"] },
   { name: "test control-plane", cwd: "apps/control-plane", cmd: bin("vitest"), args: ["run"] },
-  { name: "test agent", cwd: "agent", cmd: "go", args: ["test", "./..."] },
+  { name: "test agent", cwd: "agent", cmd: "cargo", args: ["test", "--locked"] },
 ];
 
 let failed = 0;

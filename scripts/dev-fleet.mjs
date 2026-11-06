@@ -3,7 +3,7 @@
  * Development fleet.
  *
  * Brings the seeded simulated servers to life by enrolling one
- * `kanamed --simulate` process per server, through the real enrollment
+ * `kanamed run --simulate` process per server, through the real enrollment
  * API. Nothing here is a shortcut: it logs in as a real user, requests
  * real enrollment tokens, and the agents speak the real protocol. That
  * is the point — the dev loop exercises the same path production does
@@ -65,12 +65,14 @@ async function main() {
 
     if (!existsSync(join(stateDir, "cert.pem"))) {
       const token = await issueEnrollmentToken(cookie, server.id);
-      await run(["run", "./cmd/kanamed", "enroll", "--url", API, "--token", token, "--state-dir", stateDir], server.name);
+      await run(["run", "--quiet", "--", "enroll", "--url", API, "--token", token, "--state-dir", stateDir], server.name);
     }
 
+    // `cargo run` compiles once and reuses the build; the agent itself is
+    // what runs, with the simulated provider selected by --simulate.
     const child = spawn(
-      "go",
-      ["run", "./cmd/kanamed", "run", "--simulate", "--state-dir", stateDir, "--log-level", "info"],
+      "cargo",
+      ["run", "--quiet", "--", "run", "--simulate", "--state-dir", stateDir, "--log-level", "info"],
       { cwd: agentDir, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, KANAME_ENV: "development" } },
     );
     prefix(child, server.name);
@@ -138,7 +140,7 @@ async function issueEnrollmentToken(cookie, serverId) {
 
 function run(args, label) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("go", args, { cwd: agentDir, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("cargo", args, { cwd: agentDir, stdio: ["ignore", "pipe", "pipe"] });
     prefix(child, label);
     child.on("exit", (code) =>
       code === 0 ? resolvePromise() : reject(new Error(`${label}: enrollment exited with ${code}`)),

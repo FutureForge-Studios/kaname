@@ -5,6 +5,7 @@ import {
   dbEngine,
   fileKind,
   logLevel,
+  mailCheckStatus,
   processState,
   serviceActiveState,
   signalName,
@@ -224,21 +225,134 @@ export type LogRecord = z.infer<typeof logRecord>;
 
 /* --------------------------- mail / dns / db ------------------------- */
 
-export const dkimKeyInfo = z.object({
-  selector: z.string(),
-  public_key: z.string(),
-  key_bits: z.number().int(),
-  txt_value: z.string(),
-});
+/*
+ * Mail is Yunori Mail Server (KD-023). These shapes are what the agent
+ * reads back from the `yunori-mail` CLI on the host; their vocabulary is
+ * the one the Yunori console speaks, so an operator can read the same
+ * verdict in either place.
+ */
 
-export const mailQueueEntry = z.object({
-  queue_id: z.string(),
-  from: z.string(),
-  to: z.array(z.string()),
-  size: bytes,
-  arrived_at: z.string(),
-  reason: z.string().nullable(),
+/** One diagnostic result. Every status is paired with text, never colour alone. */
+export const mailCheck = z.object({
+  id: z.string(),
+  label: z.string(),
+  status: mailCheckStatus,
+  /** What was observed, in plain language. */
+  detail: z.string(),
+  /** What to do about it; null when there is nothing to do. */
+  remedy: z.string().nullable(),
+  help_url: z.string().nullable(),
 });
+export type MailCheck = z.infer<typeof mailCheck>;
+
+/** One DNS record yunori-mail expects to be published, and whether it is. */
+export const mailDnsRecord = z.object({
+  /** Stable id, e.g. "MX:example.com". */
+  id: z.string(),
+  type: z.string(),
+  /** Fully-qualified name without the trailing dot. */
+  name: z.string(),
+  /** Exact value to publish; null when the host reports the record as passing without restating it. */
+  expected: z.string().nullable(),
+  /** What public resolvers currently return. */
+  actual: z.array(z.string()),
+  status: mailCheckStatus,
+  required: z.boolean(),
+});
+export type MailDnsRecord = z.infer<typeof mailDnsRecord>;
+
+export const mailInstallStepStatus = z.enum([
+  "pending",
+  "running",
+  "done",
+  "failed",
+  "waiting",
+  "skipped",
+]);
+export type MailInstallStepStatus = z.infer<typeof mailInstallStepStatus>;
+
+export const mailInstallStep = z.object({
+  title: z.string(),
+  status: mailInstallStepStatus,
+  /** For "waiting", exactly what the operator must do. */
+  detail: z.string().nullable(),
+});
+export type MailInstallStep = z.infer<typeof mailInstallStep>;
+
+export const mailServiceState = z.object({
+  /** "stalwart" | "yunori-mail" | "unbound" */
+  name: z.string(),
+  active: z.boolean(),
+});
+export type MailServiceState = z.infer<typeof mailServiceState>;
+
+/** `mail.status`: what the host says about its Yunori Mail Server. */
+export const mailServerStatusInfo = z.object({
+  /** The yunori-mail binary is present. */
+  installed: z.boolean(),
+  version: z.string().nullable(),
+  /** Every required install step is done or skipped. */
+  install_complete: z.boolean(),
+  steps: z.array(mailInstallStep),
+  services: z.array(mailServiceState),
+  /** Names the TLS certificate covers; the first is the mail hostname. */
+  hostnames: z.array(z.string()),
+  console_url: z.string().nullable(),
+});
+export type MailServerStatusInfo = z.infer<typeof mailServerStatusInfo>;
+
+export const mailCertificateStatus = z.object({
+  /** "missing" | "self_signed" | "test" | "valid" | "expired" | "unknown" */
+  state: z.string(),
+  covers: z.array(z.string()),
+  issuer: z.string().nullable(),
+  expires_at: z.string().nullable(),
+  days_left: z.number().int().nullable(),
+  authority: z.string().nullable(),
+  renews_at: z.string().nullable(),
+  last_attempt: z.string().nullable(),
+  next_attempt: z.string().nullable(),
+});
+export type MailCertificateStatus = z.infer<typeof mailCertificateStatus>;
+
+export const mailDomainEntry = z.object({
+  name: z.string(),
+  dns_status: mailCheckStatus,
+  mailbox_count: z.number().int().nonnegative(),
+});
+export type MailDomainEntry = z.infer<typeof mailDomainEntry>;
+
+export const mailboxEntry = z.object({
+  address: z.string(),
+  display_name: z.string().nullable(),
+  /** Full alias addresses delivering to this mailbox. */
+  aliases: z.array(z.string()),
+});
+export type MailboxEntry = z.infer<typeof mailboxEntry>;
+
+export const mailAliasEntry = z.object({
+  address: z.string(),
+  /** The mailbox the alias delivers to. */
+  mailbox: z.string(),
+});
+export type MailAliasEntry = z.infer<typeof mailAliasEntry>;
+
+/** What `mail.deploy` can honestly report once `yunori-mail install` has returned. */
+export const mailDeployResult = z.object({
+  /** "ready" when every step finished, "paused" at an operator gate (DNS, PTR), "failed" otherwise. */
+  outcome: z.enum(["ready", "paused", "failed"]),
+  version: z.string(),
+  /** The step the installer paused at, when it did. */
+  paused_at: z.string().nullable(),
+  /** One-time console setup link, carrying its token in the URL fragment. Shown once, never logged. */
+  setup_url: z.string().nullable(),
+  console_url: z.string().nullable(),
+  first_mailbox: z.string().nullable(),
+  /** The first mailbox's generated password, shown once. */
+  first_mailbox_password: z.string().nullable(),
+  steps: z.array(mailInstallStep),
+});
+export type MailDeployResult = z.infer<typeof mailDeployResult>;
 
 export const resolvedRecord = z.object({
   name: z.string(),

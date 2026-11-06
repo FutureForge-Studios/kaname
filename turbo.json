@@ -19,7 +19,7 @@
         ".next/**",
         "!.next/cache/**",
         "bin/**",
-        "../../agent/internal/rpc/methods.json"
+        "../../agent/methods.json"
       ]
     },
     "dev": {
@@ -50,12 +50,11 @@
     "USERPROFILE",
     "LOCALAPPDATA",
     "APPDATA",
-    "GOPATH",
-    "GOCACHE",
-    "GOMODCACHE",
-    "GOROOT",
-    "GOFLAGS",
-    "CGO_ENABLED",
+    "CARGO_HOME",
+    "CARGO_TARGET_DIR",
+    "RUSTUP_HOME",
+    "RUSTFLAGS",
+    "KANAMED_VERSION",
     "SYSTEMROOT",
     "TEMP",
     "TMP"

@@ -54,8 +54,9 @@ export const PERMISSIONS = [
   "email.routing:read",
   "email.routing:write",
   "email.routing:delete",
-  "email.auth:read",
-  "email.auth:exec",
+  "email.servers:read",
+  "email.servers:write",
+  "email.servers:exec",
   "email.logs:read",
 
   // Databases
@@ -136,8 +137,8 @@ export const PERMISSION_GROUP_LABELS: Record<string, string> = {
   "files.manager": "File manager",
   "files.ftp": "FTP / SFTP",
   "email.mailboxes": "Mailboxes",
-  "email.routing": "Aliases & forwarders",
-  "email.auth": "DNS authentication",
+  "email.routing": "Aliases",
+  "email.servers": "Mail servers & DNS",
   "email.logs": "Mail logs",
   "databases.mysql": "MySQL / MariaDB",
   "databases.postgres": "PostgreSQL",

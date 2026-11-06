@@ -1,43 +1,24 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { z } from "zod";
-import { and, asc, desc, eq, gte, lte, ne, sql, type Database } from "@kaname/db";
+import { and, asc, desc, eq, sql, type Database } from "@kaname/db";
+import { domains, mailAliases, mailDomains, mailServers, mailboxes, servers } from "@kaname/db/schema";
 import {
-  domains,
-  mailAliases,
-  mailDomains,
-  mailForwarders,
-  mailLogEntries,
-  mailboxes,
-  servers,
-} from "@kaname/db/schema";
-import {
-  bytes,
+  adoptMailServerInput,
   createMailAliasInput,
   createMailDomainInput,
-  createMailForwarderInput,
   createMailboxInput,
+  deployMailServerInput,
   idParam,
   mailAliasListQuery,
-  mailAuthQuery,
   mailDomainListQuery,
-  mailForwarderListQuery,
-  mailLogListQuery,
+  mailLogTailQuery,
+  mailServerListQuery,
   mailboxListQuery,
-  resetMailboxPasswordInput,
-  runMailAuthCheckInput,
-  updateMailAliasInput,
-  updateMailDomainInput,
-  updateMailForwarderInput,
-  updateMailboxInput,
-  uuid,
-  type CheckStatus,
-  type Job,
   type MailAlias,
-  type MailAuthSummary,
+  type MailDeploySecrets,
+  type MailDnsReport,
   type MailDomain,
-  type MailForwarder,
-  type MailLogEntry,
-  type MailStatus,
+  type MailServer,
   type Mailbox,
   type MethodResult,
   type Permission,
@@ -47,6 +28,7 @@ import {
   helpers,
   item,
   list,
+  noContent,
   offset,
   paginate,
   parseBody,
@@ -54,8 +36,19 @@ import {
   parseQuery,
 } from "../http/plugin.js";
 import { AgentOfflineError, AgentRpcError, type StreamHandle } from "../agent/hub.js";
-import { agentUnsupported, conflict, notFound, type ApiException } from "../lib/errors.js";
-import { MailAuthChecker } from "../services/mail-auth.js";
+import {
+  ApiException,
+  agentUnsupported,
+  conflict,
+  fromAgentError,
+  notFound,
+} from "../lib/errors.js";
+import {
+  DEPLOY_SECRETS_TTL_MS,
+  RELAY_PASSWORD_TTL_MS,
+  deploySecretsKey,
+  relayPasswordKey,
+} from "../services/mail-secrets.js";
 import {
   combine,
   drained,
@@ -69,67 +62,377 @@ import {
 } from "./_shared.js";
 
 /* ------------------------------------------------------------------ *
- * Email: domains, mailboxes, aliases, forwarders, DNS authentication
- * and the transport log.
+ * Email: Yunori Mail Server on a managed host (KD-023).
  *
- * Aliases and forwarders are maps, not rows, as far as the mail stack is
- * concerned: Postfix reads a whole table. So a create, an edit and a
- * delete all end the same way — the control-plane rows change, then the
- * complete map for that domain is applied wholesale. Anything else
- * leaves the host's copy and the panel's copy able to disagree.
+ * Kaname deploys yunori-mail, reads what it says and sends it the
+ * mutations an operator asks for. The host is authoritative; the rows
+ * here are the fleet view's cache (KD-012) and a sync re-reads them.
+ *
+ * Two routes break the "mutations are jobs" rule (KD-008) on purpose:
+ * creating a mailbox and resetting its password. The host generates the
+ * credential and returns it once, and a job would have to persist it in
+ * its result to hand it on. So those two run the RPC inline (KD-024):
+ * the password crosses one HTTPS response and is never written anywhere
+ * on the control plane, not in a row, not in a job, not in the audit
+ * trail. Everything else here enqueues.
  * ------------------------------------------------------------------ */
 
 const TAIL_TIMEOUT_MS = 30 * 60_000;
 const KEEPALIVE_MS = 20_000;
+/** Inline mailbox calls: the engine answers in seconds or has a problem worth reporting. */
+const INLINE_CALL_TIMEOUT_MS = 60_000;
+
+const MAIL_SERVER_SORTABLE = {
+  server: servers.name,
+  hostname: mailServers.hostname,
+  status: mailServers.status,
+  health: mailServers.health,
+  synced_at: mailServers.lastSyncedAt,
+  created_at: mailServers.createdAt,
+} as const;
 
 const MAIL_DOMAIN_SORTABLE = {
   domain: domains.name,
   status: mailDomains.status,
-  checked_at: mailDomains.lastAuthCheckAt,
+  dns_status: mailDomains.dnsStatus,
+  checked_at: mailDomains.dnsCheckedAt,
   created_at: mailDomains.createdAt,
 } as const;
 
 const MAILBOX_SORTABLE = {
   address: mailboxes.address,
   quota_bytes: mailboxes.quotaBytes,
-  used_bytes: mailboxes.usedBytes,
-  message_count: mailboxes.messageCount,
   status: mailboxes.status,
-  last_login_at: mailboxes.lastLoginAt,
   created_at: mailboxes.createdAt,
 } as const;
 
 const ALIAS_SORTABLE = {
   address: mailAliases.address,
-  enabled: mailAliases.enabled,
+  mailbox: mailAliases.mailboxAddress,
   created_at: mailAliases.createdAt,
 } as const;
 
-const FORWARDER_SORTABLE = {
-  source: mailForwarders.source,
-  destination: mailForwarders.destination,
-  enabled: mailForwarders.enabled,
-  created_at: mailForwarders.createdAt,
-} as const;
-
-const MAIL_LOG_SORTABLE = {
-  ts: mailLogEntries.ts,
-  status: mailLogEntries.status,
-  from: mailLogEntries.fromAddress,
-  queue_id: mailLogEntries.queueId,
-  size_bytes: mailLogEntries.sizeBytes,
-} as const;
-
-const mailLogTailQuery = z.object({
-  server_id: uuid,
-  q: z.string().max(200).optional(),
-  lines: z.coerce.number().int().min(1).max(5000).default(200),
-});
-
-const setQuotaInput = z.object({ quota_bytes: bytes });
-const deleteMailboxInput = z.object({ delete_maildir: z.boolean().default(false) });
-
 export async function mailRoutes(app: FastifyInstance): Promise<void> {
+  /* ============================== servers =========================== */
+
+  app.get("/mail-servers", async (req, reply) => {
+    const q = parseQuery(req, mailServerListQuery);
+    helpers(req).authorize("email.servers:read");
+
+    const term = searchTerm(q.q);
+    const where = combine(
+      scopeFilter(req, "email.servers:read", mailServers.serverId),
+      q.status ? eq(mailServers.status, q.status) : null,
+      q.health ? eq(mailServers.health, q.health) : null,
+      term
+        ? sql`(lower(${servers.name}) like ${term} or lower(coalesce(${mailServers.hostname}, '')) like ${term} or lower(coalesce(${mailServers.primaryDomain}, '')) like ${term})`
+        : null,
+    );
+
+    const column = sortColumn(MAIL_SERVER_SORTABLE, q.sort, "server");
+    const rows = await req.ctx.db
+      .select({ mailServer: mailServers, server: servers })
+      .from(mailServers)
+      .innerJoin(servers, eq(mailServers.serverId, servers.id))
+      .where(where)
+      .orderBy(q.order === "asc" ? asc(column) : desc(column))
+      .limit(q.per_page)
+      .offset(offset(q.page, q.per_page));
+
+    const counted = await req.ctx.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(mailServers)
+      .innerJoin(servers, eq(mailServers.serverId, servers.id))
+      .where(where);
+
+    const data = await Promise.all(rows.map((row) => toMailServerApi(req.ctx.db, row)));
+    return list(reply, data, paginate(counted[0]?.total ?? 0, q.page, q.per_page));
+  });
+
+  app.get("/mail-servers/:id", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadMailServer(req, id, "email.servers:read");
+    return item(reply, await toMailServerApi(req.ctx.db, row));
+  });
+
+  app.post("/mail-servers", async (req, reply) => {
+    const body = parseBody(req, deployMailServerInput);
+    const server = await loadConnectedServer(req, body.server_id, "email.servers:write");
+    // The installer is driven through systemd units and the agent's
+    // verified download; a host without systemd cannot run it.
+    if (!req.ctx.hub.capabilities(server.id).includes("systemd")) {
+      throw agentUnsupported(server.name, "systemd");
+    }
+    await assertNoMailServer(req, server);
+
+    const domain = await loadDomainRow(req, body.domain_id);
+    const hostname = body.hostname ?? `mail.${domain.name}`;
+
+    const [row] = await req.ctx.db
+      .insert(mailServers)
+      .values({
+        serverId: server.id,
+        status: "deploying",
+        hostname,
+        primaryDomain: domain.name,
+        adminEmail: body.admin_email,
+        sendingMode: body.sending,
+        relayProvider: body.relay?.provider ?? null,
+      })
+      .returning();
+
+    // The relay password must reach the installer and must not reach the
+    // jobs table (params are persisted, backed up and shown in the
+    // drawer). It waits in memory under a reference the handler redeems;
+    // only the reference travels with the job.
+    let relay: Record<string, unknown> | undefined;
+    if (body.relay) {
+      const { password, ...rest } = body.relay;
+      relay = { ...rest };
+      if (password) {
+        const ref = randomUUID();
+        req.ctx.mailSecrets.put(relayPasswordKey(ref), password, RELAY_PASSWORD_TTL_MS);
+        relay.password_ref = ref;
+      }
+    }
+
+    const job = await enqueueServerJob(req, {
+      type: "mail.server.deploy",
+      server,
+      targetType: "mail_server",
+      targetId: row!.id,
+      targetLabel: hostname,
+      params: {
+        mail_server_id: row!.id,
+        domain_id: domain.id,
+        domain: domain.name,
+        hostname,
+        admin_email: body.admin_email,
+        first_mailbox: body.first_mailbox,
+        sending: body.sending,
+        ...(relay ? { relay } : {}),
+        ...(body.version ? { version: body.version } : {}),
+        force: body.force,
+        skip_ptr: body.skip_ptr,
+      },
+    });
+
+    req.ctx.events.publish(
+      "servers",
+      "mail_server.deploying",
+      { mail_server_id: row!.id, server_id: server.id, hostname },
+      server.id,
+    );
+    return accepted(reply, job);
+  });
+
+  app.post("/mail-servers/adopt", async (req, reply) => {
+    const body = parseBody(req, adoptMailServerInput);
+    const server = await loadConnectedServer(req, body.server_id, "email.servers:write");
+    if (!req.ctx.hub.capabilities(server.id).includes("yunori")) {
+      throw agentUnsupported(server.name, "Yunori Mail Server");
+    }
+    await assertNoMailServer(req, server);
+
+    const [row] = await req.ctx.db
+      .insert(mailServers)
+      .values({
+        serverId: server.id,
+        status: "installed",
+        installComplete: false,
+        hostname: body.hostname ?? null,
+        adminEmail: body.admin_email ?? null,
+      })
+      .returning();
+
+    await req.ctx.audit.record({
+      actor: helpers(req).actor(),
+      action: "mail_server.adopted",
+      targetType: "mail_server",
+      targetId: row!.id,
+      targetLabel: body.hostname ?? server.name,
+      serverId: server.id,
+      after: body,
+    });
+
+    const job = await enqueueServerJob(req, {
+      type: "mail.server.sync",
+      server,
+      targetType: "mail_server",
+      targetId: row!.id,
+      targetLabel: body.hostname ?? server.name,
+      params: { mail_server_id: row!.id },
+    });
+    return accepted(reply, job);
+  });
+
+  app.post("/mail-servers/:id/sync", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadMailServer(req, id, "email.servers:read");
+    const job = await enqueueServerJob(req, {
+      type: "mail.server.sync",
+      server: row.server,
+      targetType: "mail_server",
+      targetId: row.mailServer.id,
+      targetLabel: row.mailServer.hostname ?? row.server.name,
+      params: { mail_server_id: row.mailServer.id },
+    });
+    return accepted(reply, job);
+  });
+
+  app.post("/mail-servers/:id/update", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadMailServer(req, id, "email.servers:exec");
+    if (row.mailServer.status !== "installed") {
+      throw conflict(
+        `${row.mailServer.hostname ?? row.server.name} is ${row.mailServer.status}; only an installed mail server can be updated.`,
+      );
+    }
+    const job = await enqueueServerJob(req, {
+      type: "mail.server.update",
+      server: row.server,
+      targetType: "mail_server",
+      targetId: row.mailServer.id,
+      targetLabel: row.mailServer.hostname ?? row.server.name,
+      params: { mail_server_id: row.mailServer.id },
+    });
+    return accepted(reply, job);
+  });
+
+  app.post("/mail-servers/:id/certificate/renew", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadMailServer(req, id, "email.servers:exec");
+    const job = await enqueueServerJob(req, {
+      type: "mail.certificate.renew",
+      server: row.server,
+      targetType: "mail_server",
+      targetId: row.mailServer.id,
+      targetLabel: row.mailServer.hostname ?? row.server.name,
+      params: { mail_server_id: row.mailServer.id },
+    });
+    return accepted(reply, job);
+  });
+
+  // Read-only and side-effect free on the host, so it passes through
+  // (KD-008 allows exactly this), and it has to be live: the point of a
+  // preflight is what the host sees right now.
+  app.get("/mail-servers/:id/preflight", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadMailServer(req, id, "email.servers:read");
+    const server = await loadConnectedServer(req, row.server.id, "email.servers:read");
+    requireYunori(req, server);
+    const result = await callAgent(server, () =>
+      req.ctx.hub.call(
+        server.id,
+        "mail.preflight",
+        row.mailServer.hostname ? { hostname: row.mailServer.hostname } : {},
+        { timeoutMs: INLINE_CALL_TIMEOUT_MS },
+      ),
+    );
+    return item(reply, { checks: result.checks });
+  });
+
+  // What `mail.deploy` handed back: the one-time console setup link and
+  // the first mailbox's password. Held in memory for a quarter of an hour
+  // and handed out once; a second request, or one after a control-plane
+  // restart, gets the 404 below with the way to mint a new link.
+  app.get("/mail-servers/:id/deploy-secrets", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadMailServer(req, id, "email.servers:write");
+    const secrets = req.ctx.mailSecrets.take<MailDeploySecrets>(deploySecretsKey(id));
+    if (!secrets) {
+      throw new ApiException(
+        "not_found",
+        "The deploy secrets are not available (shown once, or expired).",
+        {
+          remediation: {
+            summary:
+              "Run `sudo yunori-mail setup-token` on the host for a new console setup link, and reset the first mailbox's password from its page here.",
+            actions: [{ label: "Mailboxes", href: "/email/mailboxes" }],
+          },
+        },
+      );
+    }
+    // The values themselves never enter the audit trail; that they were
+    // read, by whom, does.
+    await req.ctx.audit.record({
+      actor: helpers(req).actor(),
+      action: "mail_server.deploy_secrets_viewed",
+      targetType: "mail_server",
+      targetId: id,
+      targetLabel: row.mailServer.hostname ?? row.server.name,
+      serverId: row.server.id,
+      metadata: { first_mailbox: secrets.first_mailbox },
+    });
+    return item(reply, secrets);
+  });
+
+  // Forgets Kaname's record only. Nothing is uninstalled: the host keeps
+  // its mail server and its mail, and the record comes back on the next
+  // hello from an agent that advertises `yunori`.
+  app.delete("/mail-servers/:id", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadMailServer(req, id, "email.servers:write");
+
+    const [counts] = await req.ctx.db
+      .select({ domains: sql<number>`count(*)::int` })
+      .from(mailDomains)
+      .where(eq(mailDomains.mailServerId, id));
+    if ((counts?.domains ?? 0) > 0) {
+      throw conflict(
+        `${row.mailServer.hostname ?? row.server.name} still hosts ${counts!.domains} mail domain(s).`,
+        {
+          summary:
+            "Remove its mail domains first. Forgetting the record never uninstalls anything on the host.",
+          actions: [{ label: "Mail domains", href: `/email/domains?server_id=${row.server.id}` }],
+        },
+      );
+    }
+
+    await req.ctx.db.delete(mailServers).where(eq(mailServers.id, id));
+    await req.ctx.audit.record({
+      actor: helpers(req).actor(),
+      action: "mail_server.forgotten",
+      targetType: "mail_server",
+      targetId: id,
+      targetLabel: row.mailServer.hostname ?? row.server.name,
+      serverId: row.server.id,
+      before: {
+        hostname: row.mailServer.hostname,
+        primary_domain: row.mailServer.primaryDomain,
+        version: row.mailServer.version,
+      },
+    });
+    req.ctx.events.publish(
+      "servers",
+      "mail_server.forgotten",
+      { mail_server_id: id, server_id: row.server.id },
+      row.server.id,
+    );
+    return noContent(reply);
+  });
+
+  /* ============================== releases ========================== */
+
+  app.get("/mail-releases/latest", async (req, reply) => {
+    helpers(req).authorize("email.servers:read");
+    try {
+      return item(reply, await req.ctx.mailReleases.latest());
+    } catch (err) {
+      throw new ApiException(
+        "upstream_error",
+        err instanceof Error ? err.message : "The yunori-mail release feed could not be read.",
+        {
+          remediation: {
+            summary:
+              "Kaname reads yunori.email/server for the newest release and its checksum. Check this control plane's outbound HTTPS, or pin KANAME_YUNORI_VERSION.",
+            actions: [{ label: "Release feed", href: "https://yunori.email/server" }],
+          },
+        },
+      );
+    }
+  });
+
   /* =============================== domains ========================== */
 
   app.get("/mail-domains", async (req, reply) => {
@@ -140,11 +443,9 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     const where = combine(
       scopeFilter(req, "email.mailboxes:read", mailDomains.serverId),
       q.server_id ? eq(mailDomains.serverId, q.server_id) : null,
-      q.status ? eq(mailDomains.status, toDbStatus(q.status)) : null,
-      q.auth_status ? authStatusFilter(q.auth_status) : null,
-      term
-        ? sql`(lower(${domains.name}) like ${term} or lower(${mailDomains.mailHostname}) like ${term})`
-        : null,
+      q.status ? eq(mailDomains.status, q.status) : null,
+      q.dns_status ? eq(mailDomains.dnsStatus, q.dns_status) : null,
+      term ? sql`lower(${domains.name}) like ${term}` : null,
     );
 
     const column = sortColumn(MAIL_DOMAIN_SORTABLE, q.sort, "domain");
@@ -158,215 +459,137 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
       .limit(q.per_page)
       .offset(offset(q.page, q.per_page));
 
-    const counted1 = await req.ctx.db
+    const counted = await req.ctx.db
       .select({ total: sql<number>`count(*)::int` })
       .from(mailDomains)
       .innerJoin(domains, eq(mailDomains.domainId, domains.id))
       .innerJoin(servers, eq(mailDomains.serverId, servers.id))
       .where(where);
-    const total = counted1[0]?.total ?? 0;
 
     const data = await Promise.all(rows.map((row) => toMailDomainApi(req.ctx.db, row)));
-    return list(reply, data, paginate(total, q.page, q.per_page));
+    return list(reply, data, paginate(counted[0]?.total ?? 0, q.page, q.per_page));
   });
 
   app.get("/mail-domains/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
-    const ctx = await loadMailDomain(req, id, "email.mailboxes:read");
-    return item(reply, await toMailDomainApi(req.ctx.db, ctx));
+    const row = await loadMailDomain(req, id, "email.mailboxes:read");
+    return item(reply, await toMailDomainApi(req.ctx.db, row));
   });
 
   app.post("/mail-domains", async (req, reply) => {
     const body = parseBody(req, createMailDomainInput);
     const server = await loadServer(req, body.server_id, "email.mailboxes:write");
-
-    if (
-      req.ctx.hub.isConnected(server.id) &&
-      !req.ctx.hub.capabilities(server.id).includes("mail")
-    ) {
-      throw agentUnsupported(server.name, "a mail stack");
-    }
-
-    const domainRows = await req.ctx.db
-      .select()
-      .from(domains)
-      .where(eq(domains.id, body.domain_id))
-      .limit(1);
-    const domain = domainRows[0];
-    if (!domain) throw notFound("Domain", body.domain_id);
+    const mailServer = await installedMailServerFor(req, server);
+    const domain = await loadDomainRow(req, body.domain_id);
 
     const existing = await req.ctx.db
-      .select({ id: mailDomains.id })
+      .select({ id: mailDomains.id, serverId: mailDomains.serverId })
       .from(mailDomains)
-      .where(eq(mailDomains.domainId, body.domain_id))
+      .where(eq(mailDomains.domainId, domain.id))
       .limit(1);
     if (existing[0]) {
-      throw conflict(`${domain.name} is already hosting mail.`, {
-        summary:
-          "A domain's mail lives on exactly one host; moving it is a migration, not an edit.",
-        actions: [
-          { label: "Open mail domain", href: `/email/mailboxes?mail_domain_id=${existing[0].id}` },
-        ],
+      throw conflict(`${domain.name} already hosts mail.`, {
+        summary: "A domain receives mail on one server. Open the existing mail domain instead.",
+        actions: [{ label: "Open mail domain", href: `/email/domains?id=${existing[0].id}` }],
       });
     }
-
-    // The HELO/MX name is deliberately not the apex: it needs its own A
-    // record and its own SPF, and it must stay DNS-only when the apex is
-    // proxied. `mail.<domain>` is the convention the checks assume.
-    const mailHostname = `mail.${domain.name}`;
 
     const [row] = await req.ctx.db
       .insert(mailDomains)
       .values({
-        domainId: body.domain_id,
+        domainId: domain.id,
         serverId: server.id,
-        mailHostname,
-        dkimSelector: body.dkim_selector,
-        catchallTarget: body.catchall_target ?? null,
+        mailServerId: mailServer.id,
+        isPrimary: false,
         status: "provisioning",
       })
       .returning();
-
     await req.ctx.db
       .update(domains)
       .set({ hasMail: true, updatedAt: new Date() })
-      .where(eq(domains.id, body.domain_id));
+      .where(eq(domains.id, domain.id));
 
     const job = await enqueueServerJob(req, {
-      type: "mail.domain.provision",
+      type: "mail.domain.add",
       server,
       targetType: "mail_domain",
       targetId: row!.id,
       targetLabel: domain.name,
-      params: {
-        mail_domain_id: row!.id,
-        domain: domain.name,
-        mail_hostname: mailHostname,
-        dkim_selector: body.dkim_selector,
-        catchall_target: body.catchall_target ?? null,
-      },
-    });
-
-    req.ctx.events.publish(
-      "servers",
-      "mail_domain.created",
-      { server_id: server.id, mail_domain_id: row!.id, domain: domain.name },
-      server.id,
-    );
-    return accepted(reply, job);
-  });
-
-  app.patch("/mail-domains/:id", async (req, reply) => {
-    const { id } = parseParams(req, idParam);
-    const body = parseBody(req, updateMailDomainInput);
-    const ctx = await loadMailDomain(req, id, "email.mailboxes:write");
-    const h = helpers(req);
-
-    const [row] = await req.ctx.db
-      .update(mailDomains)
-      .set({
-        ...(body.dkim_selector !== undefined ? { dkimSelector: body.dkim_selector } : {}),
-        ...(body.catchall_target !== undefined ? { catchallTarget: body.catchall_target } : {}),
-        ...(body.status !== undefined ? { status: toDbStatus(body.status) } : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(mailDomains.id, id))
-      .returning();
-
-    await req.ctx.audit.record({
-      actor: h.actor(),
-      action: "mail.domain.updated",
-      targetType: "mail_domain",
-      targetId: id,
-      targetLabel: ctx.domainName,
-      serverId: ctx.server.id,
-      before: {
-        dkim_selector: ctx.mailDomain.dkimSelector,
-        catchall_target: ctx.mailDomain.catchallTarget,
-        status: ctx.mailDomain.status,
-      },
-      after: body,
-    });
-
-    const job = await enqueueServerJob(req, {
-      type: "mail.domain.provision",
-      server: ctx.server,
-      targetType: "mail_domain",
-      targetId: id,
-      targetLabel: ctx.domainName,
-      params: {
-        mail_domain_id: id,
-        domain: ctx.domainName,
-        mail_hostname: row!.mailHostname,
-        dkim_selector: row!.dkimSelector,
-        catchall_target: row!.catchallTarget,
-      },
+      params: { mail_domain_id: row!.id, name: domain.name },
     });
     return accepted(reply, job);
   });
 
   app.delete("/mail-domains/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
-    const ctx = await loadMailDomain(req, id, "email.mailboxes:delete");
-    const h = helpers(req);
+    const row = await loadMailDomain(req, id, "email.mailboxes:delete");
 
-    const [counts] = await req.ctx.db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(mailboxes)
-      .where(eq(mailboxes.mailDomainId, id));
-    if ((counts?.n ?? 0) > 0) {
-      throw conflict(`${ctx.domainName} still has ${counts!.n} mailbox(es).`, {
+    if (row.mailDomain.isPrimary) {
+      throw conflict(`${row.domainName} is the domain this mail server was installed with.`, {
         summary:
-          "Removing the domain would leave those mailboxes on the host with nothing in Kaname pointing at them, and their mail undeliverable rather than deleted. Delete or move them first.",
-        actions: [{ label: "Open mailboxes", href: `/email/mailboxes?mail_domain_id=${id}` }],
+          "The primary domain goes with the server. Forget or uninstall the mail server instead.",
+        actions: [{ label: "Mail server", href: `/email/health?server_id=${row.server.id}` }],
       });
     }
 
-    // Two jobs under one correlation id: the maps are separate files on
-    // the host, and clearing them is what actually stops routing.
-    const correlationId = crypto.randomUUID();
-    const aliasJob = await enqueueServerJob(req, {
-      type: "mail.alias.apply",
-      server: ctx.server,
-      targetType: "mail_domain",
-      targetId: id,
-      targetLabel: ctx.domainName,
-      params: { domain: ctx.domainName, aliases: [] },
-      correlationId,
-    });
-    await enqueueServerJob(req, {
-      type: "mail.forwarder.apply",
-      server: ctx.server,
-      targetType: "mail_domain",
-      targetId: id,
-      targetLabel: ctx.domainName,
-      params: { domain: ctx.domainName, forwarders: [] },
-      correlationId,
-    });
+    const [counts] = await req.ctx.db
+      .select({
+        mailboxes: sql<number>`(select count(*) from mailboxes where mail_domain_id = ${id})::int`,
+        aliases: sql<number>`(select count(*) from mail_aliases where mail_domain_id = ${id})::int`,
+      })
+      .from(sql`(select 1) as one`);
+    if ((counts?.mailboxes ?? 0) > 0 || (counts?.aliases ?? 0) > 0) {
+      throw conflict(
+        `${row.domainName} still has ${counts!.mailboxes} mailbox(es) and ${counts!.aliases} alias(es).`,
+        {
+          summary: "Delete the mailboxes and aliases first; their mail goes with them.",
+          actions: [{ label: "Mailboxes", href: `/email/mailboxes?domain=${row.domainName}` }],
+        },
+      );
+    }
 
-    await req.ctx.db.delete(mailDomains).where(eq(mailDomains.id, id));
     await req.ctx.db
-      .update(domains)
-      .set({ hasMail: false, updatedAt: new Date() })
-      .where(eq(domains.id, ctx.mailDomain.domainId));
+      .update(mailDomains)
+      .set({ status: "removing", updatedAt: new Date() })
+      .where(eq(mailDomains.id, id));
 
-    await req.ctx.audit.record({
-      actor: h.actor(),
-      action: "mail.domain.deleted",
+    const job = await enqueueServerJob(req, {
+      type: "mail.domain.remove",
+      server: row.server,
       targetType: "mail_domain",
       targetId: id,
-      targetLabel: ctx.domainName,
-      serverId: ctx.server.id,
-      before: { domain: ctx.domainName, mail_hostname: ctx.mailDomain.mailHostname },
+      targetLabel: row.domainName,
+      params: { mail_domain_id: id, domain_id: row.mailDomain.domainId, name: row.domainName },
     });
-    req.ctx.events.publish(
-      "servers",
-      "mail_domain.deleted",
-      { server_id: ctx.server.id, mail_domain_id: id, domain: ctx.domainName },
-      ctx.server.id,
-    );
+    return accepted(reply, job);
+  });
 
-    return accepted(reply, aliasJob);
+  app.get("/mail-domains/:id/dns", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadMailDomain(req, id, "email.mailboxes:read");
+    const report: MailDnsReport = {
+      mail_domain_id: id,
+      domain_name: row.domainName,
+      overall: row.mailDomain.dnsStatus,
+      records: row.mailDomain.dnsRecords,
+      zone_file: row.mailDomain.zoneFile,
+      checked_at: row.mailDomain.dnsCheckedAt?.toISOString() ?? null,
+    };
+    return item(reply, report);
+  });
+
+  app.post("/mail-domains/:id/dns/check", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadMailDomain(req, id, "email.servers:exec");
+    const job = await enqueueServerJob(req, {
+      type: "mail.domain.dns_check",
+      server: row.server,
+      targetType: "mail_domain",
+      targetId: id,
+      targetLabel: row.domainName,
+      params: { mail_domain_id: id, name: row.domainName },
+    });
+    return accepted(reply, job);
   });
 
   /* ============================== mailboxes ========================= */
@@ -379,12 +602,9 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     const where = combine(
       scopeFilter(req, "email.mailboxes:read", mailboxes.serverId),
       q.mail_domain_id ? eq(mailboxes.mailDomainId, q.mail_domain_id) : null,
-      q.domain ? eq(domains.name, q.domain) : null,
+      q.domain ? eq(domains.name, q.domain.toLowerCase()) : null,
       q.server_id ? eq(mailboxes.serverId, q.server_id) : null,
       q.status ? eq(mailboxes.status, q.status) : null,
-      q.over_quota
-        ? sql`${mailboxes.quotaBytes} > 0 and ${mailboxes.usedBytes} >= ${mailboxes.quotaBytes}`
-        : null,
       term
         ? sql`(lower(${mailboxes.address}) like ${term} or lower(coalesce(${mailboxes.displayName}, '')) like ${term})`
         : null,
@@ -392,7 +612,12 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
 
     const column = sortColumn(MAILBOX_SORTABLE, q.sort, "address");
     const rows = await req.ctx.db
-      .select({ mailbox: mailboxes, domainName: domains.name, server: servers })
+      .select({
+        mailbox: mailboxes,
+        domainName: domains.name,
+        server: servers,
+        aliases: aliasesOf(mailboxes.id),
+      })
       .from(mailboxes)
       .innerJoin(mailDomains, eq(mailboxes.mailDomainId, mailDomains.id))
       .innerJoin(domains, eq(mailDomains.domainId, domains.id))
@@ -402,16 +627,15 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
       .limit(q.per_page)
       .offset(offset(q.page, q.per_page));
 
-    const counted2 = await req.ctx.db
+    const counted = await req.ctx.db
       .select({ total: sql<number>`count(*)::int` })
       .from(mailboxes)
       .innerJoin(mailDomains, eq(mailboxes.mailDomainId, mailDomains.id))
       .innerJoin(domains, eq(mailDomains.domainId, domains.id))
       .innerJoin(servers, eq(mailboxes.serverId, servers.id))
       .where(where);
-    const total = counted2[0]?.total ?? 0;
 
-    return list(reply, rows.map(toMailboxApi), paginate(total, q.page, q.per_page));
+    return list(reply, rows.map(toMailboxApi), paginate(counted[0]?.total ?? 0, q.page, q.per_page));
   });
 
   app.get("/mailboxes/:id", async (req, reply) => {
@@ -420,246 +644,117 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     return item(reply, toMailboxApi(row));
   });
 
+  // Synchronous on purpose (KD-024, see the module comment): the host
+  // generates the password and returns it once, and this response is the
+  // only place it ever exists on this side.
   app.post("/mailboxes", async (req, reply) => {
     const body = parseBody(req, createMailboxInput);
-    const ctx = await loadMailDomain(req, body.mail_domain_id, "email.mailboxes:write");
-
-    // local_part is lower-cased by the contract; the domain name is
-    // compared case-insensitively too because the host does.
-    const address = `${body.local_part}@${ctx.domainName.toLowerCase()}`;
-    const existing = await req.ctx.db
-      .select({ id: mailboxes.id, status: mailboxes.status })
-      .from(mailboxes)
-      .where(sql`lower(${mailboxes.address}) = ${address}`)
-      .limit(1);
-    if (existing[0]) {
-      throw conflict(`${address} already exists.`, {
-        summary:
-          existing[0].status === "active"
-            ? "Reset its password instead of creating a second mailbox at the same address."
-            : "This mailbox never finished provisioning on the host. Delete it, then create it again.",
-        actions: [{ label: "Open mailbox", href: `/email/mailboxes/${existing[0].id}` }],
-      });
+    const domain = await loadMailDomain(req, body.mail_domain_id, "email.mailboxes:write");
+    const server = await loadConnectedServer(req, domain.server.id, "email.mailboxes:write");
+    requireYunori(req, server);
+    if (domain.mailDomain.status !== "active") {
+      throw conflict(
+        `${domain.domainName} is ${domain.mailDomain.status}; mailboxes can be added once it is active.`,
+      );
     }
 
-    if (ctx.mailDomain.quotaTotal > 0 && body.quota_bytes > 0) {
-      const [allocated] = await req.ctx.db
-        .select({ total: sql<number>`coalesce(sum(${mailboxes.quotaBytes}), 0)::bigint` })
-        .from(mailboxes)
-        .where(eq(mailboxes.mailDomainId, ctx.mailDomain.id));
-      const used = Number(allocated?.total ?? 0);
-      if (used + body.quota_bytes > ctx.mailDomain.quotaTotal) {
-        throw conflict(
-          `${ctx.domainName} has ${formatBytes(ctx.mailDomain.quotaTotal - used)} of quota left, and this mailbox asks for ${formatBytes(body.quota_bytes)}.`,
-          {
-            summary:
-              "Lower this mailbox's quota, raise the domain's, or reclaim quota from a mailbox that is not using it.",
-            actions: [
-              {
-                label: "Open mail domain",
-                href: `/email/mailboxes?mail_domain_id=${ctx.mailDomain.id}`,
-              },
-            ],
-          },
-        );
-      }
-    }
+    const address = `${body.local_part}@${domain.domainName}`;
+    await assertAddressFree(req, address);
+
+    const result = await callAgent(server, () =>
+      req.ctx.hub.call(
+        server.id,
+        "mail.mailbox.add",
+        {
+          address,
+          ...(body.display_name ? { display_name: body.display_name } : {}),
+          ...(body.quota_mb > 0 ? { quota_mb: body.quota_mb } : {}),
+        },
+        { timeoutMs: INLINE_CALL_TIMEOUT_MS },
+      ),
+    );
 
     const [row] = await req.ctx.db
       .insert(mailboxes)
       .values({
-        mailDomainId: ctx.mailDomain.id,
-        serverId: ctx.server.id,
+        mailDomainId: domain.mailDomain.id,
+        serverId: server.id,
         address,
         localPart: body.local_part,
         displayName: body.display_name ?? null,
-        quotaBytes: body.quota_bytes,
-        status: "provisioning",
+        quotaBytes: body.quota_mb * 1024 * 1024,
+        status: "active",
+        lastSyncedAt: new Date(),
       })
-      .returning();
-
-    const job = await enqueueServerJob(req, {
-      type: "mail.mailbox.create",
-      server: ctx.server,
-      targetType: "mailbox",
-      targetId: row!.id,
-      targetLabel: address,
-      params: {
-        mailbox_id: row!.id,
-        address,
-        password: body.password,
-        quota_bytes: body.quota_bytes,
-        ...(body.display_name ? { display_name: body.display_name } : {}),
-      },
-    });
-
-    req.ctx.events.publish(
-      "servers",
-      "mailbox.created",
-      { server_id: ctx.server.id, mailbox_id: row!.id, address },
-      ctx.server.id,
-    );
-    return accepted(reply, job);
-  });
-
-  app.patch("/mailboxes/:id", async (req, reply) => {
-    const { id } = parseParams(req, idParam);
-    const body = parseBody(req, updateMailboxInput);
-    const before = await loadMailbox(req, id, "email.mailboxes:write");
-    const h = helpers(req);
-
-    const [row] = await req.ctx.db
-      .update(mailboxes)
-      .set({
-        ...(body.display_name !== undefined ? { displayName: body.display_name } : {}),
-        ...(body.quota_bytes !== undefined ? { quotaBytes: body.quota_bytes } : {}),
-        ...(body.status !== undefined ? { status: body.status } : {}),
-        updatedAt: new Date(),
-      })
-      .where(eq(mailboxes.id, id))
       .returning();
 
     await req.ctx.audit.record({
-      actor: h.actor(),
-      action: "mail.mailbox.updated",
+      actor: helpers(req).actor(),
+      action: "mailbox.created",
       targetType: "mailbox",
-      targetId: id,
-      targetLabel: before.mailbox.address,
-      serverId: before.server.id,
-      before: {
-        display_name: before.mailbox.displayName,
-        quota_bytes: before.mailbox.quotaBytes,
-        status: before.mailbox.status,
-      },
-      after: body,
+      targetId: row!.id,
+      targetLabel: address,
+      serverId: server.id,
+      after: { address, display_name: body.display_name ?? null, quota_mb: body.quota_mb },
     });
+    req.ctx.events.publish(
+      "servers",
+      "mailbox.created",
+      { mailbox_id: row!.id, address, server_id: server.id },
+      server.id,
+    );
 
-    const job = await enqueueServerJob(req, {
-      type: "mail.mailbox.update",
-      server: before.server,
-      targetType: "mailbox",
-      targetId: id,
-      targetLabel: before.mailbox.address,
-      params: {
-        address: before.mailbox.address,
-        quota_bytes: row!.quotaBytes,
-        active: row!.status === "active",
-        ...(row!.displayName ? { display_name: row!.displayName } : {}),
-      },
+    const mailbox = toMailboxApi({
+      mailbox: row!,
+      domainName: domain.domainName,
+      server,
+      aliases: [],
     });
-    return accepted(reply, job);
-  });
-
-  app.delete("/mailboxes/:id", async (req, reply) => {
-    const { id } = parseParams(req, idParam);
-    const body = parseBody(req, deleteMailboxInput);
-    const row = await loadMailbox(req, id, "email.mailboxes:delete");
-
-    // A row whose create never landed has no account on the host, so
-    // with the agent away there is nothing to queue against: waiting for
-    // it to come back would only be a wait to delete a record. Once the
-    // agent is present the job runs and tolerates "not found" itself.
-    const neverProvisioned =
-      row.mailbox.status === "provisioning" || row.mailbox.status === "error";
-    if (neverProvisioned && !req.ctx.hub.isConnected(row.server.id)) {
-      await req.ctx.db.delete(mailboxes).where(eq(mailboxes.id, id));
-      await req.ctx.audit.record({
-        actor: helpers(req).actor(),
-        action: "mail.mailbox.deleted",
-        targetType: "mailbox",
-        targetId: id,
-        targetLabel: row.mailbox.address,
-        serverId: row.server.id,
-        before: { address: row.mailbox.address, status: row.mailbox.status },
-        metadata: { reason: "never provisioned; removed without a job" },
-      });
-      req.ctx.events.publish(
-        "servers",
-        "mailbox.deleted",
-        { server_id: row.server.id, mailbox_id: id, address: row.mailbox.address },
-        row.server.id,
-      );
-      return item(reply, { job: null, removed: true });
-    }
-
-    const job = await enqueueServerJob(req, {
-      type: "mail.mailbox.delete",
-      server: row.server,
-      targetType: "mailbox",
-      targetId: id,
-      targetLabel: row.mailbox.address,
-      params: {
-        mailbox_id: id,
-        address: row.mailbox.address,
-        delete_maildir: body.delete_maildir,
-      },
-    });
-    return accepted(reply, job);
+    return item(reply, { mailbox, password: result.password }, 201);
   });
 
   app.post("/mailboxes/:id/reset-password", async (req, reply) => {
     const { id } = parseParams(req, idParam);
-    const body = parseBody(req, resetMailboxPasswordInput);
     const row = await loadMailbox(req, id, "email.mailboxes:write");
+    const server = await loadConnectedServer(req, row.server.id, "email.mailboxes:write");
+    requireYunori(req, server);
 
-    const job = await enqueueServerJob(req, {
-      type: "mail.mailbox.reset_password",
-      server: row.server,
+    const result = await callAgent(server, () =>
+      req.ctx.hub.call(
+        server.id,
+        "mail.mailbox.passwd",
+        { address: row.mailbox.address },
+        { timeoutMs: INLINE_CALL_TIMEOUT_MS },
+      ),
+    );
+
+    await req.ctx.audit.record({
+      actor: helpers(req).actor(),
+      action: "mailbox.password_reset",
       targetType: "mailbox",
       targetId: id,
       targetLabel: row.mailbox.address,
-      // revoke_sessions rides along with the operator's intent even
-      // though the mail RPC only needs the credential: a password change
-      // on its own does not close an IMAP session that is already open.
-      params: {
-        address: row.mailbox.address,
-        password: body.password,
-        revoke_sessions: body.revoke_sessions,
-      },
+      serverId: server.id,
     });
-    return accepted(reply, job);
+    return item(reply, { address: row.mailbox.address, password: result.password });
   });
 
-  app.post("/mailboxes/:id/quota", async (req, reply) => {
+  app.delete("/mailboxes/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
-    const body = parseBody(req, setQuotaInput);
-    const row = await loadMailbox(req, id, "email.mailboxes:write");
-    const h = helpers(req);
-
-    if (body.quota_bytes > 0 && body.quota_bytes < row.mailbox.usedBytes) {
-      throw conflict(
-        `${row.mailbox.address} already stores ${formatBytes(row.mailbox.usedBytes)}, which is more than the ${formatBytes(body.quota_bytes)} quota you asked for.`,
-        {
-          summary:
-            "The mailbox would be over quota the moment the change lands, so it would stop accepting mail immediately. Set a quota above current usage, or have the user clear space first.",
-          actions: [{ label: "Open mailbox", href: `/email/mailboxes/${id}` }],
-        },
-      );
-    }
+    const row = await loadMailbox(req, id, "email.mailboxes:delete");
 
     await req.ctx.db
       .update(mailboxes)
-      .set({ quotaBytes: body.quota_bytes, updatedAt: new Date() })
+      .set({ status: "removing", updatedAt: new Date() })
       .where(eq(mailboxes.id, id));
 
-    await req.ctx.audit.record({
-      actor: h.actor(),
-      action: "mail.mailbox.quota_changed",
-      targetType: "mailbox",
-      targetId: id,
-      targetLabel: row.mailbox.address,
-      serverId: row.server.id,
-      before: { quota_bytes: row.mailbox.quotaBytes },
-      after: { quota_bytes: body.quota_bytes },
-    });
-
     const job = await enqueueServerJob(req, {
-      type: "mail.mailbox.update",
+      type: "mail.mailbox.remove",
       server: row.server,
       targetType: "mailbox",
       targetId: id,
       targetLabel: row.mailbox.address,
-      params: { address: row.mailbox.address, quota_bytes: body.quota_bytes },
+      params: { mailbox_id: id, address: row.mailbox.address },
     });
     return accepted(reply, job);
   });
@@ -672,13 +767,13 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
 
     const term = searchTerm(q.q);
     const where = combine(
-      scopeFilter(req, "email.routing:read", mailDomains.serverId),
+      scopeFilter(req, "email.routing:read", mailAliases.serverId),
       q.mail_domain_id ? eq(mailAliases.mailDomainId, q.mail_domain_id) : null,
-      q.domain ? eq(domains.name, q.domain) : null,
-      q.server_id ? eq(mailDomains.serverId, q.server_id) : null,
-      q.enabled !== undefined ? eq(mailAliases.enabled, q.enabled) : null,
+      q.domain ? eq(domains.name, q.domain.toLowerCase()) : null,
+      q.server_id ? eq(mailAliases.serverId, q.server_id) : null,
+      q.mailbox_id ? eq(mailAliases.mailboxId, q.mailbox_id) : null,
       term
-        ? sql`(lower(${mailAliases.address}) like ${term} or exists (select 1 from unnest(${mailAliases.destinations}) d where lower(d) like ${term}))`
+        ? sql`(lower(${mailAliases.address}) like ${term} or lower(${mailAliases.mailboxAddress}) like ${term})`
         : null,
     );
 
@@ -688,22 +783,21 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
       .from(mailAliases)
       .innerJoin(mailDomains, eq(mailAliases.mailDomainId, mailDomains.id))
       .innerJoin(domains, eq(mailDomains.domainId, domains.id))
-      .innerJoin(servers, eq(mailDomains.serverId, servers.id))
+      .innerJoin(servers, eq(mailAliases.serverId, servers.id))
       .where(where)
       .orderBy(q.order === "asc" ? asc(column) : desc(column))
       .limit(q.per_page)
       .offset(offset(q.page, q.per_page));
 
-    const counted3 = await req.ctx.db
+    const counted = await req.ctx.db
       .select({ total: sql<number>`count(*)::int` })
       .from(mailAliases)
       .innerJoin(mailDomains, eq(mailAliases.mailDomainId, mailDomains.id))
       .innerJoin(domains, eq(mailDomains.domainId, domains.id))
-      .innerJoin(servers, eq(mailDomains.serverId, servers.id))
+      .innerJoin(servers, eq(mailAliases.serverId, servers.id))
       .where(where);
-    const total = counted3[0]?.total ?? 0;
 
-    return list(reply, rows.map(toAliasApi), paginate(total, q.page, q.per_page));
+    return list(reply, rows.map(toAliasApi), paginate(counted[0]?.total ?? 0, q.page, q.per_page));
   });
 
   app.get("/mail-aliases/:id", async (req, reply) => {
@@ -714,317 +808,72 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/mail-aliases", async (req, reply) => {
     const body = parseBody(req, createMailAliasInput);
-    const ctx = await loadMailDomain(req, body.mail_domain_id, "email.routing:write");
-    await assertAliasAddress(req, ctx, body.address);
+    const domain = await loadMailDomain(req, body.mail_domain_id, "email.routing:write");
 
-    const [row] = await guardUnique(
-      () =>
-        req.ctx.db
-          .insert(mailAliases)
-          .values({
-            mailDomainId: ctx.mailDomain.id,
-            address: body.address,
-            destinations: body.destinations,
-            enabled: body.enabled,
-          })
-          .returning(),
-      () => aliasTaken(body.address),
-    );
-
-    await recordRoutingChange(req, ctx, "mail.alias.created", row!.id, body.address, null, body);
-    return accepted(reply, await applyAliases(req, ctx));
-  });
-
-  app.patch("/mail-aliases/:id", async (req, reply) => {
-    const { id } = parseParams(req, idParam);
-    const body = parseBody(req, updateMailAliasInput);
-    const before = await loadAlias(req, id, "email.routing:write");
-    const ctx = await loadMailDomain(req, before.alias.mailDomainId, "email.routing:write");
-
-    // The same rules as a create, on what the row will say afterwards:
-    // an edit is how an alias would otherwise leave its domain.
-    await assertAliasAddress(req, ctx, body.address ?? before.alias.address, id);
-
-    await guardUnique(
-      () =>
-        req.ctx.db
-          .update(mailAliases)
-          .set({
-            ...(body.address !== undefined ? { address: body.address } : {}),
-            ...(body.destinations !== undefined ? { destinations: body.destinations } : {}),
-            ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-            updatedAt: new Date(),
-          })
-          .where(eq(mailAliases.id, id)),
-      () => aliasTaken(body.address ?? before.alias.address),
-    );
-
-    await recordRoutingChange(
-      req,
-      ctx,
-      "mail.alias.updated",
-      id,
-      before.alias.address,
-      {
-        address: before.alias.address,
-        destinations: before.alias.destinations,
-        enabled: before.alias.enabled,
-      },
-      body,
-    );
-    return accepted(reply, await applyAliases(req, ctx));
-  });
-
-  app.delete("/mail-aliases/:id", async (req, reply) => {
-    const { id } = parseParams(req, idParam);
-    const before = await loadAlias(req, id, "email.routing:delete");
-    const ctx = await loadMailDomain(req, before.alias.mailDomainId, "email.routing:delete");
-
-    await req.ctx.db.delete(mailAliases).where(eq(mailAliases.id, id));
-    await recordRoutingChange(
-      req,
-      ctx,
-      "mail.alias.deleted",
-      id,
-      before.alias.address,
-      { address: before.alias.address, destinations: before.alias.destinations },
-      null,
-    );
-    return accepted(reply, await applyAliases(req, ctx));
-  });
-
-  /* ============================= forwarders ========================= */
-
-  app.get("/mail-forwarders", async (req, reply) => {
-    const q = parseQuery(req, mailForwarderListQuery);
-    helpers(req).authorize("email.routing:read");
-
-    const term = searchTerm(q.q);
-    const where = combine(
-      scopeFilter(req, "email.routing:read", mailDomains.serverId),
-      q.mail_domain_id ? eq(mailForwarders.mailDomainId, q.mail_domain_id) : null,
-      q.domain ? eq(domains.name, q.domain) : null,
-      q.server_id ? eq(mailDomains.serverId, q.server_id) : null,
-      q.enabled !== undefined ? eq(mailForwarders.enabled, q.enabled) : null,
-      term
-        ? sql`(lower(${mailForwarders.source}) like ${term} or lower(${mailForwarders.destination}) like ${term})`
-        : null,
-    );
-
-    const column = sortColumn(FORWARDER_SORTABLE, q.sort, "source");
-    const rows = await req.ctx.db
-      .select({ forwarder: mailForwarders, domainName: domains.name, server: servers })
-      .from(mailForwarders)
-      .innerJoin(mailDomains, eq(mailForwarders.mailDomainId, mailDomains.id))
-      .innerJoin(domains, eq(mailDomains.domainId, domains.id))
-      .innerJoin(servers, eq(mailDomains.serverId, servers.id))
-      .where(where)
-      .orderBy(q.order === "asc" ? asc(column) : desc(column))
-      .limit(q.per_page)
-      .offset(offset(q.page, q.per_page));
-
-    const counted4 = await req.ctx.db
-      .select({ total: sql<number>`count(*)::int` })
-      .from(mailForwarders)
-      .innerJoin(mailDomains, eq(mailForwarders.mailDomainId, mailDomains.id))
-      .innerJoin(domains, eq(mailDomains.domainId, domains.id))
-      .innerJoin(servers, eq(mailDomains.serverId, servers.id))
-      .where(where);
-    const total = counted4[0]?.total ?? 0;
-
-    return list(reply, rows.map(toForwarderApi), paginate(total, q.page, q.per_page));
-  });
-
-  app.get("/mail-forwarders/:id", async (req, reply) => {
-    const { id } = parseParams(req, idParam);
-    const row = await loadForwarder(req, id, "email.routing:read");
-    return item(reply, toForwarderApi(row));
-  });
-
-  app.post("/mail-forwarders", async (req, reply) => {
-    const body = parseBody(req, createMailForwarderInput);
-    const ctx = await loadMailDomain(req, body.mail_domain_id, "email.routing:write");
-    await assertForwarder(req, ctx, body.source, body.destination);
-
-    const [row] = await guardUnique(
-      () =>
-        req.ctx.db
-          .insert(mailForwarders)
-          .values({
-            mailDomainId: ctx.mailDomain.id,
-            source: body.source,
-            destination: body.destination,
-            keepCopy: body.keep_copy,
-            enabled: body.enabled,
-          })
-          .returning(),
-      () => forwarderTaken(body.source, body.destination),
-    );
-
-    await recordRoutingChange(req, ctx, "mail.forwarder.created", row!.id, body.source, null, body);
-    return accepted(reply, await applyForwarders(req, ctx));
-  });
-
-  app.patch("/mail-forwarders/:id", async (req, reply) => {
-    const { id } = parseParams(req, idParam);
-    const body = parseBody(req, updateMailForwarderInput);
-    const before = await loadForwarder(req, id, "email.routing:write");
-    const ctx = await loadMailDomain(req, before.forwarder.mailDomainId, "email.routing:write");
-
-    const source = body.source ?? before.forwarder.source;
-    const destination = body.destination ?? before.forwarder.destination;
-    await assertForwarder(req, ctx, source, destination, id);
-
-    await guardUnique(
-      () =>
-        req.ctx.db
-          .update(mailForwarders)
-          .set({
-            ...(body.source !== undefined ? { source: body.source } : {}),
-            ...(body.destination !== undefined ? { destination: body.destination } : {}),
-            ...(body.keep_copy !== undefined ? { keepCopy: body.keep_copy } : {}),
-            ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
-            updatedAt: new Date(),
-          })
-          .where(eq(mailForwarders.id, id)),
-      () => forwarderTaken(source, destination),
-    );
-
-    await recordRoutingChange(
-      req,
-      ctx,
-      "mail.forwarder.updated",
-      id,
-      before.forwarder.source,
-      {
-        source: before.forwarder.source,
-        destination: before.forwarder.destination,
-        keep_copy: before.forwarder.keepCopy,
-        enabled: before.forwarder.enabled,
-      },
-      body,
-    );
-    return accepted(reply, await applyForwarders(req, ctx));
-  });
-
-  app.delete("/mail-forwarders/:id", async (req, reply) => {
-    const { id } = parseParams(req, idParam);
-    const before = await loadForwarder(req, id, "email.routing:delete");
-    const ctx = await loadMailDomain(req, before.forwarder.mailDomainId, "email.routing:delete");
-
-    await req.ctx.db.delete(mailForwarders).where(eq(mailForwarders.id, id));
-    await recordRoutingChange(
-      req,
-      ctx,
-      "mail.forwarder.deleted",
-      id,
-      before.forwarder.source,
-      { source: before.forwarder.source, destination: before.forwarder.destination },
-      null,
-    );
-    return accepted(reply, await applyForwarders(req, ctx));
-  });
-
-  /* ========================= DNS authentication ===================== */
-
-  app.get("/mail-auth", async (req, reply) => {
-    const q = parseQuery(req, mailAuthQuery);
-    const ctx = await loadMailDomain(req, q.mail_domain_id, "email.auth:read");
-    const h = helpers(req);
-    const checker = new MailAuthChecker({ db: req.ctx.db, hub: req.ctx.hub, log: req.ctx.log });
-
-    if (!q.refresh) {
-      return item(reply, await checker.report(ctx.mailDomain.id));
+    const target = (
+      await req.ctx.db
+        .select({ id: mailboxes.id, address: mailboxes.address, serverId: mailboxes.serverId })
+        .from(mailboxes)
+        .where(eq(mailboxes.id, body.mailbox_id))
+        .limit(1)
+    )[0];
+    if (!target) throw notFound("Mailbox", body.mailbox_id);
+    // yunori-mail delivers an alias to a mailbox it hosts; one on another
+    // host is a forward, which this product does not do.
+    if (target.serverId !== domain.server.id) {
+      throw conflict(`${target.address} is not hosted on ${domain.server.name}.`, {
+        summary: "An alias delivers to a mailbox on the same mail server.",
+        actions: [{ label: "Mailboxes", href: `/email/mailboxes?domain=${domain.domainName}` }],
+      });
     }
 
-    // Every check is a DNS query or a read-only agent call, so a refresh
-    // can answer inline instead of becoming a job (KD-008 permits
-    // read-only pass-through). The queued form still exists at
-    // POST /mail-auth/check for scheduled and background runs.
-    h.authorize("email.auth:exec", ctx.server.id);
-    const report = await checker.run(ctx.mailDomain.id);
+    const address = `${body.local_part}@${domain.domainName}`;
+    await assertAddressFree(req, address);
 
-    await req.ctx.audit.record({
-      actor: h.actor(),
-      action: "mail.auth.checked",
-      targetType: "mail_domain",
-      targetId: ctx.mailDomain.id,
-      targetLabel: ctx.domainName,
-      serverId: ctx.server.id,
-      metadata: { overall: report.overall, resolver: report.resolver_used },
-    });
-    req.ctx.events.publish(
-      "servers",
-      "mail.auth.checked",
-      { server_id: ctx.server.id, mail_domain_id: ctx.mailDomain.id, overall: report.overall },
-      ctx.server.id,
-    );
-
-    return item(reply, report);
-  });
-
-  app.post("/mail-auth/check", async (req, reply) => {
-    const body = parseBody(req, runMailAuthCheckInput);
-    const ctx = await loadMailDomain(req, body.mail_domain_id, "email.auth:exec");
+    const [row] = await req.ctx.db
+      .insert(mailAliases)
+      .values({
+        mailDomainId: domain.mailDomain.id,
+        serverId: domain.server.id,
+        address,
+        mailboxId: target.id,
+        mailboxAddress: target.address,
+        status: "active",
+      })
+      .returning();
 
     const job = await enqueueServerJob(req, {
-      type: "mail.auth.check",
-      server: ctx.server,
-      targetType: "mail_domain",
-      targetId: ctx.mailDomain.id,
-      targetLabel: ctx.domainName,
-      params: {
-        mail_domain_id: ctx.mailDomain.id,
-        ...(body.checks ? { checks: body.checks } : {}),
-        ...(body.resolver ? { resolver: body.resolver } : {}),
-      },
+      type: "mail.alias.add",
+      server: domain.server,
+      targetType: "mail_alias",
+      targetId: row!.id,
+      targetLabel: address,
+      params: { alias_id: row!.id, alias: address, mailbox: target.address },
     });
     return accepted(reply, job);
   });
 
-  /* ============================== mail logs ========================= */
+  app.delete("/mail-aliases/:id", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const row = await loadAlias(req, id, "email.routing:delete");
 
-  app.get("/mail-logs", async (req, reply) => {
-    const q = parseQuery(req, mailLogListQuery);
-    helpers(req).authorize("email.logs:read");
+    await req.ctx.db
+      .update(mailAliases)
+      .set({ status: "removing", updatedAt: new Date() })
+      .where(eq(mailAliases.id, id));
 
-    const term = searchTerm(q.q);
-    const address = q.address?.trim().toLowerCase();
-    const where = combine(
-      scopeFilter(req, "email.logs:read", mailLogEntries.serverId),
-      q.server_id ? eq(mailLogEntries.serverId, q.server_id) : null,
-      q.direction ? eq(mailLogEntries.direction, q.direction) : null,
-      q.status ? eq(mailLogEntries.status, q.status) : null,
-      q.queue_id ? eq(mailLogEntries.queueId, q.queue_id) : null,
-      q.since ? gte(mailLogEntries.ts, new Date(q.since)) : null,
-      q.until ? lte(mailLogEntries.ts, new Date(q.until)) : null,
-      q.mail_domain_id ? domainAddressFilter(q.mail_domain_id) : null,
-      address
-        ? sql`(lower(${mailLogEntries.fromAddress}) = ${address} or exists (select 1 from unnest(${mailLogEntries.toAddresses}) t where lower(t) = ${address}))`
-        : null,
-      term
-        ? sql`(lower(${mailLogEntries.message}) like ${term} or lower(coalesce(${mailLogEntries.subject}, '')) like ${term} or lower(${mailLogEntries.fromAddress}) like ${term})`
-        : null,
-    );
-
-    const column = sortColumn(MAIL_LOG_SORTABLE, q.sort, "ts");
-    const rows = await req.ctx.db
-      .select({ entry: mailLogEntries, server: servers })
-      .from(mailLogEntries)
-      .innerJoin(servers, eq(mailLogEntries.serverId, servers.id))
-      .where(where)
-      .orderBy(q.order === "asc" ? asc(column) : desc(column))
-      .limit(q.per_page)
-      .offset(offset(q.page, q.per_page));
-
-    const counted5 = await req.ctx.db
-      .select({ total: sql<number>`count(*)::int` })
-      .from(mailLogEntries)
-      .where(where);
-    const total = counted5[0]?.total ?? 0;
-
-    return list(reply, rows.map(toMailLogApi), paginate(total, q.page, q.per_page));
+    const job = await enqueueServerJob(req, {
+      type: "mail.alias.remove",
+      server: row.server,
+      targetType: "mail_alias",
+      targetId: id,
+      targetLabel: row.alias.address,
+      params: { alias_id: id, alias: row.alias.address },
+    });
+    return accepted(reply, job);
   });
+
+  /* ================================ logs ============================ */
 
   app.get("/mail-logs/tail", async (req, reply) => {
     const q = parseQuery(req, mailLogTailQuery);
@@ -1032,9 +881,7 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     // Decided before the headers go out: once the response is an event
     // stream a refusal can only be a frame, not the JSON error with a
     // remediation that the rest of the API answers with.
-    if (!req.ctx.hub.capabilities(server.id).includes("mail")) {
-      throw agentUnsupported(server.name, "a mail stack");
-    }
+    requireYunori(req, server);
 
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -1128,7 +975,33 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
  * the row names the server it belongs to.
  * ------------------------------------------------------------------ */
 
-interface MailDomainContext {
+interface MailServerRow {
+  mailServer: typeof mailServers.$inferSelect;
+  server: ServerRow;
+}
+
+async function loadMailServer(
+  req: FastifyRequest,
+  id: string,
+  permission: Permission,
+): Promise<MailServerRow> {
+  const h = helpers(req);
+  h.authorize(permission);
+
+  const rows = await req.ctx.db
+    .select({ mailServer: mailServers, server: servers })
+    .from(mailServers)
+    .innerJoin(servers, eq(mailServers.serverId, servers.id))
+    .where(eq(mailServers.id, id))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row) throw notFound("Mail server", id);
+  h.authorize(permission, row.server.id);
+  return row;
+}
+
+interface MailDomainRow {
   mailDomain: typeof mailDomains.$inferSelect;
   domainName: string;
   server: ServerRow;
@@ -1138,7 +1011,7 @@ async function loadMailDomain(
   req: FastifyRequest,
   id: string,
   permission: Permission,
-): Promise<MailDomainContext> {
+): Promise<MailDomainRow> {
   const h = helpers(req);
   h.authorize(permission);
 
@@ -1160,6 +1033,7 @@ interface MailboxRow {
   mailbox: typeof mailboxes.$inferSelect;
   domainName: string;
   server: ServerRow;
+  aliases: string[];
 }
 
 async function loadMailbox(
@@ -1171,7 +1045,12 @@ async function loadMailbox(
   h.authorize(permission);
 
   const rows = await req.ctx.db
-    .select({ mailbox: mailboxes, domainName: domains.name, server: servers })
+    .select({
+      mailbox: mailboxes,
+      domainName: domains.name,
+      server: servers,
+      aliases: aliasesOf(mailboxes.id),
+    })
     .from(mailboxes)
     .innerJoin(mailDomains, eq(mailboxes.mailDomainId, mailDomains.id))
     .innerJoin(domains, eq(mailDomains.domainId, domains.id))
@@ -1191,11 +1070,7 @@ interface AliasRow {
   server: ServerRow;
 }
 
-async function loadAlias(
-  req: FastifyRequest,
-  id: string,
-  permission: Permission,
-): Promise<AliasRow> {
+async function loadAlias(req: FastifyRequest, id: string, permission: Permission): Promise<AliasRow> {
   const h = helpers(req);
   h.authorize(permission);
 
@@ -1204,7 +1079,7 @@ async function loadAlias(
     .from(mailAliases)
     .innerJoin(mailDomains, eq(mailAliases.mailDomainId, mailDomains.id))
     .innerJoin(domains, eq(mailDomains.domainId, domains.id))
-    .innerJoin(servers, eq(mailDomains.serverId, servers.id))
+    .innerJoin(servers, eq(mailAliases.serverId, servers.id))
     .where(eq(mailAliases.id, id))
     .limit(1);
 
@@ -1214,114 +1089,108 @@ async function loadAlias(
   return row;
 }
 
-interface ForwarderRow {
-  forwarder: typeof mailForwarders.$inferSelect;
-  domainName: string;
-  server: ServerRow;
-}
-
-async function loadForwarder(
-  req: FastifyRequest,
-  id: string,
-  permission: Permission,
-): Promise<ForwarderRow> {
-  const h = helpers(req);
-  h.authorize(permission);
-
-  const rows = await req.ctx.db
-    .select({ forwarder: mailForwarders, domainName: domains.name, server: servers })
-    .from(mailForwarders)
-    .innerJoin(mailDomains, eq(mailForwarders.mailDomainId, mailDomains.id))
-    .innerJoin(domains, eq(mailDomains.domainId, domains.id))
-    .innerJoin(servers, eq(mailDomains.serverId, servers.id))
-    .where(eq(mailForwarders.id, id))
-    .limit(1);
-
-  const row = rows[0];
-  if (!row) throw notFound("Forwarder", id);
-  h.authorize(permission, row.server.id);
-  return row;
+async function loadDomainRow(req: FastifyRequest, domainId: string) {
+  const rows = await req.ctx.db.select().from(domains).where(eq(domains.id, domainId)).limit(1);
+  const domain = rows[0];
+  if (!domain) throw notFound("Domain", domainId);
+  return domain;
 }
 
 /* ------------------------------------------------------------------ *
- * Routing rules
- *
- * One set of checks for a create and an edit alike, applied to what the
- * row will say afterwards. Postfix matches map keys case-insensitively,
- * so duplicates are judged the same way even though the unique indexes
- * are not (the contract lower-cases new addresses; older rows may not be).
+ * Guards
  * ------------------------------------------------------------------ */
 
-function aliasTaken(address: string, id?: string): ApiException {
-  return conflict(`${address} is already aliased.`, {
-    summary: "Edit the existing alias to add another destination — one address maps once.",
-    actions: id ? [{ label: "Open alias", href: `/email/aliases/${id}` }] : [],
-  });
+function requireYunori(req: FastifyRequest, server: ServerRow): void {
+  if (!req.ctx.hub.capabilities(server.id).includes("yunori")) {
+    throw agentUnsupported(server.name, "Yunori Mail Server");
+  }
 }
 
-function forwarderTaken(source: string, destination: string, id?: string): ApiException {
-  return conflict(`${source} already forwards to ${destination}.`, {
-    summary: "Add a second forwarder with a different destination, or edit the existing one.",
-    actions: id ? [{ label: "Open forwarder", href: `/email/forwarders/${id}` }] : [],
-  });
-}
-
-function assertInDomain(ctx: MailDomainContext, address: string): void {
-  if (address.toLowerCase().endsWith(`@${ctx.domainName.toLowerCase()}`)) return;
-  throw conflict(`${address} is not an address in ${ctx.domainName}.`, {
-    summary:
-      "A rule rewrites an address this domain receives, so its left-hand side has to belong to the domain. To route mail for another domain, add the rule on that domain instead.",
-    actions: [],
-  });
-}
-
-async function assertAliasAddress(
-  req: FastifyRequest,
-  ctx: MailDomainContext,
-  address: string,
-  excludeId?: string,
-): Promise<void> {
-  assertInDomain(ctx, address);
+/** One mail server per host: a second deploy would fight the first for ports 25 to 993. */
+async function assertNoMailServer(req: FastifyRequest, server: ServerRow): Promise<void> {
   const existing = await req.ctx.db
-    .select({ id: mailAliases.id })
-    .from(mailAliases)
-    .where(
-      and(
-        sql`lower(${mailAliases.address}) = ${address.toLowerCase()}`,
-        excludeId ? ne(mailAliases.id, excludeId) : undefined,
-      ),
-    )
+    .select({ id: mailServers.id, status: mailServers.status })
+    .from(mailServers)
+    .where(eq(mailServers.serverId, server.id))
     .limit(1);
-  if (existing[0]) throw aliasTaken(address, existing[0].id);
-}
-
-async function assertForwarder(
-  req: FastifyRequest,
-  ctx: MailDomainContext,
-  source: string,
-  destination: string,
-  excludeId?: string,
-): Promise<void> {
-  assertInDomain(ctx, source);
-  if (source.toLowerCase() === destination.toLowerCase()) {
-    throw conflict(`${source} forwards to itself.`, {
+  if (existing[0]) {
+    throw conflict(`${server.name} already has a mail server (${existing[0].status}).`, {
       summary:
-        "That is a delivery loop: the mail stack would bounce the message with a maximum-hop error.",
-      actions: [],
+        "A host runs one Yunori Mail Server. Sync the existing record, or forget it first if it is stale.",
+      actions: [{ label: "Mail server", href: `/email/health?server_id=${server.id}` }],
     });
   }
-  const existing = await req.ctx.db
-    .select({ id: mailForwarders.id })
-    .from(mailForwarders)
-    .where(
-      and(
-        sql`lower(${mailForwarders.source}) = ${source.toLowerCase()}`,
-        sql`lower(${mailForwarders.destination}) = ${destination.toLowerCase()}`,
-        excludeId ? ne(mailForwarders.id, excludeId) : undefined,
-      ),
-    )
+}
+
+async function installedMailServerFor(
+  req: FastifyRequest,
+  server: ServerRow,
+): Promise<typeof mailServers.$inferSelect> {
+  const rows = await req.ctx.db
+    .select()
+    .from(mailServers)
+    .where(eq(mailServers.serverId, server.id))
     .limit(1);
-  if (existing[0]) throw forwarderTaken(source, destination, existing[0].id);
+  const mailServer = rows[0];
+  if (!mailServer) {
+    throw conflict(`${server.name} has no mail server.`, {
+      summary: "Deploy Yunori Mail Server on this host first, or adopt one installed by hand.",
+      actions: [{ label: "Deploy mail server", href: "/email/health" }],
+    });
+  }
+  if (mailServer.status !== "installed") {
+    throw conflict(`The mail server on ${server.name} is ${mailServer.status}.`, {
+      summary: "Domains can be added once the install has finished.",
+      actions: [{ label: "Mail server", href: `/email/health?server_id=${server.id}` }],
+    });
+  }
+  return mailServer;
+}
+
+/** A mailbox and an alias share one address space on the host. */
+async function assertAddressFree(req: FastifyRequest, address: string): Promise<void> {
+  const [mailbox] = await req.ctx.db
+    .select({ id: mailboxes.id, status: mailboxes.status })
+    .from(mailboxes)
+    .where(eq(mailboxes.address, address))
+    .limit(1);
+  if (mailbox) {
+    throw conflict(`${address} is already a mailbox.`, {
+      summary:
+        mailbox.status === "removing"
+          ? "It is being removed; wait for that job to finish."
+          : "Pick another local part, or open the existing mailbox.",
+      actions: [{ label: "Open mailbox", href: `/email/mailboxes?q=${encodeURIComponent(address)}` }],
+    });
+  }
+  const [alias] = await req.ctx.db
+    .select({ id: mailAliases.id })
+    .from(mailAliases)
+    .where(eq(mailAliases.address, address))
+    .limit(1);
+  if (alias) {
+    throw conflict(`${address} is already an alias.`, {
+      summary: "Remove the alias first if this address should become a mailbox.",
+      actions: [{ label: "Aliases", href: `/email/aliases?q=${encodeURIComponent(address)}` }],
+    });
+  }
+}
+
+/**
+ * Runs one inline agent call and turns its failure into the API's
+ * vocabulary. The connectivity check already happened, so an offline
+ * error here is a race the client should simply retry.
+ */
+async function callAgent<T>(server: ServerRow, call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    if (err instanceof AgentRpcError) throw fromAgentError(server.name, err.agentError);
+    if (err instanceof AgentOfflineError) {
+      throw new ApiException("agent_offline", `The agent on ${server.name} disconnected.`);
+    }
+    throw err;
+  }
 }
 
 /** Postgres unique_violation, wherever the driver put the SQLSTATE. */
@@ -1333,293 +1202,120 @@ export function isUniqueViolation(err: unknown): boolean {
   return false;
 }
 
-/**
- * The checks above run before the write, so two operators racing on the
- * same address is the only way the unique index still fires; it should
- * answer like the check did rather than as an unexplained 500.
- */
-async function guardUnique<T>(write: () => Promise<T>, onTaken: () => ApiException): Promise<T> {
-  try {
-    return await write();
-  } catch (err) {
-    if (isUniqueViolation(err)) throw onTaken();
-    throw err;
-  }
-}
-
 /* ------------------------------------------------------------------ *
- * Wholesale map application
+ * Mapping
  * ------------------------------------------------------------------ */
 
-/**
- * Disabled entries are simply absent from the map: the host has no
- * concept of a disabled alias, so "enabled" is the panel's word for
- * "present in what we apply".
- */
-async function applyAliases(req: FastifyRequest, ctx: MailDomainContext): Promise<Job> {
-  const rows = await req.ctx.db
-    .select({ address: mailAliases.address, destinations: mailAliases.destinations })
-    .from(mailAliases)
-    .where(and(eq(mailAliases.mailDomainId, ctx.mailDomain.id), eq(mailAliases.enabled, true)));
-
-  return enqueueServerJob(req, {
-    type: "mail.alias.apply",
-    server: ctx.server,
-    targetType: "mail_domain",
-    targetId: ctx.mailDomain.id,
-    targetLabel: ctx.domainName,
-    params: {
-      domain: ctx.domainName,
-      aliases: rows.map((r) => ({ address: r.address, destinations: r.destinations })),
-    },
-  });
+/** The alias addresses delivering to a mailbox, as one array column. */
+function aliasesOf(mailboxId: typeof mailboxes.id) {
+  return sql<string[]>`coalesce((select array_agg(a.address order by a.address) from mail_aliases a where a.mailbox_id = ${mailboxId}), '{}'::text[])`;
 }
 
-async function applyForwarders(req: FastifyRequest, ctx: MailDomainContext): Promise<Job> {
-  const rows = await req.ctx.db
+async function toMailServerApi(db: Database, row: MailServerRow): Promise<MailServer> {
+  const id = row.mailServer.id;
+  const [counts] = await db
     .select({
-      source: mailForwarders.source,
-      destination: mailForwarders.destination,
-      keepCopy: mailForwarders.keepCopy,
+      domains: sql<number>`(select count(*) from mail_domains where mail_server_id = ${id})::int`,
+      mailboxes: sql<number>`(select count(*) from mailboxes where server_id = ${row.server.id})::int`,
     })
-    .from(mailForwarders)
-    .where(
-      and(eq(mailForwarders.mailDomainId, ctx.mailDomain.id), eq(mailForwarders.enabled, true)),
-    );
-
-  return enqueueServerJob(req, {
-    type: "mail.forwarder.apply",
-    server: ctx.server,
-    targetType: "mail_domain",
-    targetId: ctx.mailDomain.id,
-    targetLabel: ctx.domainName,
-    params: {
-      domain: ctx.domainName,
-      forwarders: rows.map((r) => ({
-        source: r.source,
-        destination: r.destination,
-        keep_copy: r.keepCopy,
-      })),
-    },
-  });
+    .from(sql`(select 1) as one`);
+  const ms = row.mailServer;
+  return {
+    id,
+    server_id: ms.serverId,
+    server_name: row.server.name,
+    status: ms.status,
+    version: ms.version,
+    install_complete: ms.installComplete,
+    hostname: ms.hostname,
+    primary_domain: ms.primaryDomain,
+    admin_email: ms.adminEmail,
+    sending_mode: ms.sendingMode,
+    relay_provider: ms.relayProvider,
+    console_url: ms.consoleUrl,
+    steps: ms.steps,
+    services: ms.services,
+    checks: ms.checks,
+    health: ms.health,
+    certificate: ms.certificate ?? null,
+    domain_count: counts?.domains ?? 0,
+    mailbox_count: counts?.mailboxes ?? 0,
+    last_error: ms.lastError,
+    last_synced_at: ms.lastSyncedAt?.toISOString() ?? null,
+    created_at: ms.createdAt.toISOString(),
+    updated_at: ms.updatedAt.toISOString(),
+  };
 }
 
-/** The apply job audits the map; this records which row the operator touched. */
-async function recordRoutingChange(
-  req: FastifyRequest,
-  ctx: MailDomainContext,
-  action: string,
-  targetId: string,
-  targetLabel: string,
-  before: unknown,
-  after: unknown,
-): Promise<void> {
-  await req.ctx.audit.record({
-    actor: helpers(req).actor(),
-    action,
-    targetType: action.startsWith("mail.alias") ? "mail_alias" : "mail_forwarder",
-    targetId,
-    targetLabel,
-    serverId: ctx.server.id,
-    ...(before !== null ? { before } : {}),
-    ...(after !== null ? { after } : {}),
-  });
-  req.ctx.events.publish(
-    "servers",
-    action,
-    { server_id: ctx.server.id, mail_domain_id: ctx.mailDomain.id, target_id: targetId },
-    ctx.server.id,
-  );
-}
-
-/* ------------------------------------------------------------------ *
- * Row to API
- * ------------------------------------------------------------------ */
-
-async function toMailDomainApi(db: Database, row: MailDomainContext): Promise<MailDomain> {
+async function toMailDomainApi(db: Database, row: MailDomainRow): Promise<MailDomain> {
   const id = row.mailDomain.id;
   const [counts] = await db
     .select({
       mailboxes: sql<number>`(select count(*) from mailboxes where mail_domain_id = ${id})::int`,
       aliases: sql<number>`(select count(*) from mail_aliases where mail_domain_id = ${id})::int`,
-      forwarders: sql<number>`(select count(*) from mail_forwarders where mail_domain_id = ${id})::int`,
-      quotaUsed: sql<number>`(select coalesce(sum(used_bytes), 0) from mailboxes where mail_domain_id = ${id})::bigint`,
-      pass: sql<number>`(select count(*) from mail_auth_checks where mail_domain_id = ${id} and status = 'pass')::int`,
-      warn: sql<number>`(select count(*) from mail_auth_checks where mail_domain_id = ${id} and status = 'warn')::int`,
-      fail: sql<number>`(select count(*) from mail_auth_checks where mail_domain_id = ${id} and status = 'fail')::int`,
-      unknown: sql<number>`(select count(*) from mail_auth_checks where mail_domain_id = ${id} and status = 'unknown')::int`,
     })
     .from(sql`(select 1) as one`);
-
-  const summary: MailAuthSummary = {
-    pass: counts?.pass ?? 0,
-    warn: counts?.warn ?? 0,
-    fail: counts?.fail ?? 0,
-    unknown: counts?.unknown ?? 0,
-    worst: worstStatus(counts),
-    checked_at: row.mailDomain.lastAuthCheckAt?.toISOString() ?? null,
-  };
-
+  const md = row.mailDomain;
   return {
     id,
-    domain_id: row.mailDomain.domainId,
+    domain_id: md.domainId,
     domain_name: row.domainName,
-    server_id: row.mailDomain.serverId,
+    server_id: md.serverId,
     server_name: row.server.name,
-    status: toApiStatus(row.mailDomain.status),
-    dkim_selector: row.mailDomain.dkimSelector,
-    dkim_public_key: row.mailDomain.dkimPublicKey,
-    catchall_target: row.mailDomain.catchallTarget,
+    mail_server_id: md.mailServerId,
+    is_primary: md.isPrimary,
+    status: md.status,
+    dns_status: md.dnsStatus,
+    dns_checked_at: md.dnsCheckedAt?.toISOString() ?? null,
     mailbox_count: counts?.mailboxes ?? 0,
     alias_count: counts?.aliases ?? 0,
-    forwarder_count: counts?.forwarders ?? 0,
-    quota_used: Number(counts?.quotaUsed ?? 0),
-    quota_total: row.mailDomain.quotaTotal,
-    auth_summary: summary,
-    created_at: row.mailDomain.createdAt.toISOString(),
-    updated_at: row.mailDomain.updatedAt.toISOString(),
+    last_synced_at: md.lastSyncedAt?.toISOString() ?? null,
+    created_at: md.createdAt.toISOString(),
+    updated_at: md.updatedAt.toISOString(),
   };
 }
 
 function toMailboxApi(row: MailboxRow): Mailbox {
-  const quota = row.mailbox.quotaBytes;
+  const mb = row.mailbox;
   return {
-    id: row.mailbox.id,
-    mail_domain_id: row.mailbox.mailDomainId,
+    id: mb.id,
+    mail_domain_id: mb.mailDomainId,
     domain_name: row.domainName,
-    server_id: row.mailbox.serverId,
+    server_id: mb.serverId,
     server_name: row.server.name,
-    address: row.mailbox.address,
-    local_part: row.mailbox.localPart,
-    display_name: row.mailbox.displayName,
-    quota_bytes: quota,
-    used_bytes: row.mailbox.usedBytes,
-    used_percent: quota > 0 ? Math.min(100, (row.mailbox.usedBytes / quota) * 100) : 0,
-    status: row.mailbox.status,
-    message_count: row.mailbox.messageCount,
-    last_login_at: row.mailbox.lastLoginAt?.toISOString() ?? null,
-    last_synced_at: (row.mailbox.lastSyncedAt ?? row.mailbox.updatedAt).toISOString(),
-    created_at: row.mailbox.createdAt.toISOString(),
-    updated_at: row.mailbox.updatedAt.toISOString(),
+    address: mb.address,
+    local_part: mb.localPart,
+    display_name: mb.displayName,
+    quota_bytes: mb.quotaBytes,
+    status: mb.status,
+    aliases: Array.isArray(row.aliases) ? row.aliases : parsePgArray(row.aliases),
+    last_synced_at: mb.lastSyncedAt?.toISOString() ?? null,
+    created_at: mb.createdAt.toISOString(),
+    updated_at: mb.updatedAt.toISOString(),
   };
 }
 
 function toAliasApi(row: AliasRow): MailAlias {
+  const a = row.alias;
   return {
-    id: row.alias.id,
-    mail_domain_id: row.alias.mailDomainId,
+    id: a.id,
+    mail_domain_id: a.mailDomainId,
     domain_name: row.domainName,
-    server_id: row.server.id,
+    server_id: a.serverId,
     server_name: row.server.name,
-    address: row.alias.address,
-    destinations: row.alias.destinations,
-    enabled: row.alias.enabled,
-    created_at: row.alias.createdAt.toISOString(),
-    updated_at: row.alias.updatedAt.toISOString(),
+    address: a.address,
+    mailbox_id: a.mailboxId,
+    mailbox_address: a.mailboxAddress,
+    status: a.status,
+    created_at: a.createdAt.toISOString(),
+    updated_at: a.updatedAt.toISOString(),
   };
 }
 
-function toForwarderApi(row: ForwarderRow): MailForwarder {
-  return {
-    id: row.forwarder.id,
-    mail_domain_id: row.forwarder.mailDomainId,
-    domain_name: row.domainName,
-    server_id: row.server.id,
-    server_name: row.server.name,
-    source: row.forwarder.source,
-    destination: row.forwarder.destination,
-    keep_copy: row.forwarder.keepCopy,
-    enabled: row.forwarder.enabled,
-    created_at: row.forwarder.createdAt.toISOString(),
-    updated_at: row.forwarder.updatedAt.toISOString(),
-  };
-}
-
-function toMailLogApi(row: {
-  entry: typeof mailLogEntries.$inferSelect;
-  server: ServerRow;
-}): MailLogEntry {
-  return {
-    id: row.entry.id,
-    server_id: row.entry.serverId,
-    server_name: row.server.name,
-    ts: row.entry.ts.toISOString(),
-    queue_id: row.entry.queueId ?? "",
-    direction: row.entry.direction,
-    from: row.entry.fromAddress,
-    to: row.entry.toAddresses,
-    subject: row.entry.subject,
-    status: row.entry.status as MailLogEntry["status"],
-    relay: row.entry.relay,
-    delay_seconds: row.entry.delaySeconds ?? 0,
-    size_bytes: row.entry.sizeBytes ?? 0,
-    dsn: row.entry.dsn,
-    message: row.entry.message,
-  };
-}
-
-/* ------------------------------------------------------------------ *
- * Small helpers
- * ------------------------------------------------------------------ */
-
-/**
- * The table stores "disabled" where the API says "suspended". One place
- * to translate, rather than a cast at every call site.
- */
-type DbMailDomainStatus = "active" | "provisioning" | "error" | "disabled";
-
-function toApiStatus(value: DbMailDomainStatus): MailStatus {
-  return value === "disabled" ? "suspended" : value;
-}
-
-function toDbStatus(value: MailStatus): DbMailDomainStatus {
-  return value === "suspended" ? "disabled" : value;
-}
-
-/** Filters on the worst check, not on "has one of these", so "pass" means pass. */
-function authStatusFilter(status: CheckStatus) {
-  const has = (value: CheckStatus) =>
-    sql`exists (select 1 from mail_auth_checks c where c.mail_domain_id = ${mailDomains.id} and c.status = ${value})`;
-
-  if (status === "fail") return has("fail");
-  if (status === "warn") return sql`${has("warn")} and not ${has("fail")}`;
-  if (status === "unknown") {
-    return sql`${has("unknown")} and not ${has("fail")} and not ${has("warn")}`;
-  }
-  return sql`${has("pass")} and not ${has("fail")} and not ${has("warn")} and not ${has("unknown")}`;
-}
-
-/** A log line belongs to a mail domain when either envelope end does. */
-function domainAddressFilter(mailDomainId: string) {
-  return sql`exists (
-    select 1 from mail_domains md
-    join domains d on d.id = md.domain_id
-    where md.id = ${mailDomainId}
-      and (
-        lower(${mailLogEntries.fromAddress}) like '%@' || lower(d.name)
-        or exists (select 1 from unnest(${mailLogEntries.toAddresses}) t where lower(t) like '%@' || lower(d.name))
-      )
-  )`;
-}
-
-function worstStatus(
-  counts: { pass: number; warn: number; fail: number; unknown: number } | undefined,
-): CheckStatus {
-  if (!counts) return "unknown";
-  if (counts.fail > 0) return "fail";
-  if (counts.warn > 0) return "warn";
-  if (counts.unknown > 0 || counts.pass === 0) return "unknown";
-  return "pass";
-}
-
-const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
-
-function formatBytes(value: number): string {
-  let size = value;
-  let unit = 0;
-  while (size >= 1024 && unit < BYTE_UNITS.length - 1) {
-    size /= 1024;
-    unit += 1;
-  }
-  return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${BYTE_UNITS[unit]}`;
+/** A driver that hands a text[] back as its wire form ("{a,b}") rather than an array. */
+function parsePgArray(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  const inner = value.replace(/^\{|\}$/g, "");
+  if (!inner) return [];
+  return inner.split(",").map((part) => part.replace(/^"|"$/g, ""));
 }

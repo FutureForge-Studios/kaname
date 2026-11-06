@@ -16,7 +16,7 @@ import { PageError } from "@/components/PageError";
  * FormDialog — the one create/edit surface for the Files and Email
  * modules.
  *
- * Creating an FTP account, a mailbox, an alias and a forwarder are four
+ * Creating an FTP account, a mail domain, a mailbox and an alias are four
  * different operations that have to feel like one gesture: same header,
  * same single field column, same Cancel/Confirm order, same place for
  * the failure to appear. That only holds if one component owns the

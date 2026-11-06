@@ -43,7 +43,7 @@ describe("job queue", () => {
     expect(job.max_attempts).toBe(2); // service.restart is idempotent
     expect(job.label).toBe("Restart service");
 
-    const nonIdempotent = await queue.enqueue({ type: "mail.mailbox.create", serverId });
+    const nonIdempotent = await queue.enqueue({ type: "mail.alias.add", serverId });
     expect(nonIdempotent.max_attempts).toBe(1);
   });
 
@@ -116,7 +116,7 @@ describe("job queue", () => {
   });
 
   it("fails a job for good once it is out of attempts", async () => {
-    const job = await queue.enqueue({ type: "mail.mailbox.create", serverId });
+    const job = await queue.enqueue({ type: "mail.alias.add", serverId });
     await queue.claim("worker-1", 60, [serverId]);
 
     await handle.db.execute(sql`update jobs set lease_until = now() - interval '1 minute';`);

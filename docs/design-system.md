@@ -1,5 +1,9 @@
 # Kaname design system
 
+> **Visual language: the Yunori design (yunori.email), shared with the Yunori Mail Server
+> console; tokens mirrored from that product's token sheet.** Kaname keeps its own `--kn-*`
+> token names; only the values come from Yunori.
+
 The rules that keep thirty-odd pages feeling like one product. If a page needs something that
 is not here, the component in `@kaname/ui` grows a prop — it does not get a local variant.
 
@@ -25,38 +29,55 @@ interaction, GitHub's information density.
 
 ## 2. Colour
 
-Near-black, essentially monochrome, one accent used sparingly.
+Warm off-white paper, near-ink text, essentially monochrome, one terracotta accent used
+sparingly. Light is the default and the design target.
 
 ```
---kn-bg          #0B0C0E     canvas
---kn-surface     #111316     cards, tables
---kn-surface-2   #16191D     raised, hover
---kn-surface-3   #1C2024     pressed, active row
---kn-border      #22262C     hairlines
---kn-border-str  #2E333A     emphasised
---kn-text        #E7E9EC     primary
---kn-text-2      #9BA3AE     secondary
---kn-text-3      #6B7280     tertiary, disabled
+                 light       dark
+--kn-bg          #FAF7F2     #060913     canvas (paper / navy ink)
+--kn-bg-inset    #F5F2EC     #04060E     a hair below the canvas: terminal, wells
+--kn-surface     #FEFDFB     #0D111C     cards, tables
+--kn-surface-2   #F1EEE9     #1A1F2E     raised, hover, menus
+--kn-surface-3   #EBE7E0     #1E2433     pressed, active row
+--kn-border      #E2DED9     #242938     hairlines
+--kn-border-str  #C9C3BA     #3F465A     emphasised
+--kn-text        #121621     #FAF8F5     primary          (16.9:1 / 18.8:1 on bg)
+--kn-text-2      #595D69     #ACB3C3     secondary        (6.2:1 / 9.5:1 on bg)
+--kn-text-3      #757A8A     #878FA1     tertiary, disabled (4.0:1 / 6.1:1 on bg)
 ```
 
-**Accent — Keystone Indigo.** Rationale and contrast maths in [KD-005](../DECISIONS.md).
+**Accent — torii.** Yunori's terracotta (`hsl(14 84% 44%)`), the only hue that is not a
+status.
 
 ```
---kn-accent-400  #8AA0FF     links, active icons, inline emphasis   (7.6:1 on bg)
---kn-accent-500  #5B76F7     brand, focus ring, 1px borders         (4.6:1 — never body text)
---kn-accent-600  #4A63E0     primary button fill                    (white on it: 5.6:1)
---kn-accent-700  #3A4FBF     pressed
+                 light       dark
+--kn-accent-300  #F88F62     #FBB293     tints; links and active icons on dark (8.6:1)
+--kn-accent-400  #ED5D31     #F88F62     inline emphasis on dark; decorative on light (3.2:1)
+--kn-accent-500  #CE3E12     #D54013     brand, focus ring, 1px borders (4.6:1 light — never body text)
+--kn-accent-600  #BC3810     #BC3810     primary button fill (white on it: 5.7:1)
+--kn-accent-700  #A0300E     #A0300E     pressed
 ```
 
-**Semantic.** `--kn-ok #3FB950`, `--kn-warn #D29922`, `--kn-danger #F85149`, `--kn-info #58A6FF`,
-each with a `-soft` background at 14% alpha.
+On dark, the readable accent is Yunori's `torii-ink` (`hsl(18 92% 68%)`), which is why the
+tints carry text there while 500 stays torii for fills.
+
+**Semantic.** Yunori's `-ink` values, each with a `-soft` background at 14% alpha:
+
+```
+                 light       dark
+--kn-ok          #27684C     #79C3A1
+--kn-warn        #904F0E     #E7B155
+--kn-danger      #B6202F     #F0757D     (dark uses danger-ink; destructive is 3.4:1 on raised)
+--kn-info        #325F76     #81B5CF
+```
 
 The rule that matters: in an infrastructure panel, green/amber/red **mean something**. Never
 use a semantic colour decoratively, and never use the accent to indicate state. If a coloured
 element is not conveying status, it is either accent or nothing.
 
-A light theme ships with the same token names and inverted values. Dark is the default and the
-design target.
+Charts: `--kn-chart-1..6` run torii → info → success → warning → danger → a muted navy.
+
+Light is the default and the design target; dark ships with the same token names.
 
 ---
 
@@ -64,8 +85,9 @@ design target.
 
 - **4px grid, strictly.** Tailwind's default scale only. No arbitrary spacing values in a
   component.
-- **Radius:** `--kn-r-sm 6px` (controls, badges), `--kn-r-md 8px` (buttons, inputs, cards),
-  `--kn-r-lg 10px` (dialogs, drawers). `9999px` appears in exactly one place: `StatusBadge`.
+- **Radius:** derived from Yunori's `--radius: .5rem`. `--kn-r-xs 4px` (focus rings, swatches),
+  `--kn-r-sm 6px` (controls, badges), `--kn-r-md 8px` (buttons, inputs, cards), `--kn-r-lg 12px`
+  (dialogs, drawers). `9999px` appears in exactly one place: `StatusBadge`.
 - **Density:** table rows are 36px, 30px in compact mode. Base font size is 13px. Section gaps
   are 16px, not 32px. This product should show a lot without scrolling.
 - **Card vs table:** default to the table. A card is for something genuinely singular — a
@@ -75,14 +97,18 @@ design target.
 
 ## 4. Type
 
-One sans, one mono.
+One sans, one mono, one display face used in one place.
 
-- **Inter Variable** for the interface. 13px base, 12px for secondary and table meta, 11px for
-  labels, 16/20/24px for headings. Weight 500 for emphasis; 600 only for page titles.
-- **JetBrains Mono** for anything an operator would type, copy or grep: IP addresses, ports,
-  paths, hashes, unit names, container ids, log lines, DNS records, commands, SQL identifiers.
-  If it is a technical identifier, it is monospace. This is not decorative — it is what makes a
-  path scannable.
+- **Geist Variable** for the interface. 13px base, 12px for secondary and table meta, 11px for
+  labels, 16/20/24px for headings. Weight 500 for emphasis; 600 only for page titles. Rendered
+  with its default features (no Inter-style alternates).
+- **Geist Mono Variable** for anything an operator would type, copy or grep: IP addresses,
+  ports, paths, hashes, unit names, container ids, log lines, DNS records, commands, SQL
+  identifiers. If it is a technical identifier, it is monospace. This is not decorative — it is
+  what makes a path scannable.
+- **Fraunces Variable** for display: page and resource titles only, via `.kn-display`
+  (weight 500, tracking −0.01em). Never for body copy, labels or table content.
+- All three are self-hosted from `@fontsource-variable/*`; the panel never calls Google Fonts.
 - **Tabular numerals everywhere numbers stack vertically.** Applied globally to tables and to
   `.kn-num`.
 - Sentence case for every label, button and heading. Never Title Case, never ALL CAPS except
@@ -92,7 +118,8 @@ One sans, one mono.
 
 ## 5. Motion
 
-120–200 ms, `cubic-bezier(0.2, 0, 0, 1)`, `opacity` and `transform` only.
+150–250 ms (`--kn-dur-fast` 150, `--kn-dur` 200, `--kn-dur-slow` 250), Yunori's quiet curve
+`cubic-bezier(0.22, 1, 0.36, 1)`, `opacity` and `transform` only.
 
 No bounce, no spring, no page transitions, no staggered list entrances, no skeleton shimmer
 sweeping across the screen. A panel that animates when you are trying to read a disk-usage
@@ -221,5 +248,5 @@ An abstract geometric keystone: a central wedge locking two flanking forms. Buil
 number of straight strokes so it survives at 16px in the sidebar and as a favicon, and drawn
 with `currentColor` so it inherits the accent or the text colour depending on context.
 
-The wordmark is "Kaname" set in Inter at weight 600 with slightly tightened tracking. 要 is a
+The wordmark is "Kaname" set in Geist at weight 600 with slightly tightened tracking. 要 is a
 secondary mark, used alone where a single glyph is wanted.

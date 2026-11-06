@@ -30,10 +30,21 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: actions/setup-go@v5
+      # The agent is Rust (KD-033). rustfmt and clippy are part of what
+      # `pnpm verify` runs, so they are installed as components here.
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - uses: actions/cache@v4
         with:
-          go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.sum
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            agent/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm verify

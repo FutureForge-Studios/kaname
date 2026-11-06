@@ -47,9 +47,9 @@ const THEME_KEY = "kaname.theme";
 export function applyTheme(choice: ThemeChoice): void {
   const resolved =
     choice === "system"
-      ? window.matchMedia("(prefers-color-scheme: light)").matches
-        ? "light"
-        : "dark"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light"
       : choice;
   document.documentElement.setAttribute("data-theme", resolved);
   try {
@@ -61,7 +61,7 @@ export function applyTheme(choice: ThemeChoice): void {
 }
 
 function readTheme(): ThemeChoice {
-  if (typeof window === "undefined") return "dark";
+  if (typeof window === "undefined") return "system";
   try {
     const stored = window.localStorage.getItem(THEME_KEY);
     return stored === "light" || stored === "dark" ? stored : "system";

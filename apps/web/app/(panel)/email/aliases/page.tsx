@@ -1,19 +1,17 @@
 "use client";
 
 import * as React from "react";
-import { AtSign, Pencil, Plus, ToggleLeft, ToggleRight, Trash2, X } from "lucide-react";
-import type { MailAlias, MailDomain } from "@kaname/contract";
+import { ArrowRight, AtSign, Plus, Trash2 } from "lucide-react";
+import type { MailAlias } from "@kaname/contract";
 import {
   Button,
+  Combobox,
   ConfirmDialog,
   FormField,
-  IconButton,
   Input,
   MonoText,
-  Select,
-  StatusBadge,
-  Switch,
-  Tag,
+  Skeleton,
+  type ComboboxOption,
   type DataTableColumn,
   type DataTableRowAction,
 } from "@kaname/ui";
@@ -23,74 +21,44 @@ import { HostCell } from "../../_components/cells";
 import { FormDialog, fieldErrors } from "../../_components/FormDialog";
 import { JobActivityBar } from "../../_components/JobActivity";
 import {
-  useCreateAlias,
-  useDeleteAliases,
+  useCreateMailAlias,
+  useDeleteMailAlias,
   useMailAliases,
   useMailDomains,
-  useSetAliasesEnabled,
-  useUpdateAlias,
+  useMailboxes,
 } from "../_components/queries";
-import { DomainPicker } from "../_components/status";
+import { DomainPicker, MailServerPicker, RowStatusBadge } from "../_components/status";
 
 /* ------------------------------------------------------------------ *
- * Aliases — the fan-out half of mail routing.
+ * Aliases.
  *
- * An alias rewrites one address this domain receives into one or more
- * destinations. It is a map, not a row, as far as Postfix is concerned:
- * the control plane rewrites the domain's whole table on every change,
- * which is why creating, editing, toggling and deleting all end in the
- * same apply job.
- *
- * "Disabled" is the panel's word for "absent from the map we apply" —
- * the host has no other notion of it — and the column says so rather
- * than implying the mail stack is holding the alias back somehow.
+ * An alias is one extra address that delivers into an existing mailbox
+ * on the same domain. Yunori has no notion of a disabled alias and no
+ * forwarding to outside addresses from here, so the table is exactly
+ * two columns of identity — alias and target — plus where it lives.
  * ------------------------------------------------------------------ */
 
 const ALIAS_JOB_TYPES = ["mail.alias."] as const;
-const MAX_VISIBLE_DESTINATIONS = 3;
+const LOCAL_PART = /^[A-Za-z0-9._%+-]+$/;
 
-export default function MailAliasesPage() {
+export default function AliasesPage() {
   const can = useCan();
-  const domains = useMailDomains();
 
   const state = useResourceListState({
     defaultSort: { id: "address", order: "asc" },
-    filterKeys: ["mail_domain_id", "enabled"],
+    filterKeys: ["mail_domain_id", "server_id"],
   });
-
   const query = useMailAliases(state.params);
+  const remove = useDeleteMailAlias();
 
-  const [createOpen, setCreateOpen] = React.useState(false);
-  const [editing, setEditing] = React.useState<MailAlias | null>(null);
-  const [deleting, setDeleting] = React.useState<readonly MailAlias[] | null>(null);
-
-  const create = useCreateAlias();
-  const update = useUpdateAlias();
-  const setEnabled = useSetAliasesEnabled();
-  const remove = useDeleteAliases();
-
-  const rows = query.data?.data ?? [];
-  const byId = React.useMemo(
-    () => new Map(rows.map((alias) => [alias.id, alias] as const)),
-    [rows],
-  );
-  const domainList = domains.data?.data ?? [];
-  const selectedDomainId = state.filters["mail_domain_id"] ?? null;
-  const canCreate =
-    domainList.length > 0 &&
-    domainList.some((domain) => can("email.routing:write", domain.server_id));
-
-  const selectedRows = React.useCallback(
-    (ids: readonly string[]) =>
-      ids.map((id) => byId.get(id)).filter((alias): alias is MailAlias => Boolean(alias)),
-    [byId],
-  );
+  const [creating, setCreating] = React.useState(false);
+  const [deleting, setDeleting] = React.useState<MailAlias | null>(null);
 
   const columns = React.useMemo<DataTableColumn<MailAlias>[]>(
     () => [
       {
         id: "address",
-        header: "Address",
+        header: "Alias",
         locked: true,
         sortable: true,
         mono: true,
@@ -102,16 +70,26 @@ export default function MailAliasesPage() {
         ),
       },
       {
-        id: "destinations",
+        id: "mailbox_address",
         header: "Delivers to",
-        minWidth: 280,
-        cell: (alias) => <DestinationTags destinations={alias.destinations} />,
+        sortable: true,
+        mono: true,
+        minWidth: 220,
+        cell: (alias) => (
+          <span className="flex min-w-0 items-center gap-2">
+            <ArrowRight size={12} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
+            <MonoText truncate className="min-w-0 text-[var(--kn-text)]">
+              {alias.mailbox_address}
+            </MonoText>
+          </span>
+        ),
       },
       {
         id: "domain_name",
         header: "Domain",
-        width: 150,
+        sortable: true,
         mono: true,
+        minWidth: 140,
         hideBelow: "lg",
         cell: (alias) => (
           <MonoText muted truncate className="min-w-0">
@@ -121,509 +99,239 @@ export default function MailAliasesPage() {
       },
       {
         id: "server_name",
-        header: "Host",
-        width: 172,
-        hideBelow: "lg",
+        header: "Server",
+        minWidth: 160,
+        hideBelow: "md",
         cell: (alias) => <HostCell serverId={alias.server_id} serverName={alias.server_name} />,
       },
       {
-        id: "enabled",
-        header: "In the map",
+        id: "status",
+        header: "Status",
         sortable: true,
-        width: 120,
-        cell: (alias) => (
-          <StatusBadge
-            tone={alias.enabled ? "ok" : "neutral"}
-            size="xs"
-            hollow={!alias.enabled}
-            title={
-              alias.enabled
-                ? "Present in the alias map the host is running."
-                : "Kept in Kaname but left out of the map, so mail to this address is not rewritten."
-            }
-          >
-            {alias.enabled ? "Applied" : "Held back"}
-          </StatusBadge>
-        ),
+        width: 112,
+        cell: (alias) => <RowStatusBadge status={alias.status} />,
       },
     ],
     [],
   );
 
   const rowActions = React.useCallback(
-    (alias: MailAlias): DataTableRowAction<MailAlias>[] => {
-      const writable = can("email.routing:write", alias.server_id);
-      return [
-        {
-          id: "edit",
-          label: "Edit destinations",
-          icon: Pencil,
-          disabled: !writable,
-          onSelect: () => {
-            update.reset();
-            setEditing(alias);
-          },
-        },
-        {
-          id: "toggle",
-          label: alias.enabled ? "Hold back" : "Apply",
-          icon: alias.enabled ? ToggleLeft : ToggleRight,
-          disabled: !writable,
-          onSelect: () =>
-            setEnabled.mutate({
-              rows: [{ id: alias.id, label: alias.address }],
-              enabled: !alias.enabled,
-            }),
-        },
-        {
-          id: "delete",
-          label: "Delete",
-          icon: Trash2,
-          destructive: true,
-          separatorBefore: true,
-          disabled: !can("email.routing:delete", alias.server_id),
-          onSelect: () => {
-            remove.reset();
-            setDeleting([alias]);
-          },
-        },
-      ];
-    },
-    [can, remove, setEnabled, update],
+    (alias: MailAlias): DataTableRowAction<MailAlias>[] => [
+      {
+        id: "delete",
+        label: "Remove alias",
+        icon: Trash2,
+        destructive: true,
+        disabled: alias.status === "removing" || !can("email.routing:delete", alias.server_id),
+        onSelect: () => setDeleting(alias),
+      },
+    ],
+    [can],
+  );
+
+  const createButton = (
+    <Button
+      variant="primary"
+      size="sm"
+      icon={Plus}
+      onClick={() => setCreating(true)}
+      disabled={!can("email.routing:write")}
+    >
+      Add alias
+    </Button>
   );
 
   return (
     <>
       <ResourcePage<MailAlias>
         title="Aliases"
-        subtitle="One address in, one or more addresses out"
+        subtitle="Extra addresses that deliver into a mailbox"
+        primaryAction={createButton}
         state={state}
         query={query}
         columns={columns}
         getRowId={(alias) => alias.id}
-        tableLabel="Mail aliases"
-        searchPlaceholder="Address or destination"
+        tableLabel="Aliases"
+        searchPlaceholder="Search aliases and mailboxes"
         errorContext="Aliases"
         emptyIcon={AtSign}
-        emptyTitle="No aliases"
-        emptyDescription="An alias delivers mail sent to one address to a set of real mailboxes — support@, sales@, a whole team."
-        emptyAction={
-          <Button
-            variant="primary"
-            size="sm"
-            icon={Plus}
-            disabled={!canCreate}
-            onClick={() => {
-              create.reset();
-              setCreateOpen(true);
-            }}
-          >
-            New alias
-          </Button>
-        }
-        primaryAction={
-          <Button
-            variant="primary"
-            size="sm"
-            icon={Plus}
-            disabled={!canCreate}
-            onClick={() => {
-              create.reset();
-              setCreateOpen(true);
-            }}
-          >
-            New alias
-          </Button>
-        }
-        filters={
-          /* Present-or-absent rather than true/false: the list query
-           * coerces its boolean, and "false" would coerce to true. */
-          <Switch
-            checked={state.filters["enabled"] === "true"}
-            onChange={(event) => state.setFilter("enabled", event.target.checked ? "true" : null)}
-            label="Applied only"
-            labelClassName="text-sm text-[var(--kn-text-2)]"
-          />
-        }
-        selectable
-        bulkActions={(ids) => (
-          <>
-            <Button
-              variant="ghost"
-              size="xs"
-              icon={ToggleRight}
-              onClick={() =>
-                setEnabled.mutate({
-                  rows: selectedRows(ids).map((alias) => ({
-                    id: alias.id,
-                    label: alias.address,
-                  })),
-                  enabled: true,
-                })
-              }
-            >
-              Apply
-            </Button>
-            <Button
-              variant="ghost"
-              size="xs"
-              icon={ToggleLeft}
-              onClick={() =>
-                setEnabled.mutate({
-                  rows: selectedRows(ids).map((alias) => ({
-                    id: alias.id,
-                    label: alias.address,
-                  })),
-                  enabled: false,
-                })
-              }
-            >
-              Hold back
-            </Button>
-            <Button
-              variant="danger-subtle"
-              size="xs"
-              icon={Trash2}
-              onClick={() => {
-                remove.reset();
-                setDeleting(selectedRows(ids));
-              }}
-            >
-              Delete
-            </Button>
-          </>
-        )}
+        emptyTitle="No aliases yet"
+        emptyDescription="An alias is a second address for a mailbox on the same domain: sales@ delivering to alice@."
+        emptyAction={createButton}
         rowActions={rowActions}
-        onRowClick={(alias) => {
-          update.reset();
-          setEditing(alias);
-        }}
       >
         <div className="flex flex-wrap items-center gap-3">
+          <MailServerPicker
+            value={state.filters["server_id"] ?? null}
+            onChange={(_id, server) => state.setFilter("server_id", server?.server_id ?? null)}
+            allowAll
+          />
           <DomainPicker
-            value={selectedDomainId}
+            value={state.filters["mail_domain_id"] ?? null}
             onChange={(next) => state.setFilter("mail_domain_id", next)}
             allowAll
           />
         </div>
-        <JobActivityBar types={ALIAS_JOB_TYPES} title="Routing changes" />
+        <JobActivityBar types={ALIAS_JOB_TYPES} />
       </ResourcePage>
 
-      {createOpen && (
-        <AliasDialog
-          mode="create"
-          domains={domainList}
-          defaultDomainId={selectedDomainId ?? domainList[0]?.id ?? ""}
-          submitting={create.isPending}
-          error={create.error}
-          onClose={() => setCreateOpen(false)}
-          onSubmit={({ domainId, address, destinations, enabled }) =>
-            create.mutate(
-              { mail_domain_id: domainId, address, destinations, enabled },
-              { onSuccess: () => setCreateOpen(false) },
-            )
-          }
-        />
-      )}
+      <CreateAliasDialog
+        open={creating}
+        onOpenChange={setCreating}
+        defaultDomainId={state.filters["mail_domain_id"] ?? null}
+      />
 
-      {editing && (
-        <AliasDialog
-          mode="edit"
-          alias={editing}
-          domains={domainList}
-          defaultDomainId={editing.mail_domain_id}
-          submitting={update.isPending}
-          error={update.error}
-          onClose={() => setEditing(null)}
-          onSubmit={({ address, destinations, enabled }) =>
-            update.mutate(
-              {
-                id: editing.id,
-                address: editing.address,
-                input: { address, destinations, enabled },
-              },
-              { onSuccess: () => setEditing(null) },
-            )
-          }
-        />
-      )}
-
-      {deleting && deleting.length > 0 && (
-        <ConfirmDialog
-          open
-          onOpenChange={(next) => {
-            if (!next) setDeleting(null);
-          }}
-          title={
-            deleting.length === 1
-              ? `Delete the alias for ${deleting[0]!.address}?`
-              : `Delete ${deleting.length} aliases?`
-          }
-          description="Mail sent to the address stops being rewritten. If nothing else claims it, senders start getting a rejection."
-          confirmText={
-            deleting.length === 1 ? deleting[0]!.address : `delete ${deleting.length} aliases`
-          }
-          confirmLabel="Delete"
-          loading={remove.isPending}
-          onConfirm={() =>
-            remove.mutate(
-              deleting.map((alias) => ({ id: alias.id, address: alias.address })),
-              {
-                onSuccess: () => {
-                  setDeleting(null);
-                  state.setSelected([]);
-                },
-              },
-            )
-          }
-        >
-          <ul className="max-h-32 overflow-y-auto rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-2 py-1.5">
-            {deleting.map((alias) => (
-              <li key={alias.id} className="kn-mono truncate text-[var(--kn-text-2)]">
-                {alias.address} → {alias.destinations.join(", ")}
-              </li>
-            ))}
-          </ul>
-        </ConfirmDialog>
-      )}
+      <ConfirmDialog
+        open={deleting !== null}
+        onOpenChange={(open) => !open && setDeleting(null)}
+        title={`Remove ${deleting?.address ?? "alias"}?`}
+        description={`Mail sent to this address will bounce. ${deleting?.mailbox_address ?? "The mailbox"} and its mail are untouched.`}
+        confirmLabel="Remove alias"
+        loading={remove.isPending}
+        onConfirm={() => {
+          if (!deleting) return;
+          remove.mutate(
+            { id: deleting.id, address: deleting.address },
+            { onSuccess: () => setDeleting(null) },
+          );
+        }}
+      />
     </>
   );
 }
 
 /* ------------------------------------------------------------------ *
- * Destinations
+ * Create
  * ------------------------------------------------------------------ */
 
-function DestinationTags({ destinations }: { destinations: readonly string[] }) {
-  const visible = destinations.slice(0, MAX_VISIBLE_DESTINATIONS);
-  const rest = destinations.length - visible.length;
-
-  return (
-    <span className="flex min-w-0 flex-wrap items-center gap-1">
-      {visible.map((destination) => (
-        <Tag key={destination} size="xs" mono>
-          {destination}
-        </Tag>
-      ))}
-      {rest > 0 && (
-        <span
-          className="text-xs text-[var(--kn-text-3)]"
-          title={destinations.slice(MAX_VISIBLE_DESTINATIONS).join("\n")}
-        >
-          +{rest} more
-        </span>
-      )}
-    </span>
-  );
+interface CreateAliasDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  defaultDomainId: string | null;
 }
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function CreateAliasDialog({ open, onOpenChange, defaultDomainId }: CreateAliasDialogProps) {
+  const create = useCreateMailAlias();
+  const domains = useMailDomains();
 
-interface DestinationsFieldProps {
-  values: string[];
-  onChange: (values: string[]) => void;
-  error?: React.ReactNode;
-}
+  const [domainId, setDomainId] = React.useState<string | null>(defaultDomainId);
+  const [localPart, setLocalPart] = React.useState("");
+  const [mailboxId, setMailboxId] = React.useState<string | null>(null);
 
-/**
- * A row per destination rather than one comma-separated box: this is the
- * field an operator edits when someone leaves a team, and picking the
- * right address out of a comma soup is where mistakes happen. Pasting a
- * list still works — a value containing separators is split on the spot.
- */
-function DestinationsField({ values, onChange, error }: DestinationsFieldProps) {
-  const setAt = (index: number, value: string) => {
-    const parts = value
-      .split(/[,;\n]/)
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0);
-
-    if (parts.length > 1) {
-      const next = [...values];
-      next.splice(index, 1, ...parts);
-      onChange(next);
+  React.useEffect(() => {
+    if (open) {
+      setDomainId(defaultDomainId);
       return;
     }
-    onChange(values.map((current, position) => (position === index ? value : current)));
-  };
+    setLocalPart("");
+    setMailboxId(null);
+    create.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset on open/close only
+  }, [open]);
 
-  const invalid = values.some(
-    (value) => value.trim().length > 0 && !EMAIL_PATTERN.test(value.trim()),
+  /* A target on another domain is not an alias in Yunori's model, so the
+   * mailbox list follows the chosen domain and resets with it. */
+  React.useEffect(() => {
+    setMailboxId(null);
+  }, [domainId]);
+
+  const mailboxes = useMailboxes(
+    { mail_domain_id: domainId ?? undefined, status: "active", per_page: 200, sort: "address", order: "asc" },
+    open && domainId !== null,
   );
 
-  return (
-    <FormField
-      label="Destinations"
-      required
-      error={error ?? (invalid ? "Every destination has to be a full email address." : undefined)}
-      description="Mail is delivered to each of these. They can live on any domain."
-      hint={`${values.filter((value) => value.trim().length > 0).length} in the map`}
-    >
-      <div className="flex flex-col gap-2">
-        {values.map((value, index) => (
-          <div key={index} className="flex items-center gap-2">
-            <Input
-              mono
-              value={value}
-              data-autofocus={index === 0 ? "" : undefined}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-                setAt(index, event.target.value)
-              }
-              placeholder="alice@example.com"
-              autoComplete="off"
-              spellCheck={false}
-              aria-label={`Destination ${index + 1}`}
-              invalid={value.trim().length > 0 && !EMAIL_PATTERN.test(value.trim())}
-            />
-            <IconButton
-              icon={X}
-              label={`Remove destination ${index + 1}`}
-              size="sm"
-              disabled={values.length === 1}
-              onClick={() => onChange(values.filter((_, position) => position !== index))}
-            />
-          </div>
-        ))}
-        <div>
-          <Button
-            variant="secondary"
-            size="xs"
-            icon={Plus}
-            onClick={() => onChange([...values, ""])}
-          >
-            Add destination
-          </Button>
-        </div>
-      </div>
-    </FormField>
+  const domain = (domains.data?.data ?? []).find((row) => row.id === domainId) ?? null;
+  const options = React.useMemo<ComboboxOption[]>(
+    () =>
+      (mailboxes.data?.data ?? []).map((mailbox) => ({
+        value: mailbox.id,
+        label: mailbox.address,
+        description: mailbox.display_name ?? undefined,
+        mono: true,
+      })),
+    [mailboxes.data],
   );
-}
 
-/* ------------------------------------------------------------------ *
- * Create / edit
- * ------------------------------------------------------------------ */
-
-interface AliasSubmit {
-  domainId: string;
-  address: string;
-  destinations: string[];
-  enabled: boolean;
-}
-
-interface AliasDialogProps {
-  mode: "create" | "edit";
-  alias?: MailAlias;
-  domains: readonly MailDomain[];
-  defaultDomainId: string;
-  submitting: boolean;
-  error: unknown;
-  onClose: () => void;
-  onSubmit: (values: AliasSubmit) => void;
-}
-
-function AliasDialog({
-  mode,
-  alias,
-  domains,
-  defaultDomainId,
-  submitting,
-  error,
-  onClose,
-  onSubmit,
-}: AliasDialogProps) {
-  const [domainId, setDomainId] = React.useState(defaultDomainId);
-  const [localPart, setLocalPart] = React.useState(() =>
-    alias ? alias.address.slice(0, alias.address.lastIndexOf("@")) : "",
-  );
-  const [destinations, setDestinations] = React.useState<string[]>(() =>
-    alias ? [...alias.destinations] : [""],
-  );
-  const [enabled, setEnabled] = React.useState(alias?.enabled ?? true);
-
-  const errors = fieldErrors(error);
-  const domain = domains.find((entry) => entry.id === domainId) ?? null;
-  const domainName = alias?.domain_name ?? domain?.domain_name ?? "";
-  const trimmed = localPart.trim();
-  const address = trimmed && domainName ? `${trimmed}@${domainName}` : "";
-  const cleaned = destinations.map((value) => value.trim()).filter((value) => value.length > 0);
-  const allValid = cleaned.every((value) => EMAIL_PATTERN.test(value));
+  const fields = fieldErrors(create.error);
+  const localValid = LOCAL_PART.test(localPart);
+  const address = `${localPart || "…"}@${domain?.domain_name ?? "…"}`;
 
   return (
     <FormDialog
-      open
-      onOpenChange={(next) => {
-        if (!next) onClose();
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Add an alias"
+      description="Mail to the alias is delivered into the mailbox you pick, on the same domain."
+      submitLabel="Add alias"
+      submitting={create.isPending}
+      canSubmit={domain !== null && localValid && mailboxId !== null}
+      error={create.error}
+      onSubmit={() => {
+        if (!domain || !mailboxId) return;
+        create.mutate(
+          {
+            mail_domain_id: domain.id,
+            local_part: localPart.trim().toLowerCase(),
+            mailbox_id: mailboxId,
+            address: `${localPart.trim().toLowerCase()}@${domain.domain_name}`,
+          },
+          { onSuccess: () => onOpenChange(false) },
+        );
       }}
-      title={mode === "create" ? "New alias" : `Edit ${alias?.address ?? "alias"}`}
-      description="The whole alias map for this domain is rewritten on the host when this is saved."
-      submitLabel={mode === "create" ? "Create alias" : "Save alias"}
-      submitting={submitting}
-      canSubmit={address.length > 0 && cleaned.length > 0 && allValid}
-      error={error}
-      onSubmit={() => onSubmit({ domainId, address, destinations: cleaned, enabled })}
     >
-      {mode === "create" && (
-        <FormField label="Domain" required error={errors["mail_domain_id"]}>
-          <Select
-            value={domainId}
-            onChange={(event) => setDomainId(event.target.value)}
-            placeholder="Pick a domain"
-            options={domains.map((entry) => ({
-              value: entry.id,
-              label: `${entry.domain_name} — ${entry.server_name}`,
-            }))}
-            mono
-          />
-        </FormField>
-      )}
+      <FormField label="Domain" required error={fields["mail_domain_id"]}>
+        <DomainPicker value={domainId} onChange={setDomainId} size="md" className="w-full" />
+      </FormField>
 
       <FormField
-        label="Address"
+        label="Alias"
         required
-        error={errors["address"]}
-        description={
-          address ? (
-            <MonoText muted>{address}</MonoText>
-          ) : (
-            "The left-hand side has to belong to this domain."
-          )
+        description="The part before the @."
+        hint={<MonoText muted>{address}</MonoText>}
+        error={
+          fields["local_part"] ??
+          (localPart.length > 0 && !localValid ? "Use letters, digits, dots, dashes or underscores." : undefined)
         }
       >
         <Input
           mono
           value={localPart}
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
-            setLocalPart(event.target.value)
-          }
-          placeholder="support"
+          placeholder="sales"
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) => setLocalPart(event.target.value)}
           autoComplete="off"
+          autoCorrect="off"
           spellCheck={false}
-          trailing={
-            domainName ? (
-              <span className="kn-mono text-[var(--kn-text-3)]">@{domainName}</span>
-            ) : undefined
-          }
+          trailing={domain ? <span className="kn-mono text-[var(--kn-text-3)]">@{domain.domain_name}</span> : undefined}
         />
       </FormField>
 
-      <DestinationsField
-        values={destinations}
-        onChange={setDestinations}
-        error={errors["destinations"]}
-      />
-
       <FormField
-        label="Apply this alias"
-        description="Off keeps the row in Kaname but leaves it out of the map the host runs."
+        label="Delivers to"
+        required
+        description={domain ? `An active mailbox on ${domain.domain_name}.` : "Pick a domain first."}
+        error={fields["mailbox_id"]}
       >
-        <Select
-          value={enabled ? "true" : "false"}
-          onChange={(event) => setEnabled(event.target.value === "true")}
-          options={[
-            { value: "true", label: "Applied" },
-            { value: "false", label: "Held back" },
-          ]}
-        />
+        {mailboxes.isLoading ? (
+          <Skeleton className="h-8 w-full rounded-[var(--kn-r-md)]" label="Loading mailboxes" />
+        ) : (
+          <Combobox
+            size="md"
+            options={options}
+            value={mailboxId ?? ""}
+            onValueChange={(next) => setMailboxId(next && next.length > 0 ? next : null)}
+            placeholder={
+              domain === null
+                ? "Pick a domain first"
+                : options.length === 0
+                  ? "No active mailbox on this domain"
+                  : "Select a mailbox"
+            }
+            emptyMessage="No mailbox matches that address."
+            disabled={domain === null || options.length === 0}
+            mono
+            aria-label="Target mailbox"
+          />
+        )}
       </FormField>
     </FormDialog>
   );

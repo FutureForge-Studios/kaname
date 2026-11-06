@@ -15,17 +15,17 @@ import {
 } from "../src/agent/index.js";
 
 /* ------------------------------------------------------------------ *
- * Emits the agent method manifest that the Go agent embeds and asserts
+ * Emits the agent method manifest that the Rust agent embeds and asserts
  * against (KD-007).
  *
  * Full struct generation was rejected as too much machinery for the
  * payoff, but the *method list* is the part that actually drifts — a
  * method renamed here and not there fails silently at runtime. Embedding
- * the manifest turns that into a failing `go test`.
+ * the manifest turns that into a failing `cargo test`.
  * ------------------------------------------------------------------ */
 
 const here = dirname(fileURLToPath(import.meta.url));
-const outDir = resolve(here, "..", "..", "..", "agent", "internal", "rpc");
+const outDir = resolve(here, "..", "..", "..", "agent");
 
 interface ManifestMethod {
   name: string;

@@ -1,0 +1,89 @@
+[package]
+name = "kanamed"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "kanamed — the Kaname agent. Dials the control plane and serves an enumerated verb list over one multiplexed socket."
+license = "AGPL-3.0-only"
+repository = "https://github.com/FutureForge-Studios/kaname"
+publish = false
+
+[[bin]]
+name = "kanamed"
+path = "src/main.rs"
+
+[dependencies]
+# runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures-util = "0.3"
+async-trait = "0.1"
+
+# wire
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+tungstenite = { version = "0.26", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+http = "1"
+url = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+hex = "0.4"
+
+# identity
+p256 = { version = "0.13", features = ["ecdsa", "pem", "pkcs8"] }
+x509-cert = { version = "0.2", features = ["builder", "pem"] }
+pem-rfc7468 = { version = "0.7", features = ["alloc", "std"] }
+sec1 = { version = "0.7", features = ["der", "alloc"] }
+sha2 = { version = "0.10", features = ["oid"] }
+rand = "0.8"
+
+# host
+libc = "0.2"
+nix = { version = "0.29", features = ["fs", "process", "signal", "term", "user", "net", "hostname"] }
+sysinfo = { version = "0.33", default-features = false, features = ["system", "disk", "network"] }
+procfs = { version = "0.17", default-features = false }
+hickory-resolver = "0.24"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+zstd = "0.13"
+walkdir = "2"
+glob = "0.3"
+filetime = "0.2"
+mime_guess = "2"
+x509-parser = { version = "0.16", features = ["verify"] }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+
+# misc
+anyhow = "1"
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+clap = { version = "4", features = ["derive"] }
+regex-lite = "0.1"
+uuid = { version = "1", features = ["v4"] }
+once_cell = "1"
+parking_lot = "0.12"
+humantime = "2"
+
+# container runtime (Engine API over the unix socket; hyper is already in the tree via reqwest)
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

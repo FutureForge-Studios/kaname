@@ -8,8 +8,8 @@ import {
   certificates,
   domains,
   jobs,
-  mailAuthChecks,
   mailDomains,
+  mailServers,
   restorePoints,
   servers,
   services,
@@ -285,42 +285,85 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       };
     }
 
-    /* -------------------------- mail DNS auth ------------------------ */
+    /* ------------------------------ mail ------------------------------ */
 
-    if (holds(req, "email.auth:read")) {
-      const rows = await req.ctx.db
+    // Two separate facts from the mail module's cache (KD-012): a server
+    // whose last doctor run has failing checks, and a domain whose
+    // required DNS records are not published. Each links to where the
+    // fix is, not to a generic page.
+    if (holds(req, "email.servers:read")) {
+      const unhealthy = await req.ctx.db
         .select({
+          id: mailServers.id,
+          serverId: mailServers.serverId,
+          serverName: servers.name,
+          hostname: mailServers.hostname,
+          checks: mailServers.checks,
+          syncedAt: mailServers.lastSyncedAt,
+        })
+        .from(mailServers)
+        .innerJoin(servers, eq(mailServers.serverId, servers.id))
+        .where(
+          combine(
+            eq(mailServers.health, "fail"),
+            scopeFilter(req, "email.servers:read", mailServers.serverId),
+          ),
+        );
+
+      for (const row of unhealthy) {
+        const failing = row.checks.filter((c) => c.status === "fail");
+        const first = failing[0];
+        attention.push({
+          kind: "mail_server_unhealthy",
+          severity: "warning",
+          title: `Mail server ${row.hostname ?? row.serverName} has ${failing.length} failing check${failing.length === 1 ? "" : "s"}`,
+          detail: first
+            ? failing.length === 1
+              ? `${first.label}: ${first.detail}`
+              : `Starting with ${first.label}: ${first.detail}`
+            : "The last doctor run reported failures.",
+          server_id: row.serverId,
+          server_name: row.serverName,
+          href: `/email/health?server_id=${row.serverId}`,
+          since: isoOf(row.syncedAt),
+        });
+      }
+
+      const unpublished = await req.ctx.db
+        .select({
+          id: mailDomains.id,
           domainName: domains.name,
           serverId: mailDomains.serverId,
           serverName: servers.name,
-          failing: sql<number>`count(*)::int`,
-          sample: sql<string>`min(${mailAuthChecks.check})`,
-          checkedAt: sql<string>`max(${mailAuthChecks.checkedAt})`,
+          records: mailDomains.dnsRecords,
+          checkedAt: mailDomains.dnsCheckedAt,
         })
-        .from(mailAuthChecks)
-        .innerJoin(mailDomains, eq(mailAuthChecks.mailDomainId, mailDomains.id))
+        .from(mailDomains)
         .innerJoin(domains, eq(mailDomains.domainId, domains.id))
         .innerJoin(servers, eq(mailDomains.serverId, servers.id))
         .where(
           combine(
-            eq(mailAuthChecks.status, "fail"),
-            scopeFilter(req, "email.auth:read", mailDomains.serverId),
+            eq(mailDomains.dnsStatus, "fail"),
+            scopeFilter(req, "email.servers:read", mailDomains.serverId),
           ),
-        )
-        .groupBy(domains.name, mailDomains.serverId, servers.name);
+        );
 
-      for (const row of rows) {
+      for (const row of unpublished) {
+        const failing = row.records.filter((r) => r.required && r.status === "fail");
+        const names = failing.map((r) => r.type);
         attention.push({
           kind: "mail_auth_failing",
           severity: "warning",
-          title: `Mail authentication is failing for ${row.domainName}`,
+          title: `Mail DNS is incomplete for ${row.domainName}`,
           detail:
-            row.failing === 1
-              ? `The ${row.sample.toUpperCase()} check fails — mail from this domain will be treated as spam.`
-              : `${row.failing} checks fail, starting with ${row.sample.toUpperCase()}.`,
+            failing.length === 1
+              ? `The ${names[0]} record is not published; mail from this domain will be treated as spam.`
+              : failing.length > 1
+                ? `${failing.length} required records are not published (${names.join(", ")}).`
+                : "A required DNS record is not published.",
           server_id: row.serverId,
           server_name: row.serverName,
-          href: `/email/authentication?domain=${encodeURIComponent(row.domainName)}`,
+          href: `/email/domains?id=${row.id}`,
           since: isoOf(row.checkedAt),
         });
       }

@@ -1,0 +1,358 @@
+//! kanamed — the Kaname agent.
+//!
+//! Runs as root on a managed host, dials the control plane and serves an
+//! enumerated verb list over one multiplexed socket. It binds no port,
+//! accepts no shell string, and holds the only private key that proves this
+//! machine's identity.
+
+mod conn;
+mod enroll;
+mod handlers;
+mod providers;
+mod registry;
+mod state;
+mod wire;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, bail};
+use clap::{Parser, Subcommand};
+use tokio_util::sync::CancellationToken;
+
+use providers::{Ctx, ProviderRef, topic};
+
+/// Stamped by the release build through `KANAMED_VERSION`; a binary nobody
+/// stamped says so rather than claiming to be a release it is not — the
+/// control plane compares this string against the manifest to decide
+/// whether an update landed.
+pub const VERSION: &str = match option_env!("KANAMED_VERSION") {
+    Some(v) => v,
+    None => "0.0.0-dev",
+};
+
+const METRICS_INTERVAL: Duration = Duration::from_secs(15);
+const BACKOFF_BASE: Duration = Duration::from_secs(1);
+const BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// A connection that lived this long counts as healthy, so the next failure
+/// starts backing off from scratch instead of from the cap.
+const BACKOFF_RESET_AFTER: Duration = Duration::from_secs(60);
+
+#[derive(Parser)]
+#[command(name = "kanamed", version = VERSION, about = "kanamed — the Kaname agent")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Enroll this host with a control plane using a single-use token.
+    Enroll {
+        /// Single-use enrollment token printed by the panel.
+        #[arg(long)]
+        token: String,
+        /// Control plane origin, e.g. https://panel.example.com
+        #[arg(long)]
+        url: String,
+        /// Directory holding the agent's identity.
+        #[arg(long)]
+        state_dir: Option<PathBuf>,
+        #[arg(long, default_value = "info")]
+        log_level: String,
+    },
+    /// Dial the control plane and serve requests (the systemd unit's command).
+    Run {
+        #[arg(long)]
+        state_dir: Option<PathBuf>,
+        /// Serve a deterministic fake host instead of this machine.
+        #[arg(long)]
+        simulate: bool,
+        #[arg(long, default_value = "info")]
+        log_level: String,
+    },
+    /// Print the version and protocol.
+    Version,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let result = runtime.block_on(async {
+        match cli.command.unwrap_or(Command::Run {
+            state_dir: None,
+            simulate: false,
+            log_level: "info".into(),
+        }) {
+            Command::Enroll {
+                token,
+                url,
+                state_dir,
+                log_level,
+            } => {
+                init_logging(&log_level)?;
+                run_enroll(token, url, state_dir).await
+            }
+            Command::Run {
+                state_dir,
+                simulate,
+                log_level,
+            } => {
+                init_logging(&log_level)?;
+                run_agent(state_dir, simulate).await
+            }
+            Command::Version => {
+                println!(
+                    "kanamed {VERSION} (protocol {}, {}/{})",
+                    wire::PROTOCOL_VERSION,
+                    std::env::consts::OS,
+                    std::env::consts::ARCH
+                );
+                Ok(())
+            }
+        }
+    });
+    // Handlers that outlive the socket (a shell being torn down) must not
+    // keep the process alive past the point where it decided to exit.
+    runtime.shutdown_timeout(Duration::from_secs(2));
+    if let Err(err) = result {
+        eprintln!("kanamed: {err:#}");
+        std::process::exit(1);
+    }
+}
+
+fn init_logging(level: &str) -> anyhow::Result<()> {
+    let level = match level.to_ascii_lowercase().as_str() {
+        "trace" => "trace",
+        "debug" => "debug",
+        "info" => "info",
+        "warn" | "warning" => "warn",
+        "error" => "error",
+        other => bail!("unknown log level {other:?}"),
+    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(format!("kanamed={level},warn")));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .try_init()
+        .map_err(|e| anyhow::anyhow!("init logging: {e}"))?;
+    Ok(())
+}
+
+/* -------------------------------- enroll ----------------------------- */
+
+async fn run_enroll(token: String, url: String, state_dir: Option<PathBuf>) -> anyhow::Result<()> {
+    let mut store = state::Store::open(state_dir.as_deref())?;
+    let host = enroll::hostprobe::probe_host()?;
+    enroll::run(
+        &mut store,
+        enroll::EnrollOptions {
+            token,
+            control_plane_url: url,
+            agent_version: VERSION.into(),
+            host,
+        },
+    )
+    .await
+}
+
+/* ---------------------------------- run ------------------------------ */
+
+async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result<()> {
+    // A fake fleet that can be mistaken for a real one is worse than no
+    // fake fleet (KD-010).
+    if simulate && std::env::var("KANAME_ENV").as_deref() == Ok("production") {
+        bail!("--simulate refuses to run with KANAME_ENV=production");
+    }
+
+    let store = state::Store::open(state_dir.as_deref())?;
+    if !store.enrolled() {
+        bail!(
+            "this host is not enrolled: run `kanamed enroll --token <token> --url <panel>` first (state dir: {})",
+            store.dir().display()
+        );
+    }
+
+    let name = if simulate { "sim" } else { "linux" };
+    let provider = providers::open(
+        name,
+        providers::Options {
+            agent_version: VERSION.into(),
+            state_dir: store.dir().to_path_buf(),
+        },
+    )
+    .await?;
+
+    let capabilities = provider.capabilities();
+    let mut registry = registry::Registry::new(registry::CapabilityGate::new(capabilities.clone()));
+    handlers::register_handlers(&mut registry, provider.clone(), &[store.dir()]);
+    let registry = Arc::new(registry);
+
+    let tls = store.tls_config()?;
+    let key = store.private_key()?;
+
+    tracing::info!(
+        version = VERSION,
+        server_id = store.state.server_id,
+        provider = name,
+        capabilities = capabilities.len(),
+        methods = registry.len(),
+        connect_url = store.state.connect_url,
+        "starting"
+    );
+
+    let stop = CancellationToken::new();
+    let signals = stop.clone();
+    tokio::spawn(async move {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("sigterm");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+        signals.cancel();
+    });
+
+    let mut attempt = Backoff::default();
+    while !stop.is_cancelled() {
+        let host = provider.host(&Ctx::background()).await.context("read host identity")?;
+        let opts = conn::Options {
+            server_id: store.state.server_id.clone(),
+            control_plane_url: store.state.control_plane_url.clone(),
+            connect_url: store.state.connect_url.clone(),
+            tls: tls.clone(),
+            private_key: key.clone(),
+            agent_version: VERSION.into(),
+            capabilities: capabilities.clone(),
+            host,
+            registry: registry.clone(),
+        };
+
+        let (lived, err) = session(&stop, provider.clone(), opts).await;
+        if stop.is_cancelled() {
+            break;
+        }
+        if lived >= BACKOFF_RESET_AFTER {
+            attempt.reset();
+        }
+        let delay = attempt.next();
+        tracing::warn!(error = %err, retry_in = ?delay, "disconnected");
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => {}
+            _ = stop.cancelled() => {}
+        }
+    }
+
+    provider.close().await;
+    tracing::info!("stopped");
+    Ok(())
+}
+
+/// Holds one connection open until it fails or the process is asked to
+/// stop, and reports how long it lasted.
+async fn session(stop: &CancellationToken, provider: ProviderRef, opts: conn::Options) -> (Duration, anyhow::Error) {
+    let started = Instant::now();
+    let url = opts.connect_url.clone();
+    let conn = match conn::dial(opts).await {
+        Ok(c) => c,
+        Err(e) => return (started.elapsed(), e),
+    };
+    tracing::info!(url, "connected");
+
+    let handle = conn.handle();
+    let conn_stop = CancellationToken::new();
+    let metrics = tokio::spawn(push_metrics(handle.clone(), provider.clone(), conn_stop.clone()));
+    let events = tokio::spawn(forward_events(handle, provider.clone(), conn_stop.clone()));
+
+    let outcome = conn.serve(stop.clone()).await;
+    conn_stop.cancel();
+    metrics.abort();
+    events.abort();
+    let err = match outcome {
+        Ok(()) => anyhow::anyhow!("closed"),
+        Err(e) => e,
+    };
+    (started.elapsed(), err)
+}
+
+/// Relays the provider's state changes onto the socket, so the control
+/// plane learns a unit failed without polling for it.
+async fn forward_events(handle: conn::ConnHandle, provider: ProviderRef, stop: CancellationToken) {
+    let Some(events) = provider.events() else { return };
+    let closed = handle.closed();
+    loop {
+        let mut rx = events.lock().await;
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = closed.cancelled() => return,
+            event = rx.recv() => match event {
+                Some(event) => {
+                    drop(rx);
+                    if handle.emit(event.topic, event.data).await.is_err() {
+                        return;
+                    }
+                }
+                None => return,
+            }
+        }
+    }
+}
+
+/// Feeds the control plane's health axis. A host that cannot sample itself
+/// simply stops pushing rather than tearing the connection down: metrics are
+/// not why the socket exists.
+async fn push_metrics(handle: conn::ConnHandle, provider: ProviderRef, stop: CancellationToken) {
+    let ctx = Ctx::new(stop.child_token(), None);
+    let mut ticker = tokio::time::interval(METRICS_INTERVAL);
+    loop {
+        match provider.system().metrics(&ctx).await {
+            Ok(sample) => {
+                if let Ok(value) = serde_json::to_value(&sample) {
+                    if handle.emit(topic::METRICS, value).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            Err(providers::ProviderError::Unsupported(_)) => return,
+            Err(err) => {
+                if stop.is_cancelled() {
+                    return;
+                }
+                tracing::warn!(error = %err, "metrics sample failed");
+            }
+        }
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = ticker.tick() => {}
+        }
+    }
+}
+
+/* -------------------------------- backoff ---------------------------- */
+
+/// Exponential with full jitter, capped so a long outage still retries once
+/// a minute rather than drifting into hours.
+#[derive(Default)]
+struct Backoff {
+    attempt: u32,
+}
+
+impl Backoff {
+    fn next(&mut self) -> Duration {
+        let window = BACKOFF_BASE * 2u32.pow(self.attempt.min(6));
+        let window = window.min(BACKOFF_MAX);
+        self.attempt += 1;
+        let half = window / 2;
+        let jitter = rand::Rng::gen_range(&mut rand::thread_rng(), 0..=half.as_millis() as u64);
+        half + Duration::from_millis(jitter)
+    }
+
+    fn reset(&mut self) {
+        self.attempt = 0;
+    }
+}

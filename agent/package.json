@@ -2,11 +2,12 @@
   "name": "@kaname/agent",
   "version": "0.1.0",
   "private": true,
+  "description": "kanamed — the Kaname agent (Rust). These scripts let Turborepo drive cargo.",
   "scripts": {
-    "build": "go build -o bin/kanamed ./cmd/kanamed",
-    "dev": "go run ./cmd/kanamed --simulate",
-    "test": "go test ./...",
-    "typecheck": "go vet ./...",
-    "clean": "rimraf bin"
+    "build": "cargo build --release --locked && mkdir -p bin && cp target/release/kanamed bin/kanamed",
+    "dev": "cargo run -- run --simulate --state-dir .state",
+    "test": "cargo test --locked",
+    "typecheck": "cargo clippy --all-targets --locked -- -D warnings",
+    "clean": "rimraf bin target .state"
   }
 }

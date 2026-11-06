@@ -6,11 +6,11 @@ import "./globals.css";
 /* ------------------------------------------------------------------ *
  * Root layout.
  *
- * Dark is the default and the design target; light ships with the same
- * token names inverted. The choice is applied before first paint by the
- * inline script below — a theme resolved in an effect would flash the
- * wrong palette on every navigation, which on a near-black panel is a
- * white strobe.
+ * Light (the Yunori design: warm paper, ink text) is the default and the
+ * design target; dark ships with the same token names. The choice is
+ * applied before first paint by the inline script below — a theme
+ * resolved in an effect would flash the wrong palette on every
+ * navigation, which for an operator who chose dark is a white strobe.
  * ------------------------------------------------------------------ */
 
 export const metadata: Metadata = {
@@ -29,18 +29,18 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#0b0c0e" },
-    { media: "(prefers-color-scheme: light)", color: "#fbfbfc" },
+    { media: "(prefers-color-scheme: dark)", color: "#060913" },
+    { media: "(prefers-color-scheme: light)", color: "#faf7f2" },
   ],
-  colorScheme: "dark light",
+  colorScheme: "light dark",
 };
 
 /** Mirrors applyTheme() in components/Topbar.tsx. */
-const THEME_SCRIPT = `(function(){try{var s=localStorage.getItem("kaname.theme");var t=s==="light"||s==="dark"?s:(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");document.documentElement.setAttribute("data-theme",t)}catch(e){document.documentElement.setAttribute("data-theme","dark")}})()`;
+const THEME_SCRIPT = `(function(){try{var s=localStorage.getItem("kaname.theme");var t=s==="light"||s==="dark"?s:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",t)}catch(e){document.documentElement.setAttribute("data-theme","light")}})()`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" data-theme="dark" suppressHydrationWarning>
+    <html lang="en" data-theme="light" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>

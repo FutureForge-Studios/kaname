@@ -15,8 +15,8 @@ out/
 
 # agent artifacts
 agent/bin/
+agent/target/
 agent/kanamed
-agent/kanamed.exe
 agent/.state/
 
 # os / editor

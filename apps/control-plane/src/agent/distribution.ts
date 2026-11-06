@@ -21,6 +21,18 @@ const here = dirname(fileURLToPath(import.meta.url));
 /** Only these are servable; the arch comes from a URL parameter. */
 const TARGETS = new Set(["linux-amd64", "linux-arm64", "linux-armv7"]);
 
+/** The Rust target triple behind each asset name (static musl builds). */
+function muslTarget(target: string): string {
+  switch (target.split("-")[1]) {
+    case "amd64":
+      return "x86_64-unknown-linux-musl";
+    case "arm64":
+      return "aarch64-unknown-linux-musl";
+    default:
+      return "armv7-unknown-linux-musleabihf";
+  }
+}
+
 export async function registerDistributionRoutes(
   app: FastifyInstance,
   ctx: AppContext,
@@ -33,7 +45,7 @@ export async function registerDistributionRoutes(
     resolve(here, "..", "public"),
     resolve(here, "..", "..", "public"),
     // Where they are in a checkout: install.sh at the repo root, agent
-    // binaries wherever `go build` left them.
+    // binaries wherever `cargo build` (via `pnpm agent:build`) left them.
     resolve(here, "..", "..", "..", ".."),
     resolve(here, "..", "..", "..", "..", "agent", "bin"),
   ].filter((p): p is string => Boolean(p));
@@ -68,11 +80,11 @@ export async function registerDistributionRoutes(
       ctx.log.warn({ target }, "agent binary requested but not present in this build");
       throw new ApiException("not_found", `The ${target} agent binary is not bundled.`, {
         remediation: {
-          summary: `Build it with: cd agent && GOOS=linux GOARCH=${target.split("-")[1]} go build -o bin/kanamed-${target} ./cmd/kanamed`,
+          summary: `Build it with: cd agent && cargo zigbuild --release --target ${muslTarget(target)} && cp target/${muslTarget(target)}/release/kanamed bin/kanamed-${target}`,
           actions: [
             {
               label: "Copy command",
-              copy: `cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=${target.split("-")[1]} go build -o bin/kanamed-${target} ./cmd/kanamed`,
+              copy: `cd agent && cargo zigbuild --release --target ${muslTarget(target)} && mkdir -p bin && cp target/${muslTarget(target)}/release/kanamed bin/kanamed-${target}`,
             },
           ],
         },

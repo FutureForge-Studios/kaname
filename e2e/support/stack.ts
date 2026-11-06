@@ -1,3 +1,4 @@
+import { copyFile } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -120,14 +121,17 @@ function resetDatabase(): Promise<void> {
 }
 
 /**
- * Built once rather than run through `go run`, because `go run` wraps
- * the agent in a parent process that survives being killed and keeps
- * its socket open long after the suite thinks the fleet is gone.
+ * Built once rather than run through `cargo run`, because the runner
+ * wraps the agent in a parent process that survives being killed and
+ * keeps its socket open long after the suite thinks the fleet is gone.
+ * `cargo build` leaves the binary in target/; it is copied to the
+ * artifacts directory so the rest of the harness has one stable path.
  */
-function buildAgent(): Promise<void> {
-  return run("agent-build", "go", ["build", "-o", agentBinary, "./cmd/kanamed"], {
-    cwd: join(repoRoot, "agent"),
-  });
+async function buildAgent(): Promise<void> {
+  const agentDir = join(repoRoot, "agent");
+  await run("agent-build", "cargo", ["build", "--quiet"], { cwd: agentDir });
+  const built = join(agentDir, "target", "debug", process.platform === "win32" ? "kanamed.exe" : "kanamed");
+  await copyFile(built, agentBinary);
 }
 
 function startControlPlane(): Managed {

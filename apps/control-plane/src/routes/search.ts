@@ -105,7 +105,8 @@ const SOURCES: readonly SourceSpec[] = [
     serverId: "s.id",
     serverName: "s.name",
     icon: "Link2",
-    context: "d.status",
+    // Whether the domain receives mail, so the palette offers the DNS check only where it applies.
+    context: "case when d.has_mail then 'mail' else 'none' end",
     search: ["d.name"],
     rankOn: "d.name",
   },
@@ -117,7 +118,7 @@ const SOURCES: readonly SourceSpec[] = [
     id: "mb.id",
     title: "mb.address",
     subtitle: "mb.status || coalesce(' · ' || mb.display_name, '')",
-    href: "'/email/mailboxes/' || mb.id::text",
+    href: "'/email/mailboxes?q=' || mb.address",
     serverId: "s.id",
     serverName: "s.name",
     icon: "Mail",
@@ -435,14 +436,16 @@ function buildActions(rows: SearchRow[]): SearchAction[] {
           action: "certificates.issue",
           href: `/websites/ssl?domain_id=${row.id}`,
         });
-        push({
-          id: `mail.auth.check:${row.id}`,
-          label: `Check mail DNS for ${row.title}`,
-          hint: "MX, SPF, DKIM, DMARC, PTR and proxy exposure",
-          permission: "email.auth:exec",
-          action: "mail.auth.check",
-          href: `/email/authentication?domain_id=${row.id}`,
-        });
+        if (row.context === "mail") {
+          push({
+            id: `mail.domain.dns_check:${row.id}`,
+            label: `Check mail DNS for ${row.title}`,
+            hint: "MX, SPF, DKIM, DMARC, MTA-STS and autoconfig, verified on public resolvers",
+            permission: "email.servers:exec",
+            action: "mail.domain.dns_check",
+            href: `/email/domains?domain_id=${row.id}`,
+          });
+        }
         break;
 
       case "container":
