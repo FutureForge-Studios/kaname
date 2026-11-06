@@ -25,6 +25,9 @@ use crate::providers::*;
 /// How long one query may take before the resolver is judged unreachable.
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Resolution needs nothing from the shared state, but every sub-operation
+/// carries it so the provider wires them all the same way.
+#[allow(dead_code)]
 pub struct DnsOps(pub Arc<Shared>);
 
 #[async_trait]
@@ -48,8 +51,14 @@ impl Dns for DnsOps {
             Ok(lookup) => lookup,
             // A name that simply does not exist is an answer, not a failure:
             // half the mail-authentication checks are "is this record absent".
-            Err(err) if matches!(err.kind(), ResolveErrorKind::NoRecordsFound { .. }) => return Ok(Vec::new()),
-            Err(err) => return Err(ProviderError::internal(format!("resolve {record_type} {name}: {err}"))),
+            Err(err) if matches!(err.kind(), ResolveErrorKind::NoRecordsFound { .. }) => {
+                return Ok(Vec::new());
+            }
+            Err(err) => {
+                return Err(ProviderError::internal(format!(
+                    "resolve {record_type} {name}: {err}"
+                )));
+            }
         };
 
         let mut values = Vec::new();
@@ -173,6 +182,7 @@ pub fn ptr_name(name: &str) -> Name {
 /// Turns a reverse-zone name back into the address it stands for, and
 /// leaves anything else (a bare address) alone. Kept from the Go original,
 /// where the standard library wanted the address rather than the name.
+#[allow(dead_code)]
 pub fn ptr_target(name: &str) -> String {
     let name = name.to_lowercase();
     let name = name.strip_suffix('.').unwrap_or(&name);
@@ -219,7 +229,10 @@ mod tests {
     #[test]
     fn resolvers_must_be_addresses() {
         assert_eq!(check_resolver("1.1.1.1").unwrap(), "1.1.1.1:53".parse().unwrap());
-        assert_eq!(check_resolver("1.1.1.1:5353").unwrap(), "1.1.1.1:5353".parse().unwrap());
+        assert_eq!(
+            check_resolver("1.1.1.1:5353").unwrap(),
+            "1.1.1.1:5353".parse().unwrap()
+        );
         assert_eq!(check_resolver("[2606:4700::1111]:53").unwrap().port(), 53);
         assert!(check_resolver("dns.google").is_err());
         assert!(check_resolver("").is_err());
@@ -229,15 +242,27 @@ mod tests {
     fn rdata_renders_like_dig_short() {
         let mx = RData::MX(rdata::MX::new(10, Name::from_str("mail.example.com.").unwrap()));
         assert_eq!(render_rdata(&mx).unwrap(), "10 mail.example.com");
-        let srv = RData::SRV(rdata::SRV::new(5, 0, 5060, Name::from_str("sip.example.com.").unwrap()));
+        let srv = RData::SRV(rdata::SRV::new(
+            5,
+            0,
+            5060,
+            Name::from_str("sip.example.com.").unwrap(),
+        ));
         assert_eq!(render_rdata(&srv).unwrap(), "5 0 5060 sip.example.com");
-        let txt = RData::TXT(rdata::TXT::new(vec!["v=DKIM1; k=rsa; ".to_string(), "p=MIGf".to_string()]));
+        let txt = RData::TXT(rdata::TXT::new(vec![
+            "v=DKIM1; k=rsa; ".to_string(),
+            "p=MIGf".to_string(),
+        ]));
         assert_eq!(render_rdata(&txt).unwrap(), "v=DKIM1; k=rsa; p=MIGf");
         let cname = RData::CNAME(rdata::CNAME(Name::from_str("target.example.com.").unwrap()));
         assert_eq!(render_rdata(&cname).unwrap(), "target.example.com");
         let a = RData::A(rdata::A::new(192, 0, 2, 1));
         assert_eq!(render_rdata(&a).unwrap(), "192.0.2.1");
-        let caa = RData::CAA(rdata::CAA::new_issue(false, Some(Name::from_str("letsencrypt.org").unwrap()), vec![]));
+        let caa = RData::CAA(rdata::CAA::new_issue(
+            false,
+            Some(Name::from_str("letsencrypt.org").unwrap()),
+            vec![],
+        ));
         assert_eq!(render_rdata(&caa).unwrap(), "0 issue \"letsencrypt.org\"");
     }
 
@@ -251,6 +276,9 @@ mod tests {
         );
         assert_eq!(ptr_target("short.in-addr.arpa"), "short.in-addr.arpa");
         assert_eq!(ptr_name("1.2.3.4").to_utf8(), "4.3.2.1.in-addr.arpa.");
-        assert_eq!(ptr_name("4.3.2.1.in-addr.arpa").to_utf8(), "4.3.2.1.in-addr.arpa.");
+        assert_eq!(
+            ptr_name("4.3.2.1.in-addr.arpa").to_utf8(),
+            "4.3.2.1.in-addr.arpa."
+        );
     }
 }

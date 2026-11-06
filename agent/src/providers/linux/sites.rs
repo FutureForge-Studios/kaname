@@ -31,7 +31,8 @@ const SITES_AVAILABLE: &str = "/etc/nginx/sites-available";
 const SITES_ENABLED: &str = "/etc/nginx/sites-enabled";
 const NGINX_CONF_D: &str = "/etc/nginx/conf.d";
 
-static SERVER_NAME_DIRECTIVE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^\s*server_name\s+([^;]+);").unwrap());
+static SERVER_NAME_DIRECTIVE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?m)^\s*server_name\s+([^;]+);").unwrap());
 static ROOT_DIRECTIVE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^\s*root\s+([^;]+);").unwrap());
 static UPSTREAM_PATTERN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
@@ -79,7 +80,9 @@ impl Sites for SiteOps {
             }
             let name = entry.file_name().to_string_lossy().into_owned();
             let full = format!("{dir}/{name}");
-            let Ok(raw) = std::fs::read_to_string(&full) else { continue };
+            let Ok(raw) = std::fs::read_to_string(&full) else {
+                continue;
+            };
             sites.push(describe_site(&name, &full, &raw));
         }
 
@@ -204,10 +207,7 @@ impl Sites for SiteOps {
                 valid: true,
                 output: out.trim().to_string(),
             }),
-            Err(ProviderError::Exec { output, .. }) => Ok(SiteTestConfigResult {
-                valid: false,
-                output,
-            }),
+            Err(ProviderError::Exec { output, .. }) => Ok(SiteTestConfigResult { valid: false, output }),
             Err(err) => Err(err),
         }
     }
@@ -250,7 +250,8 @@ impl SiteOps {
         let parent = Path::new(&target).parent().unwrap_or(Path::new("/"));
         mkdir_all(&parent.to_string_lossy(), DEFAULT_DIR_MODE)
             .map_err(|e| wrap_fs_error(&parent.to_string_lossy(), e))?;
-        write_atomic(Path::new(&target), rendered.as_bytes(), 0o644).map_err(|e| wrap_fs_error(&target, e))?;
+        write_atomic(Path::new(&target), rendered.as_bytes(), 0o644)
+            .map_err(|e| wrap_fs_error(&target, e))?;
 
         set_enabled(&meta.name, enabled)?;
 
@@ -318,7 +319,9 @@ pub fn render_site(meta: &SiteMetadata, certs: Option<(&str, &str)>) -> PResult<
         b.push_str(&format!(
             "server {{\n    listen 443 ssl;\n    listen [::]:443 ssl;\n    http2 on;\n    server_name {names};\n"
         ));
-        b.push_str(&format!("    ssl_certificate {chain};\n    ssl_certificate_key {key};\n"));
+        b.push_str(&format!(
+            "    ssl_certificate {chain};\n    ssl_certificate_key {key};\n"
+        ));
         b.push_str("    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_prefer_server_ciphers off;\n");
     } else {
         b.push_str(&format!(
@@ -326,9 +329,18 @@ pub fn render_site(meta: &SiteMetadata, certs: Option<(&str, &str)>) -> PResult<
         ));
     }
 
-    b.push_str(&format!("    root {};\n    index index.html index.htm;\n", meta.webroot));
-    b.push_str(&format!("    access_log /var/log/nginx/{}.access.log;\n", meta.name));
-    b.push_str(&format!("    error_log /var/log/nginx/{}.error.log;\n", meta.name));
+    b.push_str(&format!(
+        "    root {};\n    index index.html index.htm;\n",
+        meta.webroot
+    ));
+    b.push_str(&format!(
+        "    access_log /var/log/nginx/{}.access.log;\n",
+        meta.name
+    ));
+    b.push_str(&format!(
+        "    error_log /var/log/nginx/{}.error.log;\n",
+        meta.name
+    ));
     b.push_str("    client_max_body_size 64m;\n\n");
 
     match meta.runtime.as_str() {
@@ -348,7 +360,10 @@ pub fn render_site(meta: &SiteMetadata, certs: Option<(&str, &str)>) -> PResult<
         }
         "node" | "python" | "proxy" | "container" => {
             b.push_str("    location / {\n");
-            b.push_str(&format!("        proxy_pass {};\n", normalize_upstream(&meta.upstream)));
+            b.push_str(&format!(
+                "        proxy_pass {};\n",
+                normalize_upstream(&meta.upstream)
+            ));
             b.push_str("        proxy_http_version 1.1;\n");
             b.push_str("        proxy_set_header Host $host;\n");
             b.push_str("        proxy_set_header X-Real-IP $remote_addr;\n");
@@ -408,7 +423,9 @@ pub fn describe_site(name: &str, config_path: &str, raw: &str) -> SiteInfo {
 
 pub fn read_metadata(raw: &str) -> Option<SiteMetadata> {
     for line in raw.splitn(4, '\n') {
-        let Some(encoded) = line.strip_prefix(SITE_MARKER) else { continue };
+        let Some(encoded) = line.strip_prefix(SITE_MARKER) else {
+            continue;
+        };
         let meta: SiteMetadata = serde_json::from_str(encoded).ok()?;
         return if meta.name.is_empty() { None } else { Some(meta) };
     }
@@ -416,7 +433,11 @@ pub fn read_metadata(raw: &str) -> Option<SiteMetadata> {
 }
 
 fn config_root() -> &'static str {
-    if dir_exists(SITES_AVAILABLE) { SITES_AVAILABLE } else { NGINX_CONF_D }
+    if dir_exists(SITES_AVAILABLE) {
+        SITES_AVAILABLE
+    } else {
+        NGINX_CONF_D
+    }
 }
 
 fn config_path(name: &str) -> String {
@@ -440,7 +461,11 @@ fn php_socket(version: &str) -> String {
     if !version.is_empty() {
         return format!("/run/php/php{version}-fpm.sock");
     }
-    for candidate in ["/run/php/php-fpm.sock", "/run/php-fpm/www.sock", "/var/run/php-fpm/www.sock"] {
+    for candidate in [
+        "/run/php/php-fpm.sock",
+        "/run/php-fpm/www.sock",
+        "/var/run/php-fpm/www.sock",
+    ] {
         if Path::new(candidate).exists() {
             return candidate.to_string();
         }
@@ -518,7 +543,9 @@ pub fn check_upstream(runtime: &str, upstream: &str) -> PResult<()> {
     if UNIX_UPSTREAM_PATTERN.is_match(upstream) || UPSTREAM_PATTERN.is_match(upstream) {
         return Ok(());
     }
-    Err(invalid("upstream must be host:port, http://host:port or unix:/path"))
+    Err(invalid(
+        "upstream must be host:port, http://host:port or unix:/path",
+    ))
 }
 
 #[cfg(test)]
@@ -573,7 +600,14 @@ server {
         assert!(plain.contains("location ~ /\\.(?!well-known).* { deny all; }"));
         assert!(plain.contains("\"runtime_version\":\"8.3\""));
 
-        let secure = render_site(&m, Some(("/etc/letsencrypt/live/shop.example.com/fullchain.pem", "/etc/letsencrypt/live/shop.example.com/privkey.pem"))).unwrap();
+        let secure = render_site(
+            &m,
+            Some((
+                "/etc/letsencrypt/live/shop.example.com/fullchain.pem",
+                "/etc/letsencrypt/live/shop.example.com/privkey.pem",
+            )),
+        )
+        .unwrap();
         assert!(secure.contains("    location /.well-known/acme-challenge/ { root /var/www/shop; }\n    location / { return 301 https://$host$request_uri; }\n}\n\nserver {\n    listen 443 ssl;\n    listen [::]:443 ssl;\n    http2 on;\n"));
         assert!(secure.contains("    ssl_certificate /etc/letsencrypt/live/shop.example.com/fullchain.pem;\n    ssl_certificate_key /etc/letsencrypt/live/shop.example.com/privkey.pem;\n    ssl_protocols TLSv1.2 TLSv1.3;\n    ssl_prefer_server_ciphers off;\n"));
     }
@@ -583,12 +617,20 @@ server {
         let mut m = meta("node");
         m.upstream = "127.0.0.1:3000".into();
         let rendered = render_site(&m, None).unwrap();
-        assert!(rendered.contains("        proxy_pass http://127.0.0.1:3000;\n        proxy_http_version 1.1;\n"));
-        assert!(rendered.contains("        proxy_set_header Connection \"upgrade\";\n        proxy_read_timeout 300s;\n    }\n}\n"));
+        assert!(
+            rendered.contains("        proxy_pass http://127.0.0.1:3000;\n        proxy_http_version 1.1;\n")
+        );
+        assert!(rendered.contains(
+            "        proxy_set_header Connection \"upgrade\";\n        proxy_read_timeout 300s;\n    }\n}\n"
+        ));
         assert!(rendered.contains("\"upstream\":\"127.0.0.1:3000\""));
 
         m.upstream = "unix:/run/app.sock".into();
-        assert!(render_site(&m, None).unwrap().contains("proxy_pass unix:/run/app.sock;"));
+        assert!(
+            render_site(&m, None)
+                .unwrap()
+                .contains("proxy_pass unix:/run/app.sock;")
+        );
 
         assert!(render_site(&meta("ruby"), None).is_err());
         let mut nameless = meta("static");
@@ -615,7 +657,11 @@ server {
         assert_eq!(info.runtime, "php");
         assert_eq!(info.runtime_version, None);
 
-        let managed = describe_site("shop.conf", "/x/shop.conf", &render_site(&meta("static"), None).unwrap());
+        let managed = describe_site(
+            "shop.conf",
+            "/x/shop.conf",
+            &render_site(&meta("static"), None).unwrap(),
+        );
         assert_eq!(managed.name, "shop");
         assert_eq!(managed.runtime, "static");
     }
