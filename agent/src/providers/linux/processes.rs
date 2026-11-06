@@ -89,8 +89,13 @@ impl Processes for ProcessOps {
         match nix::sys::signal::kill(nix::unistd::Pid::from_raw(p.pid as i32), signal) {
             Ok(()) => Ok(()),
             Err(nix::errno::Errno::ESRCH) => Err(not_found(format!("process {}", p.pid))),
-            Err(nix::errno::Errno::EPERM) => Err(ProviderError::PermissionDenied(format!("signal {}", p.pid))),
-            Err(e) => Err(ProviderError::internal(format!("signal {} with {}: {e}", p.pid, p.signal))),
+            Err(nix::errno::Errno::EPERM) => {
+                Err(ProviderError::PermissionDenied(format!("signal {}", p.pid)))
+            }
+            Err(e) => Err(ProviderError::internal(format!(
+                "signal {} with {}: {e}",
+                p.pid, p.signal
+            ))),
         }
     }
 }
@@ -102,13 +107,16 @@ impl ProcessOps {
     /// skipped rather than failing the call: the table is a sample, not a
     /// transaction.
     fn snapshot(&self, ctx: &Ctx) -> PResult<Vec<ProcessInfo>> {
-        let dir = std::fs::read_dir("/proc").map_err(|e| ProviderError::internal(format!("read process table: {e}")))?;
+        let dir = std::fs::read_dir("/proc")
+            .map_err(|e| ProviderError::internal(format!("read process table: {e}")))?;
         let host = HostClock::read();
 
         let mut out = Vec::with_capacity(256);
         for entry in dir.flatten() {
             ctx.check()?;
-            let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else { continue };
+            let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else {
+                continue;
+            };
             if let Some(info) = self.describe(pid, &host) {
                 out.push(info);
             }
@@ -122,7 +130,11 @@ impl ProcessOps {
         let status = std::fs::read_to_string(format!("{root}/status")).unwrap_or_default();
         let status = parse_status(&status);
 
-        let name = status.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| stat.comm.clone());
+        let name = status
+            .name
+            .clone()
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| stat.comm.clone());
         let mut info = ProcessInfo {
             pid: pid as i64,
             ppid: stat.ppid as i64,
@@ -177,7 +189,9 @@ struct HostClock {
 
 impl HostClock {
     fn read() -> Self {
-        let meminfo = std::fs::read_to_string("/proc/meminfo").map(|s| parse_meminfo(&s)).unwrap_or_default();
+        let meminfo = std::fs::read_to_string("/proc/meminfo")
+            .map(|s| parse_meminfo(&s))
+            .unwrap_or_default();
         Self {
             ticks: nix::unistd::sysconf(nix::unistd::SysconfVar::CLK_TCK)
                 .ok()
@@ -260,7 +274,10 @@ pub fn parse_status(raw: &str) -> ProcStatus {
 /// way `ps` prints it.
 pub fn format_cmdline(raw: &[u8]) -> String {
     let text = String::from_utf8_lossy(raw);
-    text.trim_end_matches('\0').split('\0').collect::<Vec<_>>().join(" ")
+    text.trim_end_matches('\0')
+        .split('\0')
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Narrows the kernel's state letters to the contract's enum.
@@ -371,7 +388,10 @@ mod tests {
 
     #[test]
     fn cmdlines_are_joined_and_truncated() {
-        assert_eq!(format_cmdline(b"/usr/bin/python3\0app.py\0--port\08080\0"), "/usr/bin/python3 app.py --port 8080");
+        assert_eq!(
+            format_cmdline(b"/usr/bin/python3\0app.py\0--port\08080\0"),
+            "/usr/bin/python3 app.py --port 8080"
+        );
         assert_eq!(format_cmdline(b""), "");
         assert_eq!(truncate_string("abcdef", 3), "abc…");
         assert_eq!(truncate_string("abc", 3), "abc");
@@ -404,7 +424,14 @@ mod tests {
 
     #[test]
     fn tree_is_depth_first_with_depths_and_survives_cycles() {
-        let all = vec![proc(1, 0), proc(2, 1), proc(3, 1), proc(4, 2), proc(7, 7), proc(9, 42)];
+        let all = vec![
+            proc(1, 0),
+            proc(2, 1),
+            proc(3, 1),
+            proc(4, 2),
+            proc(7, 7),
+            proc(9, 42),
+        ];
         let nodes = build_tree(all.clone(), None).unwrap();
         let laid_out: Vec<(i64, i64)> = nodes.iter().map(|n| (n.process.pid, n.depth)).collect();
         assert_eq!(laid_out, vec![(1, 0), (2, 1), (4, 2), (3, 1), (7, 0), (9, 0)]);
@@ -413,6 +440,9 @@ mod tests {
         let laid_out: Vec<(i64, i64)> = sub.iter().map(|n| (n.process.pid, n.depth)).collect();
         assert_eq!(laid_out, vec![(2, 0), (4, 1)]);
 
-        assert!(matches!(build_tree(all, Some(99)), Err(ProviderError::NotFound(_))));
+        assert!(matches!(
+            build_tree(all, Some(99)),
+            Err(ProviderError::NotFound(_))
+        ));
     }
 }

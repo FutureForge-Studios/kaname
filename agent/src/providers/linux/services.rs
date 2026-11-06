@@ -158,7 +158,11 @@ impl ServiceOps {
         self.0.require(cap::SYSTEMD)?;
 
         let name = qualify(unit);
-        run_with(ctx, ExecOptions::new("systemctl", [verb, name.as_str()]).c_locale()).await?;
+        run_with(
+            ctx,
+            ExecOptions::new("systemctl", [verb, name.as_str()]).c_locale(),
+        )
+        .await?;
         // The unit's own state is what the panel renders, so report it as it
         // is now rather than assuming the verb's intent took effect.
         self.status(ctx, &name).await
@@ -184,7 +188,14 @@ impl ServiceOps {
             ctx,
             ExecOptions::new(
                 "systemctl",
-                ["list-unit-files", "--type=service", "--full", "--plain", "--no-legend", "--no-pager"],
+                [
+                    "list-unit-files",
+                    "--type=service",
+                    "--full",
+                    "--plain",
+                    "--no-legend",
+                    "--no-pager",
+                ],
             )
             .c_locale(),
         )
@@ -236,7 +247,9 @@ pub fn parse_show(out: &str, boot_secs: u64) -> HashMap<String, ServiceInfo> {
             flush(&mut block);
             continue;
         }
-        let Some((key, value)) = line.split_once('=') else { continue };
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
         block.insert(key.to_string(), value.to_string());
     }
     flush(&mut block);
@@ -309,7 +322,11 @@ pub fn active_state(value: &str) -> &str {
 /// Defaults a bare name to a .service unit, which is what an operator
 /// means when they type "nginx".
 pub fn qualify(unit: &str) -> String {
-    if unit.contains('.') { unit.to_string() } else { format!("{unit}.service") }
+    if unit.contains('.') {
+        unit.to_string()
+    } else {
+        format!("{unit}.service")
+    }
 }
 
 fn parse_unsigned(value: &str) -> Option<i64> {
@@ -321,8 +338,8 @@ fn parse_unsigned(value: &str) -> Option<i64> {
 
 pub fn check_unit_state(state: &str) -> PResult<()> {
     match state {
-        "active" | "reloading" | "inactive" | "failed" | "activating" | "deactivating" | "running" | "exited"
-        | "dead" | "enabled" | "disabled" | "static" => Ok(()),
+        "active" | "reloading" | "inactive" | "failed" | "activating" | "deactivating" | "running"
+        | "exited" | "dead" | "enabled" | "disabled" | "static" => Ok(()),
         _ => Err(invalid(format!("state {state:?} is not a systemd unit state"))),
     }
 }
