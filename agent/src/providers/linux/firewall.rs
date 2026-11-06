@@ -22,17 +22,19 @@ use regex_lite::Regex;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use super::Shared;
 use super::common::{invalid, not_found, now_rfc3339, precondition, rfc3339, split_lines, unsupported};
 use super::exec::{self, ExecOptions};
-use super::Shared;
 use crate::providers::*;
 
 pub use render::*;
 
 static IPV4_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b").unwrap());
-static IPV6_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}\b").unwrap());
-static UFW_RULE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\[\s*(\d+)\]\s+(.*?)\s{2,}(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT)\s*(.*)$").unwrap());
+static IPV6_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}\b").unwrap());
+static UFW_RULE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"^\[\s*(\d+)\]\s+(.*?)\s{2,}(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT)\s*(.*)$").unwrap()
+});
 
 pub struct FirewallOps(pub Arc<Shared>);
 
@@ -45,7 +47,10 @@ fn tool(name: &str, args: &[&str]) -> ExecOptions {
 /// The context a scheduled revert runs under: nothing cancels it but its
 /// own deadline, mirroring the 60-second budget the Go guard gave it.
 fn revert_ctx() -> Ctx {
-    Ctx::new(CancellationToken::new(), Some(Instant::now() + Duration::from_secs(60)))
+    Ctx::new(
+        CancellationToken::new(),
+        Some(Instant::now() + Duration::from_secs(60)),
+    )
 }
 
 impl FirewallOps {
@@ -84,7 +89,8 @@ impl Firewall for FirewallOps {
 
         match backend {
             cap::NFTABLES => {
-                let Ok(out) = exec::run_with(ctx, tool("nft", &["list", "table", "inet", NFT_TABLE])).await else {
+                let Ok(out) = exec::run_with(ctx, tool("nft", &["list", "table", "inet", NFT_TABLE])).await
+                else {
                     return Ok(status);
                 };
                 status.enabled = true;
@@ -201,7 +207,14 @@ impl Firewall for FirewallOps {
                     ctx,
                     tool(
                         "nft",
-                        &["add", "element", "inet", NFT_BAN_TABLE, ban_set(family), &format!("{{ {element} }}")],
+                        &[
+                            "add",
+                            "element",
+                            "inet",
+                            NFT_BAN_TABLE,
+                            ban_set(family),
+                            &format!("{{ {element} }}"),
+                        ],
                     ),
                 )
                 .await?;
@@ -213,7 +226,19 @@ impl Firewall for FirewallOps {
                     ctx,
                     tool(
                         binary,
-                        &["-I", "INPUT", "1", "-s", &target, "-m", "comment", "--comment", IPTABLES_BAN_COMMENT, "-j", "DROP"],
+                        &[
+                            "-I",
+                            "INPUT",
+                            "1",
+                            "-s",
+                            &target,
+                            "-m",
+                            "comment",
+                            "--comment",
+                            IPTABLES_BAN_COMMENT,
+                            "-j",
+                            "DROP",
+                        ],
                     ),
                 )
                 .await?;
@@ -236,7 +261,14 @@ impl Firewall for FirewallOps {
                     ctx,
                     tool(
                         "nft",
-                        &["delete", "element", "inet", NFT_BAN_TABLE, ban_set(family), &format!("{{ {target} }}")],
+                        &[
+                            "delete",
+                            "element",
+                            "inet",
+                            NFT_BAN_TABLE,
+                            ban_set(family),
+                            &format!("{{ {target} }}"),
+                        ],
                     ),
                 )
                 .await?;
@@ -248,7 +280,18 @@ impl Firewall for FirewallOps {
                     ctx,
                     tool(
                         binary,
-                        &["-D", "INPUT", "-s", &target, "-m", "comment", "--comment", IPTABLES_BAN_COMMENT, "-j", "DROP"],
+                        &[
+                            "-D",
+                            "INPUT",
+                            "-s",
+                            &target,
+                            "-m",
+                            "comment",
+                            "--comment",
+                            IPTABLES_BAN_COMMENT,
+                            "-j",
+                            "DROP",
+                        ],
                     ),
                 )
                 .await?;
@@ -265,7 +308,9 @@ impl Firewall for FirewallOps {
         let mut bans = Vec::with_capacity(32);
 
         if self.0.has(cap::NFTABLES) {
-            if let Ok(out) = exec::run_with(ctx, tool("nft", &["-j", "list", "table", "inet", NFT_BAN_TABLE])).await {
+            if let Ok(out) =
+                exec::run_with(ctx, tool("nft", &["-j", "list", "table", "inet", NFT_BAN_TABLE])).await
+            {
                 bans.extend(parse_nft_bans(&out));
             }
         }
@@ -284,7 +329,9 @@ impl Firewall for FirewallOps {
 
         let mut seen: HashMap<String, Observation> = HashMap::new();
         for record in records {
-            let Some((kind, target)) = classify_threat(&record.message) else { continue };
+            let Some((kind, target)) = classify_threat(&record.message) else {
+                continue;
+            };
             let address = IPV4_PATTERN
                 .find(&record.message)
                 .or_else(|| IPV6_PATTERN.find(&record.message))
@@ -297,15 +344,17 @@ impl Firewall for FirewallOps {
             let timestamp = DateTime::parse_from_rfc3339(&record.ts)
                 .map(|t| t.with_timezone(&Utc))
                 .unwrap_or_else(|_| Utc::now());
-            let entry = seen.entry(format!("{address}{kind}")).or_insert_with(|| Observation {
-                kind,
-                target,
-                address: address.clone(),
-                attempts: 0,
-                first_seen: timestamp,
-                last_seen: timestamp,
-                sample: record.message.clone(),
-            });
+            let entry = seen
+                .entry(format!("{address}{kind}"))
+                .or_insert_with(|| Observation {
+                    kind,
+                    target,
+                    address: address.clone(),
+                    attempts: 0,
+                    first_seen: timestamp,
+                    last_seen: timestamp,
+                    sample: record.message.clone(),
+                });
             entry.attempts += 1;
             entry.last_seen = timestamp;
             if timestamp < entry.first_seen {
@@ -326,7 +375,11 @@ impl Firewall for FirewallOps {
             })
             .collect();
 
-        observations.sort_by(|a, b| b.attempts.cmp(&a.attempts).then_with(|| a.source_ip.cmp(&b.source_ip)));
+        observations.sort_by(|a, b| {
+            b.attempts
+                .cmp(&a.attempts)
+                .then_with(|| a.source_ip.cmp(&b.source_ip))
+        });
         if p.limit > 0 && observations.len() > p.limit as usize {
             observations.truncate(p.limit as usize);
         }
@@ -341,8 +394,8 @@ impl FirewallOps {
         let out = exec::run_with(ctx, tool("nft", &["-j", "list", "ruleset"])).await?;
 
         // The subset of `nft -j list ruleset` this agent reads.
-        let parsed: Value =
-            serde_json::from_str(&out).map_err(|e| ProviderError::internal(format!("decode nft ruleset: {e}")))?;
+        let parsed: Value = serde_json::from_str(&out)
+            .map_err(|e| ProviderError::internal(format!("decode nft ruleset: {e}")))?;
 
         let mut rules = Vec::with_capacity(32);
         let mut priority = 0;
@@ -393,7 +446,9 @@ impl FirewallOps {
 
         let mut rules = Vec::with_capacity(32);
         for line in split_lines(&out) {
-            let Some(m) = UFW_RULE.captures(line.trim()) else { continue };
+            let Some(m) = UFW_RULE.captures(line.trim()) else {
+                continue;
+            };
             let priority: i64 = m[1].parse().unwrap_or_default();
 
             let mut rule = FirewallRuleInfo {
@@ -452,11 +507,14 @@ fn describe_nft_match(m: &Value, rule: &mut FirewallRuleInfo) {
         rule.protocol = normalize_firewall_protocol(&value).into();
         return;
     }
-    let Some(payload) = left.get("payload").filter(|p| p.is_object()) else { return };
+    let Some(payload) = left.get("payload").filter(|p| p.is_object()) else {
+        return;
+    };
     match payload["field"].as_str().unwrap_or_default() {
         "dport" => {
             rule.port_spec = Some(value);
-            rule.protocol = normalize_firewall_protocol(payload["protocol"].as_str().unwrap_or_default()).into();
+            rule.protocol =
+                normalize_firewall_protocol(payload["protocol"].as_str().unwrap_or_default()).into();
         }
         "sport" => rule.port_spec = Some(value),
         "saddr" => rule.source = Some(value),
@@ -486,7 +544,11 @@ fn render_nft_value(raw: &Value) -> String {
             if let Some(prefix) = map.get("prefix").and_then(Value::as_object) {
                 return format!("{}/{}", scalar_text(&prefix["addr"]), scalar_text(&prefix["len"]));
             }
-            if let Some(window) = map.get("range").and_then(Value::as_array).filter(|w| w.len() == 2) {
+            if let Some(window) = map
+                .get("range")
+                .and_then(Value::as_array)
+                .filter(|w| w.len() == 2)
+            {
                 return format!("{}-{}", scalar_text(&window[0]), scalar_text(&window[1]));
             }
             String::new()
@@ -541,7 +603,11 @@ impl FirewallOps {
     /// in which half the rules are live. The argv is a constant; the rule
     /// set travels on stdin.
     async fn apply_nft(&self, ctx: &Ctx, p: &FwApplyParams) -> PResult<()> {
-        exec::run_with(ctx, tool("nft", &["-f", "-"]).stdin(render_nft_script(p).into_bytes())).await?;
+        exec::run_with(
+            ctx,
+            tool("nft", &["-f", "-"]).stdin(render_nft_script(p).into_bytes()),
+        )
+        .await?;
         Ok(())
     }
 
@@ -550,7 +616,9 @@ impl FirewallOps {
             exec::run_with(ctx, ExecOptions::new("iptables", args).c_locale()).await?;
         }
         for rule in ordered_rules(&p.rules) {
-            let Some(args) = iptables_args(&rule) else { continue };
+            let Some(args) = iptables_args(&rule) else {
+                continue;
+            };
             exec::run_with(ctx, ExecOptions::new("iptables", args).c_locale()).await?;
         }
         Ok(())
@@ -589,10 +657,14 @@ impl FirewallOps {
 
         match backend {
             cap::NFTABLES => {
-                snapshot.ruleset = exec::run_with(ctx, tool("nft", &["list", "ruleset"])).await?.into_bytes();
+                snapshot.ruleset = exec::run_with(ctx, tool("nft", &["list", "ruleset"]))
+                    .await?
+                    .into_bytes();
             }
             cap::IPTABLES => {
-                snapshot.ruleset = exec::run_with(ctx, tool("iptables-save", &[])).await?.into_bytes();
+                snapshot.ruleset = exec::run_with(ctx, tool("iptables-save", &[]))
+                    .await?
+                    .into_bytes();
                 if let Ok(out6) = exec::run_with(ctx, tool("ip6tables-save", &[])).await {
                     snapshot.rules6 = out6.into_bytes();
                 }
@@ -600,8 +672,8 @@ impl FirewallOps {
             _ => {
                 // ufw keeps its rule set on disk, so the files are the snapshot.
                 let user_rules = Path::new(UFW_RULES_DIR).join("user.rules");
-                snapshot.ruleset =
-                    std::fs::read(&user_rules).map_err(|e| wrap_fs_error(&user_rules.display().to_string(), e))?;
+                snapshot.ruleset = std::fs::read(&user_rules)
+                    .map_err(|e| wrap_fs_error(&user_rules.display().to_string(), e))?;
                 if let Ok(raw6) = std::fs::read(Path::new(UFW_RULES_DIR).join("user6.rules")) {
                     snapshot.rules6 = raw6;
                 }
@@ -631,7 +703,12 @@ impl FirewallOps {
                 continue;
             }
             let list = line.split_once(':').map(|(_, l)| l).unwrap_or_default();
-            jails.extend(list.split(',').map(str::trim).filter(|j| !j.is_empty()).map(str::to_string));
+            jails.extend(
+                list.split(',')
+                    .map(str::trim)
+                    .filter(|j| !j.is_empty())
+                    .map(str::to_string),
+            );
         }
 
         let mut bans = Vec::with_capacity(16);
@@ -680,9 +757,17 @@ async fn restore(ctx: &Ctx, snapshot: &FirewallSnapshot) -> PResult<()> {
             Ok(())
         }
         cap::UFW => {
-            exec::write_atomic(&Path::new(UFW_RULES_DIR).join("user.rules"), &snapshot.ruleset, 0o640)?;
+            exec::write_atomic(
+                &Path::new(UFW_RULES_DIR).join("user.rules"),
+                &snapshot.ruleset,
+                0o640,
+            )?;
             if !snapshot.rules6.is_empty() {
-                exec::write_atomic(&Path::new(UFW_RULES_DIR).join("user6.rules"), &snapshot.rules6, 0o640)?;
+                exec::write_atomic(
+                    &Path::new(UFW_RULES_DIR).join("user6.rules"),
+                    &snapshot.rules6,
+                    0o640,
+                )?;
             }
             exec::run_with(ctx, tool("ufw", &["reload"])).await?;
             Ok(())
@@ -692,7 +777,9 @@ async fn restore(ctx: &Ctx, snapshot: &FirewallSnapshot) -> PResult<()> {
 }
 
 fn parse_nft_bans(out: &str) -> Vec<BanEntry> {
-    let Ok(parsed) = serde_json::from_str::<Value>(out) else { return Vec::new() };
+    let Ok(parsed) = serde_json::from_str::<Value>(out) else {
+        return Vec::new();
+    };
 
     let mut bans = Vec::with_capacity(16);
     for node in parsed["nftables"].as_array().into_iter().flatten() {
@@ -783,10 +870,13 @@ fn journal_record(line: &str) -> Option<LogRecord> {
     let message = match &parsed["MESSAGE"] {
         Value::String(s) => s.clone(),
         // journald exports a non-UTF8 message as an array of byte values.
-        Value::Array(octets) => {
-            String::from_utf8_lossy(&octets.iter().filter_map(|o| o.as_u64().map(|b| b as u8)).collect::<Vec<u8>>())
-                .into_owned()
-        }
+        Value::Array(octets) => String::from_utf8_lossy(
+            &octets
+                .iter()
+                .filter_map(|o| o.as_u64().map(|b| b as u8))
+                .collect::<Vec<u8>>(),
+        )
+        .into_owned(),
         Value::Null => String::new(),
         other => other.to_string(),
     };
@@ -831,7 +921,10 @@ fn parse_since(value: &str) -> PResult<DateTime<Utc>> {
 /// across versions.
 fn journal_since(value: &str) -> PResult<String> {
     let parsed = parse_since(value)?;
-    Ok(parsed.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+    Ok(parsed
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string())
 }
 
 /// Recognises the failure shapes worth reporting. Anything unrecognised is
@@ -907,8 +1000,9 @@ pub mod render {
     pub const IPTABLES_BAN_COMMENT: &str = "kaname-ban";
     pub const UFW_RULES_DIR: &str = "/etc/ufw";
 
-    static PORT_SPEC_OK: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"^[0-9]{1,5}(?:[-:][0-9]{1,5})?(?:,[0-9]{1,5}(?:[-:][0-9]{1,5})?)*$").unwrap());
+    static PORT_SPEC_OK: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"^[0-9]{1,5}(?:[-:][0-9]{1,5})?(?:,[0-9]{1,5}(?:[-:][0-9]{1,5})?)*$").unwrap()
+    });
 
     fn present(value: &Option<String>) -> Option<&str> {
         value.as_deref().filter(|v| !v.is_empty())
@@ -943,7 +1037,9 @@ pub mod render {
             b.push_str(&format!("  chain {name} {{\n"));
             // Numeric priority rather than the `filter` keyword: the keyword
             // only arrived in nft 0.9 and this has to load on an older host too.
-            b.push_str(&format!("    type filter hook {hook} priority 0; policy {policy};\n"));
+            b.push_str(&format!(
+                "    type filter hook {hook} priority 0; policy {policy};\n"
+            ));
             b.push_str("    ct state established,related accept\n");
             b.push_str("    ct state invalid drop\n");
             if name == "input" {
@@ -1012,7 +1108,16 @@ pub mod render {
         let s = |items: &[&str]| items.iter().map(|i| i.to_string()).collect::<Vec<String>>();
         vec![
             s(&["-F"]),
-            s(&["-A", "INPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"]),
+            s(&[
+                "-A",
+                "INPUT",
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "ESTABLISHED,RELATED",
+                "-j",
+                "ACCEPT",
+            ]),
             s(&["-A", "INPUT", "-i", "lo", "-j", "ACCEPT"]),
             s(&["-P", "INPUT", iptables_policy(&p.default_inbound)]),
             s(&["-P", "OUTPUT", iptables_policy(&p.default_outbound)]),
@@ -1022,7 +1127,11 @@ pub mod render {
 
     /// The argv for one rule, or `None` when iptables cannot express it.
     pub fn iptables_args(rule: &FirewallRule) -> Option<Vec<String>> {
-        let chain = if rule.direction == "outbound" { "OUTPUT" } else { "INPUT" };
+        let chain = if rule.direction == "outbound" {
+            "OUTPUT"
+        } else {
+            "INPUT"
+        };
         let mut args: Vec<String> = vec!["-A".into(), chain.into()];
 
         if rule.protocol != "any" {
@@ -1034,7 +1143,12 @@ pub mod render {
                 return None;
             }
             if spec.contains(',') {
-                args.extend(["-m".to_string(), "multiport".into(), "--dports".into(), spec.to_string()]);
+                args.extend([
+                    "-m".to_string(),
+                    "multiport".into(),
+                    "--dports".into(),
+                    spec.to_string(),
+                ]);
             } else {
                 args.extend(["--dport".to_string(), spec.replace('-', ":")]);
             }
@@ -1046,7 +1160,12 @@ pub mod render {
             args.extend(["-d".to_string(), destination.to_string()]);
         }
         if let Some(comment) = present(&rule.comment) {
-            args.extend(["-m".to_string(), "comment".into(), "--comment".into(), sanitize_comment(comment)]);
+            args.extend([
+                "-m".to_string(),
+                "comment".into(),
+                "--comment".into(),
+                sanitize_comment(comment),
+            ]);
         }
         args.extend(["-j".to_string(), iptables_target(&rule.action).into()]);
         Some(args)
@@ -1064,7 +1183,11 @@ pub mod render {
 
     pub fn ufw_args(rule: &FirewallRule) -> Option<Vec<String>> {
         let mut args: Vec<String> = vec![rule.action.clone()];
-        args.push(if rule.direction == "outbound" { "out".into() } else { "in".into() });
+        args.push(if rule.direction == "outbound" {
+            "out".into()
+        } else {
+            "in".into()
+        });
         match present(&rule.source) {
             Some(source) => args.extend(["from".to_string(), source.to_string()]),
             None => args.extend(["from".to_string(), "any".into()]),
@@ -1082,7 +1205,12 @@ pub mod render {
                 rule.protocol.clone(),
             ]);
         } else if rule.protocol == "tcp" || rule.protocol == "udp" {
-            args.extend(["to".to_string(), "any".into(), "proto".into(), rule.protocol.clone()]);
+            args.extend([
+                "to".to_string(),
+                "any".into(),
+                "proto".into(),
+                rule.protocol.clone(),
+            ]);
         }
         if let Some(comment) = present(&rule.comment) {
             args.extend(["comment".to_string(), sanitize_comment(comment)]);
@@ -1136,7 +1264,11 @@ pub mod render {
                     if length > 128 {
                         return Err(reject());
                     }
-                    let mask = if length == 0 { 0 } else { u128::MAX << (128 - length) };
+                    let mask = if length == 0 {
+                        0
+                    } else {
+                        u128::MAX << (128 - length)
+                    };
                     let network = Ipv6Addr::from(u128::from(v6) & mask);
                     Ok((format!("{network}/{length}"), "ip6"))
                 }
@@ -1211,7 +1343,11 @@ pub mod render {
     }
 
     pub fn policy_from_iptables(policy: &str) -> &'static str {
-        if policy == "DROP" || policy == "REJECT" { "deny" } else { "allow" }
+        if policy == "DROP" || policy == "REJECT" {
+            "deny"
+        } else {
+            "allow"
+        }
     }
 
     pub fn direction_from_chain(chain: &str) -> &'static str {
@@ -1239,7 +1375,9 @@ pub mod render {
     }
 
     pub fn split_ufw_target(target: &str) -> (&str, &'static str) {
-        let Some(first) = target.split_whitespace().next() else { return ("", "") };
+        let Some(first) = target.split_whitespace().next() else {
+            return ("", "");
+        };
         match first.split_once('/') {
             Some((port, protocol)) => (port, normalize_firewall_protocol(protocol)),
             None => (first, ""),
@@ -1322,7 +1460,18 @@ mod tests {
             (
                 "a port list needs the multiport match",
                 rule(|r| r.port_spec = s("80,443")),
-                vec!["-A", "INPUT", "-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "ACCEPT"],
+                vec![
+                    "-A",
+                    "INPUT",
+                    "-p",
+                    "tcp",
+                    "-m",
+                    "multiport",
+                    "--dports",
+                    "80,443",
+                    "-j",
+                    "ACCEPT",
+                ],
             ),
             (
                 "an outbound deny with a source",
@@ -1341,7 +1490,18 @@ mod tests {
                     r.destination = s("192.0.2.10");
                     r.port_spec = s("25");
                 }),
-                vec!["-A", "INPUT", "-p", "tcp", "--dport", "25", "-d", "192.0.2.10", "-j", "REJECT"],
+                vec![
+                    "-A",
+                    "INPUT",
+                    "-p",
+                    "tcp",
+                    "--dport",
+                    "25",
+                    "-d",
+                    "192.0.2.10",
+                    "-j",
+                    "REJECT",
+                ],
             ),
             // Protocol "any" means the -p flag is left off entirely rather
             // than passed as the literal word "any".
@@ -1393,7 +1553,10 @@ mod tests {
             r.protocol = "icmp".into();
             r.port_spec = s("22");
         }));
-        assert!(args.is_none(), "an icmp rule with a port produced {args:?}, want it dropped");
+        assert!(
+            args.is_none(),
+            "an icmp rule with a port produced {args:?}, want it dropped"
+        );
     }
 
     #[test]
@@ -1406,7 +1569,16 @@ mod tests {
 
         let want = vec![
             argv(&["-F"]),
-            argv(&["-A", "INPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"]),
+            argv(&[
+                "-A",
+                "INPUT",
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "ESTABLISHED,RELATED",
+                "-j",
+                "ACCEPT",
+            ]),
             argv(&["-A", "INPUT", "-i", "lo", "-j", "ACCEPT"]),
             argv(&["-P", "INPUT", "DROP"]),
             argv(&["-P", "OUTPUT", "ACCEPT"]),
@@ -1417,11 +1589,17 @@ mod tests {
         // The ordering is the whole point: iptables has no transaction, so an
         // ESTABLISHED accept installed *after* `-P INPUT DROP` would cut the
         // operator's own ssh session in the gap between the two calls.
-        let established = prelude.iter().position(|args| args.iter().any(|a| a == "ESTABLISHED,RELATED"));
-        let policy = prelude.iter().position(|args| args.len() == 3 && args[0] == "-P" && args[1] == "INPUT");
+        let established = prelude
+            .iter()
+            .position(|args| args.iter().any(|a| a == "ESTABLISHED,RELATED"));
+        let policy = prelude
+            .iter()
+            .position(|args| args.len() == 3 && args[0] == "-P" && args[1] == "INPUT");
         match (established, policy) {
             (Some(e), Some(p)) if e < p => {}
-            other => panic!("the established rule and the INPUT policy are at {other:?}; the rule must come first"),
+            other => {
+                panic!("the established rule and the INPUT policy are at {other:?}; the rule must come first")
+            }
         }
     }
 
@@ -1431,7 +1609,9 @@ mod tests {
     fn ufw_args_are_exactly_the_expected_argv() {
         assert_args(
             ufw_args(&rule(|r| r.port_spec = s("22"))),
-            &["allow", "in", "from", "any", "to", "any", "port", "22", "proto", "tcp"],
+            &[
+                "allow", "in", "from", "any", "to", "any", "port", "22", "proto", "tcp",
+            ],
         );
         assert_args(
             ufw_args(&rule(|r| {
@@ -1440,7 +1620,18 @@ mod tests {
                 r.source = s("10.0.0.0/8");
                 r.port_spec = s("25");
             })),
-            &["deny", "out", "from", "10.0.0.0/8", "to", "any", "port", "25", "proto", "tcp"],
+            &[
+                "deny",
+                "out",
+                "from",
+                "10.0.0.0/8",
+                "to",
+                "any",
+                "port",
+                "25",
+                "proto",
+                "tcp",
+            ],
         );
         assert_args(
             ufw_args(&rule(|r| {
@@ -1454,7 +1645,9 @@ mod tests {
                 r.port_spec = s("443");
                 r.comment = s("https");
             })),
-            &["allow", "in", "from", "any", "to", "any", "port", "443", "proto", "tcp", "comment", "https"],
+            &[
+                "allow", "in", "from", "any", "to", "any", "port", "443", "proto", "tcp", "comment", "https",
+            ],
         );
     }
 
@@ -1480,7 +1673,11 @@ mod tests {
     #[test]
     fn render_nft_rule_produces_the_expected_expression() {
         let cases: Vec<(&str, FirewallRule, &str)> = vec![
-            ("a tcp port", rule(|r| r.port_spec = s("22")), "tcp dport 22 accept"),
+            (
+                "a tcp port",
+                rule(|r| r.port_spec = s("22")),
+                "tcp dport 22 accept",
+            ),
             (
                 "a port range uses nft's hyphen",
                 rule(|r| r.port_spec = s("6000:6010")),
@@ -1586,7 +1783,10 @@ mod tests {
         // A rule belongs to exactly one chain: an outbound rule leaking into
         // the input chain would open a port nobody asked to open.
         let input = &script[script.find("chain input").unwrap()..script.find("chain output").unwrap()];
-        assert!(!input.contains("dport 25"), "the outbound rule was rendered into the input chain:\n{script}");
+        assert!(
+            !input.contains("dport 25"),
+            "the outbound rule was rendered into the input chain:\n{script}"
+        );
     }
 
     #[test]
@@ -1600,7 +1800,10 @@ mod tests {
         let remove = script.find("delete table inet kaname").expect("deleted");
         // Without the declaration first, the delete fails on a host Kaname
         // has never applied to, and the very first fw.apply errors out.
-        assert!(declare < remove, "the table is not declared before it is deleted:\n{script}");
+        assert!(
+            declare < remove,
+            "the table is not declared before it is deleted:\n{script}"
+        );
     }
 
     /* ------------------------------ injection ---------------------------- */
@@ -1636,7 +1839,10 @@ mod tests {
                 } else {
                     r.destination = s(value);
                 }
-                assert!(is_invalid(&check_rule(&r)), "{field} {value:?} was not rejected as invalid");
+                assert!(
+                    is_invalid(&check_rule(&r)),
+                    "{field} {value:?} was not rejected as invalid"
+                );
             }
         }
     }
@@ -1650,7 +1856,10 @@ mod tests {
 
         let sanitized = sanitize_comment(hostile);
         for forbidden in ["\"", "\\", "\n", "\r", ";", "\x00"] {
-            assert!(!sanitized.contains(forbidden), "sanitize_comment kept {forbidden:?} in {sanitized:?}");
+            assert!(
+                !sanitized.contains(forbidden),
+                "sanitize_comment kept {forbidden:?} in {sanitized:?}"
+            );
         }
 
         // In nft the comment is written inside quotes, so a surviving quote or
@@ -1659,8 +1868,15 @@ mod tests {
             r.port_spec = s("443");
             r.comment = s(hostile);
         }));
-        assert_eq!(nft.matches('"').count(), 2, "not exactly one quoted comment: {nft:?}");
-        assert!(!nft.contains(['\n', '\r', ';']), "the rendered rule carries a statement separator: {nft:?}");
+        assert_eq!(
+            nft.matches('"').count(),
+            2,
+            "not exactly one quoted comment: {nft:?}"
+        );
+        assert!(
+            !nft.contains(['\n', '\r', ';']),
+            "the rendered rule carries a statement separator: {nft:?}"
+        );
 
         // In iptables and ufw the comment is a single argv element, so even an
         // unsanitised one could not become a command — but it must still be
@@ -1670,9 +1886,20 @@ mod tests {
             r.comment = s(hostile);
         }))
         .expect("the rule was dropped");
-        let index = args.iter().position(|a| a == "--comment").map(|i| i + 1).expect("no comment element");
-        assert_eq!(args[index], sanitized, "the comment argument is not the sanitised one");
-        assert_eq!(args.len(), index + 3, "the comment produced more argv elements than expected: {args:?}");
+        let index = args
+            .iter()
+            .position(|a| a == "--comment")
+            .map(|i| i + 1)
+            .expect("no comment element");
+        assert_eq!(
+            args[index], sanitized,
+            "the comment argument is not the sanitised one"
+        );
+        assert_eq!(
+            args.len(),
+            index + 3,
+            "the comment produced more argv elements than expected: {args:?}"
+        );
     }
 
     #[test]
@@ -1737,15 +1964,27 @@ mod tests {
             ("::1", "::1", "ip6"),
         ];
         for (raw, want, family) in cases {
-            let (got, got_family) = parse_target(raw).unwrap_or_else(|e| panic!("parse_target({raw:?}) failed: {e}"));
-            assert_eq!((got.as_str(), got_family), (want, family), "parse_target({raw:?})");
+            let (got, got_family) =
+                parse_target(raw).unwrap_or_else(|e| panic!("parse_target({raw:?}) failed: {e}"));
+            assert_eq!(
+                (got.as_str(), got_family),
+                (want, family),
+                "parse_target({raw:?})"
+            );
             // A v6 ban landing in the v4 set is a ban that silently does
             // nothing, so the set name has to follow the family.
             let want_set = if family == "ip" { "banned4" } else { "banned6" };
             assert_eq!(ban_set(got_family), want_set);
         }
 
-        for raw in ["", "example.com", "999.1.1.1", "203.0.113.0/33", "10.0.0.1 -j ACCEPT", "*"] {
+        for raw in [
+            "",
+            "example.com",
+            "999.1.1.1",
+            "203.0.113.0/33",
+            "10.0.0.1 -j ACCEPT",
+            "*",
+        ] {
             assert!(parse_target(raw).is_err(), "parse_target({raw:?}) was accepted");
         }
     }
@@ -1783,9 +2022,18 @@ mod tests {
 
     #[test]
     fn classify_threat_recognises_the_known_shapes() {
-        assert_eq!(super::classify_threat("Failed password for root from 1.2.3.4"), Some(("ssh_bruteforce", "sshd")));
-        assert_eq!(super::classify_threat("dovecot: auth failed"), Some(("mail_bruteforce", "dovecot")));
-        assert_eq!(super::classify_threat("Did not receive identification string"), Some(("port_scan", "sshd")));
+        assert_eq!(
+            super::classify_threat("Failed password for root from 1.2.3.4"),
+            Some(("ssh_bruteforce", "sshd"))
+        );
+        assert_eq!(
+            super::classify_threat("dovecot: auth failed"),
+            Some(("mail_bruteforce", "dovecot"))
+        );
+        assert_eq!(
+            super::classify_threat("Did not receive identification string"),
+            Some(("port_scan", "sshd"))
+        );
         assert_eq!(super::classify_threat("Accepted publickey for deploy"), None);
     }
 
@@ -1795,8 +2043,17 @@ mod tests {
         assert_eq!(super::render_nft_value(&json!(22)), "22");
         assert_eq!(super::render_nft_value(&json!("tcp")), "tcp");
         assert_eq!(super::render_nft_value(&json!({"set": [80, 443]})), "80,443");
-        assert_eq!(super::render_nft_value(&json!({"prefix": {"addr": "10.0.0.0", "len": 8}})), "10.0.0.0/8");
-        assert_eq!(super::render_nft_value(&json!({"range": [6000, 6010]})), "6000-6010");
-        assert_eq!(super::render_nft_value(&json!({"elem": {"val": "203.0.113.4"}})), "203.0.113.4");
+        assert_eq!(
+            super::render_nft_value(&json!({"prefix": {"addr": "10.0.0.0", "len": 8}})),
+            "10.0.0.0/8"
+        );
+        assert_eq!(
+            super::render_nft_value(&json!({"range": [6000, 6010]})),
+            "6000-6010"
+        );
+        assert_eq!(
+            super::render_nft_value(&json!({"elem": {"val": "203.0.113.4"}})),
+            "203.0.113.4"
+        );
     }
 }

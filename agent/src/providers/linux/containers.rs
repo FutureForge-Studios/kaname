@@ -27,8 +27,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 use tokio_util::sync::CancellationToken;
 
-use super::common::{epoch_rfc3339, invalid, not_found, now_rfc3339, precondition, rfc3339, split_lines, unsupported};
 use super::Shared;
+use super::common::{
+    epoch_rfc3339, invalid, not_found, now_rfc3339, precondition, rfc3339, split_lines, unsupported,
+};
 use crate::providers::*;
 
 /// v1.40 is the newest version every supported Docker (20.10+) and Podman
@@ -63,13 +65,22 @@ pub struct DockerClient {
 pub async fn discover_container_runtime() -> Option<DockerClient> {
     use std::os::unix::fs::FileTypeExt;
     for (path, runtime) in DOCKER_SOCKETS {
-        let Ok(meta) = std::fs::metadata(path) else { continue };
+        let Ok(meta) = std::fs::metadata(path) else {
+            continue;
+        };
         if !meta.file_type().is_socket() {
             continue;
         }
         let client = DockerClient::new(path, runtime);
-        let probe = Ctx::new(CancellationToken::new(), Some(Instant::now() + Duration::from_secs(3)));
-        if client.call(&probe, Method::GET, "/_ping", None, false).await.is_err() {
+        let probe = Ctx::new(
+            CancellationToken::new(),
+            Some(Instant::now() + Duration::from_secs(3)),
+        );
+        if client
+            .call(&probe, Method::GET, "/_ping", None, false)
+            .await
+            .is_err()
+        {
             continue;
         }
         return Some(client);
@@ -286,7 +297,12 @@ impl DockerClient {
         serde_json::from_slice(&body).map_err(|e| ProviderError::internal(format!("decode GET {path}: {e}")))
     }
 
-    async fn post<T: DeserializeOwned>(&self, ctx: &Ctx, path: &str, body: Option<serde_json::Value>) -> PResult<T> {
+    async fn post<T: DeserializeOwned>(
+        &self,
+        ctx: &Ctx,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> PResult<T> {
         let raw = self.call(ctx, Method::POST, path, body, true).await?;
         serde_json::from_slice(&raw).map_err(|e| ProviderError::internal(format!("decode POST {path}: {e}")))
     }
@@ -367,7 +383,12 @@ impl DockerClient {
 
     /// Upgrades a request to a raw bidirectional stream, which is how the
     /// Engine API carries an interactive exec.
-    async fn hijack(&self, ctx: &Ctx, path: &str, body: serde_json::Value) -> PResult<TokioIo<hyper::upgrade::Upgraded>> {
+    async fn hijack(
+        &self,
+        ctx: &Ctx,
+        path: &str,
+        body: serde_json::Value,
+    ) -> PResult<TokioIo<hyper::upgrade::Upgraded>> {
         let stream = UnixStream::connect(&self.socket)
             .await
             .map_err(|e| ProviderError::internal(format!("dial {}: {e}", self.socket)))?;
@@ -441,7 +462,9 @@ impl DockerClient {
                 // chunks; a partial line waits for the rest.
                 while let Some(end) = buffer.iter().position(|b| *b == b'\n') {
                     let line: Vec<u8> = buffer.drain(..=end).collect();
-                    let Ok(event) = serde_json::from_slice::<DockerEvent>(&line) else { continue };
+                    let Ok(event) = serde_json::from_slice::<DockerEvent>(&line) else {
+                        continue;
+                    };
                     if event.kind != "container" || event.actor.id.is_empty() {
                         continue;
                     }
@@ -515,7 +538,9 @@ impl Containers for ContainerOps {
     async fn list(&self, ctx: &Ctx, p: ContainerListParams) -> PResult<Vec<ContainerInfo>> {
         let client = self.client()?;
 
-        let raw: Vec<DockerContainer> = client.get(ctx, &format!("/containers/json?all={}", p.all)).await?;
+        let raw: Vec<DockerContainer> = client
+            .get(ctx, &format!("/containers/json?all={}", p.all))
+            .await?;
 
         let mut containers = Vec::with_capacity(raw.len());
         for entry in raw {
@@ -537,15 +562,21 @@ impl Containers for ContainerOps {
         let client = self.client()?;
 
         let raw = client
-            .call(ctx, Method::GET, &format!("/containers/{}/json", path_escape(id)), None, true)
+            .call(
+                ctx,
+                Method::GET,
+                &format!("/containers/{}/json", path_escape(id)),
+                None,
+                true,
+            )
             .await?;
         if raw.len() > 4 << 20 {
             return Err(precondition("inspect body exceeds the cap"));
         }
-        let parsed: DockerInspect =
-            serde_json::from_slice(&raw).map_err(|e| ProviderError::internal(format!("decode inspect body: {e}")))?;
-        let value: serde_json::Value =
-            serde_json::from_slice(&raw).map_err(|e| ProviderError::internal(format!("decode inspect body: {e}")))?;
+        let parsed: DockerInspect = serde_json::from_slice(&raw)
+            .map_err(|e| ProviderError::internal(format!("decode inspect body: {e}")))?;
+        let value: serde_json::Value = serde_json::from_slice(&raw)
+            .map_err(|e| ProviderError::internal(format!("decode inspect body: {e}")))?;
         Ok(ContainerInspectResult {
             container: client.from_inspect(&parsed),
             raw: value,
@@ -554,7 +585,9 @@ impl Containers for ContainerOps {
 
     async fn start(&self, ctx: &Ctx, id: &str) -> PResult<ContainerInfo> {
         let client = self.client()?;
-        client.post_empty(ctx, &format!("/containers/{}/start", path_escape(id)), None).await?;
+        client
+            .post_empty(ctx, &format!("/containers/{}/start", path_escape(id)), None)
+            .await?;
         client.inspect(ctx, id).await
     }
 
@@ -567,15 +600,27 @@ impl Containers for ContainerOps {
 
     async fn restart(&self, ctx: &Ctx, p: ContainerStopParams) -> PResult<ContainerInfo> {
         let client = self.client()?;
-        let path = format!("/containers/{}/restart?t={}", path_escape(&p.id), p.timeout_seconds);
+        let path = format!(
+            "/containers/{}/restart?t={}",
+            path_escape(&p.id),
+            p.timeout_seconds
+        );
         client.post_empty(ctx, &path, None).await?;
         client.inspect(ctx, &p.id).await
     }
 
     async fn remove(&self, ctx: &Ctx, p: ContainerRemoveParams) -> PResult<()> {
         let client = self.client()?;
-        let path = format!("/containers/{}?force={}&v={}", path_escape(&p.id), p.force, p.remove_volumes);
-        client.call(ctx, Method::DELETE, &path, None, false).await.map(|_| ())
+        let path = format!(
+            "/containers/{}?force={}&v={}",
+            path_escape(&p.id),
+            p.force,
+            p.remove_volumes
+        );
+        client
+            .call(ctx, Method::DELETE, &path, None, false)
+            .await
+            .map(|_| ())
     }
 
     async fn logs(&self, ctx: &Ctx, p: ContainerLogsParams, stream: StreamRef) -> PResult<Vec<LogRecord>> {
@@ -584,7 +629,11 @@ impl Containers for ContainerOps {
         // A container started with a TTY produces a raw stream; without one
         // the daemon frames stdout and stderr, and reading it as raw text
         // would leave the 8-byte headers in the operator's log view.
-        let tty = client.inspect_raw(ctx, &p.id).await.map(|i| i.config.tty).unwrap_or(false);
+        let tty = client
+            .inspect_raw(ctx, &p.id)
+            .await
+            .map(|i| i.config.tty)
+            .unwrap_or(false);
 
         let lines = if p.lines <= 0 { 200 } else { p.lines as usize };
 
@@ -655,7 +704,13 @@ impl Containers for ContainerOps {
             "Cmd": ["/bin/sh"],
             "Env": ["TERM=xterm-256color"],
         });
-        let created: Created = client.post(ctx, &format!("/containers/{}/exec", path_escape(&p.id)), Some(body)).await?;
+        let created: Created = client
+            .post(
+                ctx,
+                &format!("/containers/{}/exec", path_escape(&p.id)),
+                Some(body),
+            )
+            .await?;
         if created.id.is_empty() {
             return Err(ProviderError::conflict("container runtime returned no exec id"));
         }
@@ -685,7 +740,10 @@ impl Containers for ContainerOps {
         // The daemon only fills `Containers` when asked for shared sizes, so
         // usage is derived from the container table instead.
         let mut used = std::collections::HashSet::new();
-        if let Ok(containers) = client.get::<Vec<DockerContainer>>(ctx, "/containers/json?all=1").await {
+        if let Ok(containers) = client
+            .get::<Vec<DockerContainer>>(ctx, "/containers/json?all=1")
+            .await
+        {
             for container in containers {
                 used.insert(container.image_id);
             }
@@ -717,7 +775,9 @@ impl Containers for ContainerOps {
             space_reclaimed: i64,
         }
         let containers: ContainersPruned = client.post(ctx, "/containers/prune", None).await?;
-        result.removed.extend(containers.containers_deleted.unwrap_or_default());
+        result
+            .removed
+            .extend(containers.containers_deleted.unwrap_or_default());
         result.reclaimed_bytes += containers.space_reclaimed;
 
         if p.include_images {
@@ -767,7 +827,8 @@ impl DockerClient {
     }
 
     async fn inspect_raw(&self, ctx: &Ctx, id: &str) -> PResult<DockerInspect> {
-        self.get(ctx, &format!("/containers/{}/json", path_escape(id))).await
+        self.get(ctx, &format!("/containers/{}/json", path_escape(id)))
+            .await
     }
 
     fn from_list(&self, entry: &DockerContainer) -> ContainerInfo {
@@ -877,16 +938,27 @@ impl DockerClient {
     async fn stats(&self, ctx: &Ctx, id: &str) -> PResult<(f64, i64, i64)> {
         let parsed: DockerStats = tokio::time::timeout(
             DOCKER_CALL_TIMEOUT,
-            self.get(ctx, &format!("/containers/{}/stats?stream=false", path_escape(id))),
+            self.get(
+                ctx,
+                &format!("/containers/{}/stats?stream=false", path_escape(id)),
+            ),
         )
         .await
         .map_err(|_| ProviderError::Timeout)??;
 
-        let cpu_delta = parsed.cpu_stats.cpu_usage.total_usage as f64 - parsed.precpu_stats.cpu_usage.total_usage as f64;
-        let system_delta = parsed.cpu_stats.system_cpu_usage as f64 - parsed.precpu_stats.system_cpu_usage as f64;
+        let cpu_delta =
+            parsed.cpu_stats.cpu_usage.total_usage as f64 - parsed.precpu_stats.cpu_usage.total_usage as f64;
+        let system_delta =
+            parsed.cpu_stats.system_cpu_usage as f64 - parsed.precpu_stats.system_cpu_usage as f64;
         let mut cores = parsed.cpu_stats.online_cpus as usize;
         if cores == 0 {
-            cores = parsed.cpu_stats.cpu_usage.percpu_usage.as_ref().map(Vec::len).unwrap_or(0);
+            cores = parsed
+                .cpu_stats
+                .cpu_usage
+                .percpu_usage
+                .as_ref()
+                .map(Vec::len)
+                .unwrap_or(0);
         }
 
         let mut percent = 0.0;
@@ -918,7 +990,11 @@ type BoxedEmit = std::pin::Pin<Box<dyn std::future::Future<Output = PResult<()>>
 
 /// Decodes the daemon's framed log stream: an 8-byte header carrying the
 /// stream id and payload length, then the payload.
-async fn demultiplex(ctx: &Ctx, mut body: Incoming, emit: &mut (dyn FnMut(&str) -> BoxedEmit + Send)) -> PResult<()> {
+async fn demultiplex(
+    ctx: &Ctx,
+    mut body: Incoming,
+    emit: &mut (dyn FnMut(&str) -> BoxedEmit + Send),
+) -> PResult<()> {
     let mut buffer: Vec<u8> = Vec::with_capacity(64 << 10);
     loop {
         ctx.check()?;
@@ -933,7 +1009,9 @@ async fn demultiplex(ctx: &Ctx, mut body: Incoming, emit: &mut (dyn FnMut(&str) 
                 continue;
             }
             if size > MAX_CONTAINER_FRAME {
-                return Err(precondition(format!("container log frame of {size} bytes exceeds the cap")));
+                return Err(precondition(format!(
+                    "container log frame of {size} bytes exceeds the cap"
+                )));
             }
             if buffer.len() < 8 + size {
                 break;
@@ -961,7 +1039,11 @@ async fn demultiplex(ctx: &Ctx, mut body: Incoming, emit: &mut (dyn FnMut(&str) 
     }
 }
 
-async fn scan_lines(ctx: &Ctx, mut body: Incoming, emit: &mut (dyn FnMut(&str) -> BoxedEmit + Send)) -> PResult<()> {
+async fn scan_lines(
+    ctx: &Ctx,
+    mut body: Incoming,
+    emit: &mut (dyn FnMut(&str) -> BoxedEmit + Send),
+) -> PResult<()> {
     let mut buffer: Vec<u8> = Vec::with_capacity(64 << 10);
     loop {
         let frame = tokio::select! {
@@ -1175,7 +1257,25 @@ fn normalize_timestamp(value: &str) -> String {
 fn path_escape(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
     for byte in segment.bytes() {
-        let keep = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b':' | b'@' | b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b'=');
+        let keep = byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'_'
+                    | b'.'
+                    | b'~'
+                    | b':'
+                    | b'@'
+                    | b'!'
+                    | b'$'
+                    | b'&'
+                    | b'\''
+                    | b'('
+                    | b')'
+                    | b'*'
+                    | b'+'
+                    | b','
+                    | b'='
+            );
         if keep {
             out.push(byte as char);
         } else {
@@ -1259,7 +1359,8 @@ mod tests {
         assert_eq!(info.runtime, "docker");
 
         let never_started: DockerInspect =
-            serde_json::from_value(serde_json::json!({"State": {"StartedAt": "0001-01-01T00:00:00Z"}})).unwrap();
+            serde_json::from_value(serde_json::json!({"State": {"StartedAt": "0001-01-01T00:00:00Z"}}))
+                .unwrap();
         assert!(client.from_inspect(&never_started).started_at.is_none());
     }
 
@@ -1269,13 +1370,174 @@ mod tests {
             docker_error(StatusCode::NOT_FOUND, br#"{"message":"No such container: x"}"#),
             ProviderError::NotFound(m) if m == "No such container: x"
         ));
-        assert!(matches!(docker_error(StatusCode::CONFLICT, b"busy"), ProviderError::Conflict(_)));
-        assert!(matches!(docker_error(StatusCode::FORBIDDEN, b""), ProviderError::PermissionDenied(_)));
-        assert!(matches!(docker_error(StatusCode::NOT_IMPLEMENTED, b""), ProviderError::Unsupported(_)));
+        assert!(matches!(
+            docker_error(StatusCode::CONFLICT, b"busy"),
+            ProviderError::Conflict(_)
+        ));
+        assert!(matches!(
+            docker_error(StatusCode::FORBIDDEN, b""),
+            ProviderError::PermissionDenied(_)
+        ));
+        assert!(matches!(
+            docker_error(StatusCode::NOT_IMPLEMENTED, b""),
+            ProviderError::Unsupported(_)
+        ));
         assert!(matches!(
             docker_error(StatusCode::INTERNAL_SERVER_ERROR, b"boom"),
             ProviderError::Exec { output, .. } if output == "boom"
         ));
+    }
+
+    /// A fake Engine API on a unix socket: enough HTTP/1.1 to prove the
+    /// client dials, frames a request, maps the daemon's errors and reads a
+    /// chunked, multiplexed log stream.
+    async fn fake_daemon(dir: &std::path::Path) -> String {
+        use tokio::io::AsyncBufReadExt;
+        let path = dir.join("docker.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let (reader, mut writer) = tokio::io::split(stream);
+                    let mut lines = tokio::io::BufReader::new(reader).lines();
+                    let request = lines.next_line().await.ok().flatten().unwrap_or_default();
+                    let mut saw_host = false;
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        if line.to_lowercase().starts_with("host:") {
+                            saw_host = true;
+                        }
+                        if line.is_empty() {
+                            break;
+                        }
+                    }
+                    assert!(saw_host, "the request carried no Host header: {request}");
+                    let target = request.split_whitespace().nth(1).unwrap_or_default().to_string();
+                    let response: Vec<u8> = if target == "/v1.40/_ping" {
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK".to_vec()
+                    } else if target.starts_with("/v1.40/containers/missing/") {
+                        let body = br#"{"message":"No such container: missing"}"#;
+                        let mut r = format!(
+                            "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                            body.len()
+                        )
+                        .into_bytes();
+                        r.extend_from_slice(body);
+                        r
+                    } else if target.starts_with("/v1.40/containers/web/logs") {
+                        // Two frames (stdout then stderr) split unevenly across
+                        // three chunks, plus a zero-length frame to skip.
+                        let mut frames = Vec::new();
+                        let a = b"2024-05-01T10:00:00Z hello\n2024-05-01T10:00:01Z world\n";
+                        frames.extend_from_slice(&[1, 0, 0, 0]);
+                        frames.extend_from_slice(&(a.len() as u32).to_be_bytes());
+                        frames.extend_from_slice(a);
+                        frames.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 0]);
+                        let b = b"2024-05-01T10:00:02Z ERROR boom\n";
+                        frames.extend_from_slice(&[2, 0, 0, 0]);
+                        frames.extend_from_slice(&(b.len() as u32).to_be_bytes());
+                        frames.extend_from_slice(b);
+                        let mut r = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+                        for chunk in [&frames[..5], &frames[5..30], &frames[30..]] {
+                            r.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+                            r.extend_from_slice(chunk);
+                            r.extend_from_slice(b"\r\n");
+                        }
+                        r.extend_from_slice(b"0\r\n\r\n");
+                        r
+                    } else {
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 4\r\n\r\nboom".to_vec()
+                    };
+                    let _ = writer.write_all(&response).await;
+                    let _ = writer.shutdown().await;
+                });
+            }
+        });
+        path.display().to_string()
+    }
+
+    #[tokio::test]
+    async fn the_client_speaks_http_over_the_unix_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = fake_daemon(dir.path()).await;
+        let client = DockerClient::new(&socket, cap::DOCKER);
+        let ctx = Ctx::background();
+
+        let body = client
+            .call(&ctx, Method::GET, "/_ping", None, true)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"OK");
+
+        // The daemon's own error envelope reaches the panel as not_found, not
+        // as an opaque failure.
+        let err = client.inspect(&ctx, "missing").await.unwrap_err();
+        assert!(
+            matches!(err, ProviderError::NotFound(ref m) if m == "No such container: missing"),
+            "{err:?}"
+        );
+
+        let err = client
+            .call(&ctx, Method::GET, "/explode", None, true)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ProviderError::Exec { ref output, .. } if output == "boom"),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn framed_logs_are_demultiplexed_across_chunk_boundaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = fake_daemon(dir.path()).await;
+        let client = DockerClient::new(&socket, cap::DOCKER);
+        let ctx = Ctx::background();
+
+        let (response, conn) = client
+            .open(Method::GET, "/containers/web/logs?stdout=1", None)
+            .await
+            .unwrap();
+        let mut seen: Vec<String> = Vec::new();
+        let mut emit = |line: &str| -> BoxedEmit {
+            seen.push(line.to_string());
+            Box::pin(async { Ok::<(), ProviderError>(()) })
+        };
+        demultiplex(&ctx, response.into_body(), &mut emit).await.unwrap();
+        conn.abort();
+        assert_eq!(
+            seen,
+            vec![
+                "2024-05-01T10:00:00Z hello",
+                "2024-05-01T10:00:01Z world",
+                "2024-05-01T10:00:02Z ERROR boom"
+            ]
+        );
+        let record = container_log_record("container:web", &seen[2]);
+        assert_eq!(
+            (record.level.as_str(), record.message.as_str()),
+            ("error", "ERROR boom")
+        );
+    }
+
+    #[tokio::test]
+    async fn discovery_ignores_a_socket_that_does_not_answer() {
+        // No runtime on this machine answers, and a missing or dead socket must
+        // never be reported as one.
+        let dir = tempfile::tempdir().unwrap();
+        let client = DockerClient::new(&dir.path().join("none.sock").display().to_string(), cap::DOCKER);
+        let probe = Ctx::new(
+            CancellationToken::new(),
+            Some(Instant::now() + Duration::from_secs(1)),
+        );
+        assert!(
+            client
+                .call(&probe, Method::GET, "/_ping", None, false)
+                .await
+                .is_err()
+        );
     }
 
     #[test]
