@@ -512,17 +512,6 @@ mod tests {
         }
     }
 
-    async fn shared() -> Arc<Shared> {
-        let opts = Options {
-            agent_version: "test".into(),
-            state_dir: std::env::temp_dir(),
-        };
-        let provider = super::super::open(opts).await.unwrap();
-        // The provider owns a Shared; reach it the way the ops do.
-        let _ = provider;
-        unreachable!()
-    }
-
     #[tokio::test]
     async fn open_runs_the_login_shell_and_relays_its_output() {
         // openpty needs /dev/ptmx; a sandbox without it cannot run this.
@@ -530,7 +519,6 @@ mod tests {
             eprintln!("skipping: no pseudo-terminals here");
             return;
         }
-        let _ = shared;
         let shared = Arc::new(test_shared());
         let ops = PtyOps(shared.clone());
         let stream = Arc::new(Script {
@@ -614,10 +602,23 @@ mod tests {
         assert!(kill(session.pid, None).is_err(), "the shell outlived pty.close");
     }
 
+    /// A `Shared` with no host probing behind it: the terminal only needs
+    /// the session registry.
     fn test_shared() -> Shared {
-        super::super::Shared::for_tests(Options {
-            agent_version: "test".into(),
-            state_dir: std::env::temp_dir(),
-        })
+        let (events, _rx) = tokio::sync::mpsc::channel(1);
+        Shared {
+            opts: Options {
+                agent_version: "test".into(),
+                state_dir: std::env::temp_dir(),
+            },
+            caps: Default::default(),
+            cap_list: Vec::new(),
+            docker: None,
+            rollback: super::super::rollback::RollbackGuard::new(),
+            names: Default::default(),
+            events,
+            last_metrics: Mutex::new(None),
+            ptys: PtySessions::default(),
+        }
     }
 }
