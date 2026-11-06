@@ -80,7 +80,11 @@ fn cli_failure(op: &str, out: &exec::Output, rules: &[(&str, Kind)]) -> Provider
             };
         }
     }
-    let shown = if out.stderr.trim().is_empty() { &out.stdout } else { &out.stderr };
+    let shown = if out.stderr.trim().is_empty() {
+        &out.stdout
+    } else {
+        &out.stderr
+    };
     exec::exec_error(op, exec::tail(shown, exec::EXEC_OUTPUT_LIMIT), out.code)
 }
 
@@ -94,7 +98,11 @@ struct Captured {
 
 impl Captured {
     fn stdout_lines(&self) -> Vec<String> {
-        self.lines.iter().filter(|(o, _)| *o).map(|(_, l)| l.clone()).collect()
+        self.lines
+            .iter()
+            .filter(|(o, _)| *o)
+            .map(|(_, l)| l.clone())
+            .collect()
     }
     fn all_lines(&self) -> Vec<String> {
         self.lines.iter().map(|(_, l)| l.clone()).collect()
@@ -127,12 +135,16 @@ async fn stream_command(
     for (k, v) in &o.env {
         cmd.env(k, v);
     }
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     cmd.kill_on_drop(true);
 
     let mut child = cmd.spawn().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => not_installed(),
-        std::io::ErrorKind::PermissionDenied => ProviderError::PermissionDenied(format!("cannot run {}: {e}", o.name)),
+        std::io::ErrorKind::PermissionDenied => {
+            ProviderError::PermissionDenied(format!("cannot run {}: {e}", o.name))
+        }
         _ => ProviderError::internal(format!("starting {}: {e}", o.name)),
     })?;
     let stdout = child.stdout.take().expect("piped");
@@ -405,7 +417,11 @@ impl MailOps {
         if out.success() {
             Ok(out.stdout)
         } else {
-            Err(cli_failure(&format!("yunori-mail {}", args.first().copied().unwrap_or("")), &out, &[]))
+            Err(cli_failure(
+                &format!("yunori-mail {}", args.first().copied().unwrap_or("")),
+                &out,
+                &[],
+            ))
         }
     }
 
@@ -417,7 +433,10 @@ impl MailOps {
         if out.success() {
             Ok(out.stdout)
         } else {
-            let op = format!("yunori-mail {}", args.iter().take(2).copied().collect::<Vec<_>>().join(" "));
+            let op = format!(
+                "yunori-mail {}",
+                args.iter().take(2).copied().collect::<Vec<_>>().join(" ")
+            );
             Err(cli_failure(&op, &out, rules))
         }
     }
@@ -465,20 +484,33 @@ impl MailOps {
     async fn ensure_release(&self, ctx: &Ctx, p: &MailDeployParams, stream: &dyn Stream) -> PResult<bool> {
         if let Some(bin) = exec::which(YUNORI_BIN) {
             if binary_version(ctx, &bin).await.as_deref() == Some(p.version.as_str()) {
-                say(stream, format!("yunori-mail {} is already installed; skipping the download.", p.version)).await;
+                say(
+                    stream,
+                    format!(
+                        "yunori-mail {} is already installed; skipping the download.",
+                        p.version
+                    ),
+                )
+                .await;
                 return Ok(false);
             }
         }
         let tmp = TempDir::create()?;
         let archive = tmp.path().join("release.tar.gz");
-        say(stream, format!("Downloading Yunori Mail Server {} from {}…", p.version, p.url)).await;
+        say(
+            stream,
+            format!("Downloading Yunori Mail Server {} from {}…", p.version, p.url),
+        )
+        .await;
         let bytes = download_verified(ctx, &p.url, &p.sha256, &archive).await?;
         say(stream, format!("Downloaded {} bytes; SHA-256 verified.", bytes)).await;
 
         let extracted = tmp.path().join(BINARY_MEMBER);
         let (archive_b, extracted_b) = (archive.clone(), extracted.clone());
         let found = ctx
-            .run(tokio::task::spawn_blocking(move || extract_binary(&archive_b, &extracted_b)))
+            .run(tokio::task::spawn_blocking(move || {
+                extract_binary(&archive_b, &extracted_b)
+            }))
             .await?
             .map_err(|e| ProviderError::internal(format!("extracting the release: {e}")))??;
         if !found {
@@ -532,9 +564,12 @@ impl Mail for MailOps {
         };
         let console_url = hostnames.first().map(|h| format!("https://{h}/console"));
         let install_complete = !steps.is_empty()
-            && steps
-                .iter()
-                .all(|s| matches!(s.status, MailInstallStepStatus::Done | MailInstallStepStatus::Skipped));
+            && steps.iter().all(|s| {
+                matches!(
+                    s.status,
+                    MailInstallStepStatus::Done | MailInstallStepStatus::Skipped
+                )
+            });
         Ok(MailServerStatusInfo {
             installed: true,
             version,
@@ -561,7 +596,9 @@ impl Mail for MailOps {
     async fn deploy(&self, ctx: &Ctx, p: MailDeployParams, s: StreamRef) -> PResult<MailDeployResult> {
         let stream: &dyn Stream = s.as_ref();
         if p.version.trim().is_empty() || p.url.trim().is_empty() || p.sha256.trim().is_empty() {
-            return Err(ProviderError::invalid("deploy needs the release's version, url and sha256"));
+            return Err(ProviderError::invalid(
+                "deploy needs the release's version, url and sha256",
+            ));
         }
         let args = install_args(&p)?;
         if exec::which(YUNORI_BIN).is_some() {
@@ -585,7 +622,11 @@ impl Mail for MailOps {
         let bin = exec::which(YUNORI_BIN).ok_or_else(not_installed)?;
 
         say(stream, "Running yunori-mail install…").await;
-        let password = p.relay.as_ref().and_then(|r| r.password.clone()).unwrap_or_default();
+        let password = p
+            .relay
+            .as_ref()
+            .and_then(|r| r.password.clone())
+            .unwrap_or_default();
         let replaced_flag = if replaced { "1" } else { "0" };
         let mut env: Vec<(&str, &str)> = vec![("YUNORI_BINARY_REPLACED", replaced_flag)];
         if p.relay.as_ref().is_some_and(|r| r.password.is_some()) {
@@ -596,12 +637,17 @@ impl Mail for MailOps {
 
         let lines = captured.all_lines();
         if captured.code == Some(2) {
-            let sentence = parse::not_ready_sentence(&lines)
-                .unwrap_or_else(|| "This server is not ready: the preflight checks refused the install.".into());
+            let sentence = parse::not_ready_sentence(&lines).unwrap_or_else(|| {
+                "This server is not ready: the preflight checks refused the install.".into()
+            });
             return Err(ProviderError::PreconditionFailed(sentence));
         }
         let summary = parse::install_output(&lines);
-        let outcome = if captured.success() { summary.outcome } else { MailDeployOutcome::Failed };
+        let outcome = if captured.success() {
+            summary.outcome
+        } else {
+            MailDeployOutcome::Failed
+        };
         let steps = self.status(ctx).await.map(|s| s.steps).unwrap_or_default();
         Ok(MailDeployResult {
             outcome,
@@ -617,7 +663,9 @@ impl Mail for MailOps {
 
     async fn update(&self, ctx: &Ctx, s: StreamRef) -> PResult<()> {
         let bin = self.bin()?;
-        let captured = self.stream_yunori(ctx, s.as_ref(), &bin, &["update"], &[]).await?;
+        let captured = self
+            .stream_yunori(ctx, s.as_ref(), &bin, &["update"], &[])
+            .await?;
         if captured.success() {
             Ok(())
         } else {
@@ -640,7 +688,10 @@ impl Mail for MailOps {
         self.run_mapped(
             ctx,
             &["domain", "add", &p.name],
-            &[("invalid domain", Kind::Invalid), ("already exists", Kind::Conflict)],
+            &[
+                ("invalid domain", Kind::Invalid),
+                ("already exists", Kind::Conflict),
+            ],
         )
         .await?;
         Ok(())
@@ -665,7 +716,10 @@ impl Mail for MailOps {
             .run_mapped(
                 ctx,
                 &["domain", "dns", &p.name],
-                &[("is not on this server", Kind::NotFound), ("invalid domain", Kind::Invalid)],
+                &[
+                    ("is not on this server", Kind::NotFound),
+                    ("invalid domain", Kind::Invalid),
+                ],
             )
             .await?;
         Ok(parse::domain_dns(&out))
@@ -760,8 +814,12 @@ impl Mail for MailOps {
     }
 
     async fn remove_alias(&self, ctx: &Ctx, p: MailAliasRemoveParams) -> PResult<()> {
-        self.run_mapped(ctx, &["alias", "remove", &p.alias], &[("no such alias", Kind::NotFound)])
-            .await?;
+        self.run_mapped(
+            ctx,
+            &["alias", "remove", &p.alias],
+            &[("no such alias", Kind::NotFound)],
+        )
+        .await?;
         Ok(())
     }
 
@@ -772,7 +830,9 @@ impl Mail for MailOps {
 
     async fn certificate_renew(&self, ctx: &Ctx, s: StreamRef) -> PResult<MailCertificateRenewResult> {
         let bin = self.bin()?;
-        let captured = self.stream_yunori(ctx, s.as_ref(), &bin, &["certificate", "renew"], &[]).await?;
+        let captured = self
+            .stream_yunori(ctx, s.as_ref(), &bin, &["certificate", "renew"], &[])
+            .await?;
         // Exit 1 is a reported failure ("Let's Encrypt could not …"): the
         // last sentence explains it, so it is the outcome, not an error.
         let mut outcome = parse::last_line(&captured.stdout_lines());
@@ -780,7 +840,11 @@ impl Mail for MailOps {
             outcome = parse::last_line(&captured.all_lines());
         }
         if outcome.is_empty() {
-            return Err(exec::exec_error("yunori-mail certificate renew", "", captured.code));
+            return Err(exec::exec_error(
+                "yunori-mail certificate renew",
+                "",
+                captured.code,
+            ));
         }
         Ok(MailCertificateRenewResult {
             outcome: outcome.trim_start_matches("error: ").to_string(),
@@ -802,7 +866,8 @@ impl Mail for MailOps {
             return Ok(out.stdout.lines().filter_map(parse::journal_record).collect());
         }
 
-        let path = exec::which("journalctl").ok_or_else(|| ProviderError::unsupported_because("journalctl"))?;
+        let path =
+            exec::which("journalctl").ok_or_else(|| ProviderError::unsupported_because("journalctl"))?;
         let mut cmd = Command::new(path);
         cmd.args(&args)
             .env("LC_ALL", "C")
@@ -884,7 +949,11 @@ pub mod parse {
         let line = strip_ansi(s);
         let line = line.lines().find(|l| !l.trim().is_empty())?.trim();
         let rest = line.strip_prefix("yunori-mail")?.trim();
-        if rest.is_empty() { None } else { Some(rest.to_string()) }
+        if rest.is_empty() {
+            None
+        } else {
+            Some(rest.to_string())
+        }
     }
 
     /// Address `addr` is in `domain` (case-insensitive, exact domain).
@@ -906,7 +975,13 @@ pub mod parse {
         if !err.is_empty() {
             return err.lines().last().unwrap_or(err).trim().to_string();
         }
-        strip_ansi(stdout).trim().lines().last().unwrap_or("").trim().to_string()
+        strip_ansi(stdout)
+            .trim()
+            .lines()
+            .last()
+            .unwrap_or("")
+            .trim()
+            .to_string()
     }
 
     /* ---- status ---- */
@@ -948,7 +1023,11 @@ pub mod parse {
             steps.push(MailInstallStep {
                 title: title.to_string(),
                 status,
-                detail: if detail.is_empty() { None } else { Some(detail.to_string()) },
+                detail: if detail.is_empty() {
+                    None
+                } else {
+                    Some(detail.to_string())
+                },
             });
         }
         steps
@@ -1004,7 +1083,9 @@ pub mod parse {
         let mut out = Vec::new();
         for raw in s.lines() {
             let line = strip_ansi(raw);
-            let Some((tag, rest)) = tagged(&line) else { continue };
+            let Some((tag, rest)) = tagged(&line) else {
+                continue;
+            };
             let mut words = rest.split_whitespace();
             let Some(name) = words.next() else { continue };
             let count = words.next().and_then(|n| n.parse::<i64>().ok()).unwrap_or(0);
@@ -1043,7 +1124,11 @@ pub mod parse {
             }
             if let Some(found) = trimmed.strip_prefix("found:") {
                 if let Some(last) = records.last_mut() {
-                    last.actual = found.split(" | ").map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).collect();
+                    last.actual = found
+                        .split(" | ")
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty())
+                        .collect();
                 }
                 continue;
             }
@@ -1051,7 +1136,9 @@ pub mod parse {
             let required = !rest.ends_with("(optional)");
             let rest = rest.trim_end_matches("(optional)").trim();
             let mut words = rest.split_whitespace();
-            let (Some(rtype), Some(name)) = (words.next(), words.next()) else { continue };
+            let (Some(rtype), Some(name)) = (words.next(), words.next()) else {
+                continue;
+            };
             records.push(MailDnsRecord {
                 id: format!("{rtype}:{name}"),
                 rtype: rtype.to_string(),
@@ -1092,14 +1179,21 @@ pub mod parse {
                     let list = rest[i + "(aliases:".len()..].trim().trim_end_matches(')').trim();
                     (
                         rest[..i].trim(),
-                        list.split(',').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect(),
+                        list.split(',')
+                            .map(|a| a.trim().to_string())
+                            .filter(|a| !a.is_empty())
+                            .collect(),
                     )
                 }
                 None => (rest, Vec::new()),
             };
             out.push(MailboxEntry {
                 address: address.to_string(),
-                display_name: if display.is_empty() { None } else { Some(display.to_string()) },
+                display_name: if display.is_empty() {
+                    None
+                } else {
+                    Some(display.to_string())
+                },
                 aliases,
             });
         }
@@ -1111,7 +1205,9 @@ pub mod parse {
         let mut out = Vec::new();
         for raw in s.lines() {
             let line = strip_ansi(raw);
-            let Some((alias, mailbox)) = line.split_once('→') else { continue };
+            let Some((alias, mailbox)) = line.split_once('→') else {
+                continue;
+            };
             let (alias, mailbox) = (alias.trim(), mailbox.trim());
             if alias.is_empty() || mailbox.is_empty() {
                 continue;
@@ -1161,7 +1257,11 @@ pub mod parse {
             st.state = "missing".into();
         }
         if let Some(covers) = find_row(&lines, "Covers") {
-            st.covers = covers.split(',').map(|h| h.trim().to_string()).filter(|h| !h.is_empty()).collect();
+            st.covers = covers
+                .split(',')
+                .map(|h| h.trim().to_string())
+                .filter(|h| !h.is_empty())
+                .collect();
         }
         st.issuer = find_row(&lines, "Issuer").filter(|v| v != "—" && !v.is_empty());
         if let Some(expires) = find_row(&lines, "Expires") {
@@ -1225,7 +1325,10 @@ pub mod parse {
                 }
             }
             if out.setup_url.is_none() {
-                if let Some(url) = trimmed.split_whitespace().find(|w| w.contains("/console/setup#token=")) {
+                if let Some(url) = trimmed
+                    .split_whitespace()
+                    .find(|w| w.contains("/console/setup#token="))
+                {
                     out.setup_url = Some(url.to_string());
                 }
             }
@@ -1376,13 +1479,20 @@ pub mod parse {
             .parse::<i64>()
             .ok()
             .and_then(|us| {
-                chrono::DateTime::<chrono::Utc>::from_timestamp(us.div_euclid(1_000_000), (us.rem_euclid(1_000_000) * 1000) as u32)
+                chrono::DateTime::<chrono::Utc>::from_timestamp(
+                    us.div_euclid(1_000_000),
+                    (us.rem_euclid(1_000_000) * 1000) as u32,
+                )
             })
             .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
             .unwrap_or_default();
         let source = {
             let unit = json_text(obj.get("_SYSTEMD_UNIT"));
-            if unit.is_empty() { json_text(obj.get("SYSLOG_IDENTIFIER")) } else { unit }
+            if unit.is_empty() {
+                json_text(obj.get("SYSLOG_IDENTIFIER"))
+            } else {
+                unit
+            }
         };
         Some(LogRecord {
             ts,
@@ -1406,7 +1516,10 @@ pub mod parse {
         fn strips_ansi_and_reads_version() {
             assert_eq!(strip_ansi("\x1b[32m✓\x1b[0m ok"), "✓ ok");
             assert_eq!(version("yunori-mail 0.1.0\n").as_deref(), Some("0.1.0"));
-            assert_eq!(version("\x1b[1myunori-mail\x1b[0m 1.2.3").as_deref(), Some("1.2.3"));
+            assert_eq!(
+                version("\x1b[1myunori-mail\x1b[0m 1.2.3").as_deref(),
+                Some("1.2.3")
+            );
             assert_eq!(version("something else"), None);
         }
 
@@ -1440,7 +1553,10 @@ pub mod parse {
             assert_eq!(steps[2].status, MailInstallStepStatus::Skipped);
             assert_eq!(steps[3].status, MailInstallStepStatus::Waiting);
             assert_eq!(steps[3].title, "Publish DNS records");
-            assert_eq!(steps[3].detail.as_deref(), Some("Publish the MX record for example.com"));
+            assert_eq!(
+                steps[3].detail.as_deref(),
+                Some("Publish the MX record for example.com")
+            );
             assert_eq!(steps[4].status, MailInstallStepStatus::Failed);
             assert_eq!(steps[5].status, MailInstallStepStatus::Running);
             assert_eq!(steps[5].detail, None);
@@ -1448,7 +1564,10 @@ pub mod parse {
             assert_eq!(steps[6].title, "Finish");
             // A 32-character title has no padding before its detail.
             assert_eq!(steps[7].title, "Start the console and HTTPS edge");
-            assert_eq!(steps[7].detail.as_deref(), Some("https://mail.example.com/console"));
+            assert_eq!(
+                steps[7].detail.as_deref(),
+                Some("https://mail.example.com/console")
+            );
             assert!(status_steps("error: no database\n").is_empty());
         }
 
@@ -1462,7 +1581,10 @@ pub mod parse {
             assert_eq!(checks.len(), 2);
             assert_eq!(checks[0].status, MailCheckStatus::Fail);
             assert_eq!(checks[0].remedy.as_deref(), Some("Use relay mode"));
-            assert_eq!(checks[0].help_url.as_deref(), Some("https://yunori.email/help/port25"));
+            assert_eq!(
+                checks[0].help_url.as_deref(),
+                Some("https://yunori.email/help/port25")
+            );
             assert_eq!(checks[1].status, MailCheckStatus::Pass);
             assert_eq!(checks[1].remedy, None);
             assert!(checks_json("not json").is_err());
@@ -1512,7 +1634,10 @@ pub mod parse {
 
         #[test]
         fn alias_list_rows() {
-            let text = format!("  {:<36} → {}\n  {:<36} → {}\n", "sales@example.com", "ana@example.com", "x@y.z", "a@y.z");
+            let text = format!(
+                "  {:<36} → {}\n  {:<36} → {}\n",
+                "sales@example.com", "ana@example.com", "x@y.z", "a@y.z"
+            );
             let a = alias_list(&text);
             assert_eq!(a.len(), 2);
             assert_eq!(a[0].address, "sales@example.com");
@@ -1596,7 +1721,10 @@ pub mod parse {
             let text = rows(&[
                 ("Certificate", "none yet"),
                 ("Authority", "Let's Encrypt (automatic renewal)"),
-                ("Last attempt", "Let's Encrypt could not connect to mail.example.com on port 80."),
+                (
+                    "Last attempt",
+                    "Let's Encrypt could not connect to mail.example.com on port 80.",
+                ),
                 ("CA said", "Connection refused"),
                 ("Next attempt", "in 4 minutes"),
             ]);
@@ -1606,7 +1734,9 @@ pub mod parse {
             assert_eq!(c.expires_at, None);
             assert_eq!(
                 c.last_attempt.as_deref(),
-                Some("Let's Encrypt could not connect to mail.example.com on port 80. (CA said: Connection refused)")
+                Some(
+                    "Let's Encrypt could not connect to mail.example.com on port 80. (CA said: Connection refused)"
+                )
             );
             assert_eq!(c.next_attempt.as_deref(), Some("in 4 minutes"));
         }
@@ -1651,10 +1781,19 @@ pub mod parse {
 
         #[test]
         fn row_matches_exact_padding() {
-            assert_eq!(row("  Mailbox        hello@example.com", "Mailbox"), Some("hello@example.com"));
-            assert_eq!(row("  Mailbox portal https://mail.example.com/account", "Mailbox"), None);
             assert_eq!(
-                row("  Mailbox portal https://mail.example.com/account", "Mailbox portal"),
+                row("  Mailbox        hello@example.com", "Mailbox"),
+                Some("hello@example.com")
+            );
+            assert_eq!(
+                row("  Mailbox portal https://mail.example.com/account", "Mailbox"),
+                None
+            );
+            assert_eq!(
+                row(
+                    "  Mailbox portal https://mail.example.com/account",
+                    "Mailbox portal"
+                ),
                 Some("https://mail.example.com/account")
             );
         }
@@ -1665,10 +1804,15 @@ pub mod parse {
             let mut text = String::new();
             text.push_str("Yunori Mail Server 0.1.0\n");
             text.push_str("\nChecking this server…\n");
-            text.push_str(&format!("  [{}] {:<20} {}\n", "  ok   ", "Operating system", "Debian 12"));
+            text.push_str(&format!(
+                "  [{}] {:<20} {}\n",
+                "  ok   ", "Operating system", "Debian 12"
+            ));
             text.push_str("\n  This server is ready.\n");
             text.push_str("\n[ 7/12] Start the console and HTTPS edge\n");
-            text.push_str("\n  Continue in your browser: create the console owner (one-time link, valid 24 hours)\n");
+            text.push_str(
+                "\n  Continue in your browser: create the console owner (one-time link, valid 24 hours)\n",
+            );
             text.push_str("    https://mail.example.com/console/setup#token=abcDEF123456\n");
             text.push_str("  Anyone with this link can claim the console until you do. Don't share it.\n");
             text.push_str("  ✓ Console at https://mail.example.com/console\n");
@@ -1681,7 +1825,10 @@ pub mod parse {
             text.push('\n');
             text.push_str(&rows(&[
                 ("Console", "https://mail.example.com/console"),
-                ("Finish setup", "https://mail.example.com/console/setup#token=abcDEF123456"),
+                (
+                    "Finish setup",
+                    "https://mail.example.com/console/setup#token=abcDEF123456",
+                ),
                 ("Mailbox portal", "https://mail.example.com/account"),
             ]));
             text.push_str("\n  Your turn\n");
@@ -1716,7 +1863,10 @@ pub mod parse {
             text.push_str("  Yunori Mail Server is ready.\n\n");
             text.push_str(&rows(&[
                 ("Console", "https://mail.example.com/console"),
-                ("Finish setup", "run `sudo yunori-mail setup-token` for a new link"),
+                (
+                    "Finish setup",
+                    "run `sudo yunori-mail setup-token` for a new link",
+                ),
                 ("Mailbox portal", "https://mail.example.com/account"),
                 ("Mailbox", "hello@example.com"),
                 (
@@ -1735,7 +1885,9 @@ pub mod parse {
             assert_eq!(s.paused_at, None);
 
             // The `mailbox add` spelling is read too.
-            let s = install_output(&lines("Created a@b.c.\nPassword (shown once): Xyz123\n  Yunori Mail Server is ready.\n"));
+            let s = install_output(&lines(
+                "Created a@b.c.\nPassword (shown once): Xyz123\n  Yunori Mail Server is ready.\n",
+            ));
             assert_eq!(s.first_mailbox_password.as_deref(), Some("Xyz123"));
         }
 
@@ -1779,9 +1931,15 @@ pub mod parse {
             assert_eq!(redact("  ✓ nothing secret here"), "  ✓ nothing secret here");
 
             let mut r = Redactor::new();
-            assert_eq!(r.line("  Password for hello@example.com"), "  Password for hello@example.com");
+            assert_eq!(
+                r.line("  Password for hello@example.com"),
+                "  Password for hello@example.com"
+            );
             assert_eq!(r.line("    Sup3r-Secret-Pass"), "    …");
-            assert_eq!(r.line("  Shown once — store it in your password manager."), "  Shown once — store it in your password manager.");
+            assert_eq!(
+                r.line("  Shown once — store it in your password manager."),
+                "  Shown once — store it in your password manager."
+            );
             // The whole relayed install never carries the raw secrets.
             let mut r = Redactor::new();
             let shown: Vec<String> = paused_install().iter().map(|l| r.line(l)).collect();
@@ -1810,7 +1968,9 @@ pub mod parse {
             );
             assert_eq!(error_message("", "Requesting a certificate…\nfailed\n"), "failed");
             assert_eq!(
-                last_line(&lines("Requesting a certificate…\nIssued for mail.example.com.\n\n")),
+                last_line(&lines(
+                    "Requesting a certificate…\nIssued for mail.example.com.\n\n"
+                )),
                 "Issued for mail.example.com."
             );
             assert_eq!(last_line(&lines("\n\n")), "");
@@ -1922,7 +2082,10 @@ mod tests {
             sending: "relay".into(),
             ..Default::default()
         };
-        assert!(matches!(install_args(&relay_without_settings), Err(ProviderError::InvalidParams(_))));
+        assert!(matches!(
+            install_args(&relay_without_settings),
+            Err(ProviderError::InvalidParams(_))
+        ));
     }
 
     #[test]
@@ -1968,7 +2131,10 @@ mod tests {
         let err = cli_failure(
             "yunori-mail domain remove",
             &out,
-            &[("still has mailboxes", Kind::Conflict), ("is not on this server", Kind::NotFound)],
+            &[
+                ("still has mailboxes", Kind::Conflict),
+                ("is not on this server", Kind::NotFound),
+            ],
         );
         match err {
             ProviderError::Conflict(m) => assert_eq!(m, "example.org still has mailboxes; remove them first"),
