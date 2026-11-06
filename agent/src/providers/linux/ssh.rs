@@ -15,9 +15,9 @@ use async_trait::async_trait;
 use chrono::{Local, NaiveDateTime, TimeZone};
 use tokio_util::sync::CancellationToken;
 
+use super::Shared;
 use super::common::{is_not_exist, not_found, now_rfc3339, precondition, rfc3339, split_lines, unsupported};
 use super::exec::{self, ExecOptions};
-use super::Shared;
 use crate::providers::*;
 
 pub use render::*;
@@ -44,7 +44,10 @@ fn tool(name: &str, args: &[&str]) -> ExecOptions {
 /// The context a scheduled revert runs under: nothing cancels it but its
 /// own 60-second deadline.
 fn revert_ctx() -> Ctx {
-    Ctx::new(CancellationToken::new(), Some(Instant::now() + Duration::from_secs(60)))
+    Ctx::new(
+        CancellationToken::new(),
+        Some(Instant::now() + Duration::from_secs(60)),
+    )
 }
 
 /// Maps the kernel's answers onto the provider sentinels so the panel can
@@ -69,7 +72,9 @@ impl Ssh for SshOps {
         let mut keys = Vec::with_capacity(16);
         for account in accounts {
             ctx.check()?;
-            let Ok(raw) = std::fs::read(account.home.join(AUTHORIZED_KEYS)) else { continue };
+            let Ok(raw) = std::fs::read(account.home.join(AUTHORIZED_KEYS)) else {
+                continue;
+            };
             let text = String::from_utf8_lossy(&raw);
             for line in split_lines(&text) {
                 if let Some(key) = parse_authorized_key(line, &account.name) {
@@ -87,9 +92,13 @@ impl Ssh for SshOps {
 
         let ssh_dir = account.home.join(".ssh");
         std::fs::create_dir_all(&ssh_dir).map_err(|e| wrap_fs_error(&ssh_dir, e))?;
-        std::os::unix::fs::chown(&ssh_dir, Some(account.uid), Some(account.gid)).map_err(|e| wrap_fs_error(&ssh_dir, e))?;
-        std::fs::set_permissions(&ssh_dir, <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700))
+        std::os::unix::fs::chown(&ssh_dir, Some(account.uid), Some(account.gid))
             .map_err(|e| wrap_fs_error(&ssh_dir, e))?;
+        std::fs::set_permissions(
+            &ssh_dir,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
+        )
+        .map_err(|e| wrap_fs_error(&ssh_dir, e))?;
 
         let mut b = String::from("# Managed by Kaname. Edits are overwritten on the next key apply.\n");
         let mut applied = 0i64;
@@ -104,7 +113,8 @@ impl Ssh for SshOps {
         exec::write_atomic(&target, b.as_bytes(), 0o600).map_err(|e| wrap_fs_error(&target, e))?;
         // sshd refuses a key file it does not trust the ownership of, so this
         // is not cosmetic.
-        std::os::unix::fs::chown(&target, Some(account.uid), Some(account.gid)).map_err(|e| wrap_fs_error(&target, e))?;
+        std::os::unix::fs::chown(&target, Some(account.uid), Some(account.gid))
+            .map_err(|e| wrap_fs_error(&target, e))?;
 
         Ok(applied)
     }
@@ -164,10 +174,14 @@ impl Ssh for SshOps {
             Err(e) => return Err(wrap_fs_error(&target, e)),
         };
 
-        let previous_text = previous.as_deref().map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+        let previous_text = previous
+            .as_deref()
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_default();
         let rendered = self.render_config(ctx, &p, &previous_text, use_drop_in).await?;
         if use_drop_in {
-            std::fs::create_dir_all(SSH_DROP_IN_DIR).map_err(|e| wrap_fs_error(Path::new(SSH_DROP_IN_DIR), e))?;
+            std::fs::create_dir_all(SSH_DROP_IN_DIR)
+                .map_err(|e| wrap_fs_error(Path::new(SSH_DROP_IN_DIR), e))?;
         }
         exec::write_atomic(&target, rendered.as_bytes(), 0o600).map_err(|e| wrap_fs_error(&target, e))?;
 
@@ -208,7 +222,9 @@ impl Ssh for SshOps {
                 }),
             )
             .await?;
-        Ok(SshConfigApplyResult { rollback_token: token })
+        Ok(SshConfigApplyResult {
+            rollback_token: token,
+        })
     }
 
     /* ------------------------------- sessions ----------------------------- */
@@ -268,7 +284,8 @@ impl Restore {
                 }
             }
             Some(previous) => {
-                exec::write_atomic(&self.target, previous, 0o600).map_err(|e| wrap_fs_error(&self.target, e))?;
+                exec::write_atomic(&self.target, previous, 0o600)
+                    .map_err(|e| wrap_fs_error(&self.target, e))?;
             }
         }
         reload(&self.shared, ctx).await
@@ -307,7 +324,9 @@ impl SshOps {
         if sessions.iter().any(|s| p.allow_users.contains(&s.user)) {
             return Ok(());
         }
-        Err(precondition("allow_users excludes every account with an open session"))
+        Err(precondition(
+            "allow_users excludes every account with an open session",
+        ))
     }
 
     async fn effective_config(&self, ctx: &Ctx) -> PResult<HashMap<String, Vec<String>>> {
@@ -316,8 +335,13 @@ impl SshOps {
         if let Some(binary) = sshd_binary() {
             if let Ok(out) = exec::run_with(ctx, tool(&binary, &["-T"])).await {
                 for line in split_lines(&out) {
-                    let Some((key, value)) = line.trim().split_once(' ') else { continue };
-                    directives.entry(key.to_lowercase()).or_default().push(value.trim().to_string());
+                    let Some((key, value)) = line.trim().split_once(' ') else {
+                        continue;
+                    };
+                    directives
+                        .entry(key.to_lowercase())
+                        .or_default()
+                        .push(value.trim().to_string());
                 }
                 return Ok(directives);
             }
@@ -332,7 +356,10 @@ impl SshOps {
             if fields.len() < 2 || fields[0].starts_with('#') {
                 continue;
             }
-            directives.entry(fields[0].to_lowercase()).or_default().push(fields[1..].join(" "));
+            directives
+                .entry(fields[0].to_lowercase())
+                .or_default()
+                .push(fields[1..].join(" "));
         }
         Ok(directives)
     }
@@ -386,7 +413,9 @@ fn login_accounts(only: &str) -> PResult<Vec<Account>> {
         if fields.len() < 7 {
             continue;
         }
-        let Ok(uid) = fields[2].parse::<u32>() else { continue };
+        let Ok(uid) = fields[2].parse::<u32>() else {
+            continue;
+        };
         if uid != 0 && uid < 1000 {
             continue;
         }
@@ -417,7 +446,9 @@ fn sshd_binary() -> Option<String> {
 /// there leaves the operator's own file untouched.
 fn ssh_target_file() -> (PathBuf, bool) {
     let main = PathBuf::from(SSH_CONFIG_PATH);
-    let Ok(raw) = std::fs::read(&main) else { return (main, false) };
+    let Ok(raw) = std::fs::read(&main) else {
+        return (main, false);
+    };
     let text = String::from_utf8_lossy(&raw);
     for line in split_lines(&text) {
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -534,13 +565,17 @@ pub mod render {
         }
         if let Some(users) = &p.allow_users {
             if users.is_empty() {
-                return Err(invalid("allow_users may not be empty; omit it to leave the directive alone"));
+                return Err(invalid(
+                    "allow_users may not be empty; omit it to leave the directive alone",
+                ));
             }
             add("AllowUsers", users.join(" "));
         }
         if let Some(groups) = &p.allow_groups {
             if groups.is_empty() {
-                return Err(invalid("allow_groups may not be empty; omit it to leave the directive alone"));
+                return Err(invalid(
+                    "allow_groups may not be empty; omit it to leave the directive alone",
+                ));
             }
             add("AllowGroups", groups.join(" "));
         }
@@ -558,7 +593,8 @@ pub mod render {
     /// replaced in place when it does not.
     pub fn render_ssh_config(directives: &[Directive], previous: &str, use_drop_in: bool) -> String {
         if use_drop_in {
-            let mut b = String::from("# Managed by Kaname. Edits are overwritten on the next ssh config apply.\n");
+            let mut b =
+                String::from("# Managed by Kaname. Edits are overwritten on the next ssh config apply.\n");
             for (key, value) in directives {
                 b.push_str(&format!("{key} {value}\n"));
             }
@@ -570,8 +606,10 @@ pub mod render {
     /// Replaces the directives Kaname manages and leaves every other line of
     /// the operator's config untouched.
     pub fn merge_directives(previous: &str, directives: &[Directive]) -> String {
-        let managed: std::collections::HashMap<String, &str> =
-            directives.iter().map(|(k, v)| (k.to_lowercase(), v.as_str())).collect();
+        let managed: std::collections::HashMap<String, &str> = directives
+            .iter()
+            .map(|(k, v)| (k.to_lowercase(), v.as_str()))
+            .collect();
 
         let mut lines: Vec<String> = previous.split('\n').map(str::to_string).collect();
         let mut applied: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -682,7 +720,10 @@ pub mod render {
             return Err("empty key blob".into());
         }
         let sum = Sha256::digest(&decoded);
-        Ok(format!("SHA256:{}", base64::engine::general_purpose::STANDARD_NO_PAD.encode(sum)))
+        Ok(format!(
+            "SHA256:{}",
+            base64::engine::general_purpose::STANDARD_NO_PAD.encode(sum)
+        ))
     }
 
     /* -------------------------------- helpers ----------------------------- */
@@ -699,8 +740,12 @@ pub mod render {
             "old" => return 86400,
             _ => {}
         }
-        let Some((hours, minutes)) = value.split_once(':') else { return 0 };
-        let (Ok(h), Ok(m)) = (hours.parse::<i64>(), minutes.parse::<i64>()) else { return 0 };
+        let Some((hours, minutes)) = value.split_once(':') else {
+            return 0;
+        };
+        let (Ok(h), Ok(m)) = (hours.parse::<i64>(), minutes.parse::<i64>()) else {
+            return 0;
+        };
         h * 3600 + m * 60
     }
 }
@@ -728,7 +773,10 @@ mod tests {
     }
 
     fn d(pairs: &[(&str, &str)]) -> Vec<Directive> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn is_invalid<T>(result: &Result<T, ProviderError>) -> bool {
@@ -760,7 +808,10 @@ mod tests {
 
         assert_eq!(directive_value(&directives, "Port"), "2222");
         assert_eq!(directive_value(&directives, "PasswordAuthentication"), "no");
-        assert_eq!(directive_value(&directives, "PermitRootLogin"), "prohibit-password");
+        assert_eq!(
+            directive_value(&directives, "PermitRootLogin"),
+            "prohibit-password"
+        );
         assert_eq!(directive_value(&directives, "MaxAuthTries"), "3");
         // sshd takes a space-separated list on one line, not one line per user.
         assert_eq!(directive_value(&directives, "AllowUsers"), "deploy ops");
@@ -810,7 +861,10 @@ mod tests {
             ),
         ];
         for (name, params) in cases {
-            assert!(is_invalid(&ssh_directives(&params)), "{name} was not rejected as invalid");
+            assert!(
+                is_invalid(&ssh_directives(&params)),
+                "{name} was not rejected as invalid"
+            );
         }
     }
 
@@ -834,11 +888,17 @@ mod tests {
 
         let rendered = render_ssh_config(&directives, previous, true);
 
-        assert!(rendered.starts_with("# Managed by Kaname."), "the drop-in does not announce itself:\n{rendered}");
+        assert!(
+            rendered.starts_with("# Managed by Kaname."),
+            "the drop-in does not announce itself:\n{rendered}"
+        );
         // A drop-in is rewritten wholesale, so nothing of the previous content
         // may survive — otherwise a directive removed from the panel would
         // linger on the host.
-        assert!(!rendered.contains("9999") && !rendered.contains("somebody else"), "kept previous content");
+        assert!(
+            !rendered.contains("9999") && !rendered.contains("somebody else"),
+            "kept previous content"
+        );
         assert!(rendered.contains("Port 2222\n") && rendered.contains("PasswordAuthentication no\n"));
     }
 
@@ -858,10 +918,20 @@ mod tests {
         .join("\n")
             + "\n";
 
-        let rendered = render_ssh_config(&d(&[("Port", "2222"), ("PermitRootLogin", "no")]), &previous, false);
+        let rendered = render_ssh_config(
+            &d(&[("Port", "2222"), ("PermitRootLogin", "no")]),
+            &previous,
+            false,
+        );
 
-        assert!(rendered.contains("Port 2222\n"), "the managed directive was not replaced:\n{rendered}");
-        assert!(!rendered.contains("Port 22\n"), "the old value survived the merge:\n{rendered}");
+        assert!(
+            rendered.contains("Port 2222\n"),
+            "the managed directive was not replaced:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("Port 22\n"),
+            "the old value survived the merge:\n{rendered}"
+        );
         // Everything the panel does not manage is left exactly as it was.
         for keep in [
             "# our hardening notes live here",
@@ -872,7 +942,10 @@ mod tests {
             assert!(rendered.contains(keep), "the merge dropped {keep:?}:\n{rendered}");
         }
         // A directive the file never had is appended rather than lost.
-        assert!(rendered.contains("PermitRootLogin no\n"), "a new directive was not appended:\n{rendered}");
+        assert!(
+            rendered.contains("PermitRootLogin no\n"),
+            "a new directive was not appended:\n{rendered}"
+        );
         assert!(rendered.ends_with('\n'));
     }
 
@@ -884,8 +957,14 @@ mod tests {
         // OpenSSH takes the first occurrence and ignores the rest. Rewriting
         // only the first and leaving the second would show a config that
         // disagrees with itself the next time somebody reads the file.
-        assert!(rendered.contains("Port 2222"), "the first occurrence was not replaced:\n{rendered}");
-        assert!(rendered.contains("# Port 2200"), "the shadowed duplicate was not commented out:\n{rendered}");
+        assert!(
+            rendered.contains("Port 2222"),
+            "the first occurrence was not replaced:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("# Port 2200"),
+            "the shadowed duplicate was not commented out:\n{rendered}"
+        );
     }
 
     #[test]
@@ -894,11 +973,25 @@ mod tests {
         // spell one any way at all. Missing that would append a second Port
         // line below the one already in effect, which OpenSSH would ignore.
         let previous = "port 22\nPASSWORDAUTHENTICATION yes\n";
-        let rendered = render_ssh_config(&d(&[("Port", "2222"), ("PasswordAuthentication", "no")]), previous, false);
+        let rendered = render_ssh_config(
+            &d(&[("Port", "2222"), ("PasswordAuthentication", "no")]),
+            previous,
+            false,
+        );
 
-        assert_eq!(rendered.matches("2222").count(), 1, "Port was written more than once:\n{rendered}");
-        assert!(rendered.contains("Port 2222"), "the lowercase directive was not matched:\n{rendered}");
-        assert!(rendered.contains("PasswordAuthentication no"), "the uppercase directive was not matched");
+        assert_eq!(
+            rendered.matches("2222").count(),
+            1,
+            "Port was written more than once:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Port 2222"),
+            "the lowercase directive was not matched:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("PasswordAuthentication no"),
+            "the uppercase directive was not matched"
+        );
         assert!(!rendered.contains("yes"), "the old value survived:\n{rendered}");
     }
 
@@ -909,8 +1002,14 @@ mod tests {
 
         // The commented line is documentation, not configuration; rewriting it
         // would turn a note into a live directive.
-        assert!(rendered.contains("# Port 22\n"), "a commented directive was rewritten:\n{rendered}");
-        assert!(rendered.contains("\nPort 2222"), "the live directive was not replaced:\n{rendered}");
+        assert!(
+            rendered.contains("# Port 22\n"),
+            "a commented directive was rewritten:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("\nPort 2222"),
+            "the live directive was not replaced:\n{rendered}"
+        );
     }
 
     /* ------------------------------ authorized keys ---------------------- */
@@ -952,12 +1051,19 @@ mod tests {
                 format!("command=\"/bin/sh\" ssh-ed25519 {TEST_KEY_BLOB}"),
                 "laptop".into(),
             ),
-            ("not base64", "ssh-ed25519 ****not base64****".into(), "laptop".into()),
+            (
+                "not base64",
+                "ssh-ed25519 ****not base64****".into(),
+                "laptop".into(),
+            ),
             ("empty blob", "ssh-ed25519 ''".into(), "laptop".into()),
         ];
         for (name, key, comment) in cases {
             let result = normalize_authorized_key(&key, &comment);
-            assert!(is_invalid(&result), "{name}: normalize_authorized_key produced {result:?}");
+            assert!(
+                is_invalid(&result),
+                "{name}: normalize_authorized_key produced {result:?}"
+            );
         }
     }
 
@@ -994,15 +1100,21 @@ mod tests {
         for (name, key, comment, want) in cases {
             let got = normalize_authorized_key(&key, comment).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(got, want, "{name}");
-            assert!(!got.contains(['\n', '\r']), "the normalised line spans more than one line");
+            assert!(
+                !got.contains(['\n', '\r']),
+                "the normalised line spans more than one line"
+            );
         }
     }
 
     #[test]
     fn parse_authorized_key_reads_what_sshd_would_read() {
-        let line = format!("no-port-forwarding,command=\"/usr/bin/rrsync /srv\" ssh-ed25519 {TEST_KEY_BLOB} backup@nas");
+        let line = format!(
+            "no-port-forwarding,command=\"/usr/bin/rrsync /srv\" ssh-ed25519 {TEST_KEY_BLOB} backup@nas"
+        );
 
-        let key = parse_authorized_key(&line, "deploy").expect("a key behind an options prefix was not recognised");
+        let key =
+            parse_authorized_key(&line, "deploy").expect("a key behind an options prefix was not recognised");
         // Reading is not writing: an existing line with options is reported so
         // the panel can show it, with the algorithm found past the options.
         assert_eq!(key.r#type, "ssh-ed25519");
@@ -1011,7 +1123,11 @@ mod tests {
         assert_eq!(key.user, "deploy");
         // ssh-keygen -lf prints the unpadded base64 form; matching it is how
         // an operator compares what the panel shows to what they have.
-        assert!(key.fingerprint.starts_with("SHA256:") && !key.fingerprint.ends_with('='), "{}", key.fingerprint);
+        assert!(
+            key.fingerprint.starts_with("SHA256:") && !key.fingerprint.ends_with('='),
+            "{}",
+            key.fingerprint
+        );
     }
 
     #[test]
@@ -1025,7 +1141,10 @@ mod tests {
             "nonsense entirely".to_string(),
             "ssh-ed25519 !!!not-base64!!!".to_string(),
         ] {
-            assert!(parse_authorized_key(&line, "deploy").is_none(), "parse_authorized_key({line:?}) returned a key");
+            assert!(
+                parse_authorized_key(&line, "deploy").is_none(),
+                "parse_authorized_key({line:?}) returned a key"
+            );
         }
     }
 
@@ -1034,8 +1153,14 @@ mod tests {
         let fingerprint = key_fingerprint(TEST_KEY_BLOB).unwrap();
         // SHA-256 is 32 bytes, which is 43 unpadded base64 characters.
         assert_eq!(fingerprint.len(), "SHA256:".len() + 43, "{fingerprint}");
-        assert!(key_fingerprint("").is_err(), "an empty blob produced a fingerprint");
-        assert!(key_fingerprint("!!!").is_err(), "a non-base64 blob produced a fingerprint");
+        assert!(
+            key_fingerprint("").is_err(),
+            "an empty blob produced a fingerprint"
+        );
+        assert!(
+            key_fingerprint("!!!").is_err(),
+            "a non-base64 blob produced a fingerprint"
+        );
     }
 
     #[test]
