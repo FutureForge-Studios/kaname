@@ -209,12 +209,16 @@ pub fn parse_list_units(out: &str) -> (Vec<String>, HashMap<String, String>) {
     let mut names = Vec::with_capacity(64);
     let mut descriptions = HashMap::new();
     for line in split_lines(out) {
-        let fields: Vec<&str> = line.split_whitespace().collect();
+        let mut fields: Vec<&str> = line.split_whitespace().collect();
+        // A unit systemd cannot find is prefixed with a bullet in some
+        // versions, either glued to the name or as a field of its own; the
+        // name is still the first real field.
+        if fields.first() == Some(&"●") {
+            fields.remove(0);
+        }
         if fields.len() < 4 {
             continue;
         }
-        // A unit systemd cannot find is prefixed with a bullet in some
-        // versions; the name is still the first real field.
         let name = fields[0].trim_start_matches('●');
         if name.is_empty() || !name.ends_with(".service") {
             continue;
