@@ -161,7 +161,7 @@ pub async fn run_stream(
     ctx: &Ctx,
     stream: &dyn Stream,
     o: ExecOptions,
-    redact: Option<&dyn Fn(&str) -> String>,
+    redact: Option<&(dyn Fn(&str) -> String + Sync)>,
 ) -> PResult<Output> {
     let mut cmd = command(&o)?;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
