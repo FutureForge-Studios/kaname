@@ -5,6 +5,8 @@ import type { Config } from "../config.js";
 import { AgentOfflineError, AgentRpcError, type AgentHub } from "../agent/hub.js";
 import type { EventBus } from "../services/events.js";
 import type { AuditService } from "../services/audit.js";
+import type { MailReleaseService } from "../services/mail-release.js";
+import type { MailSecretStore } from "../services/mail-secrets.js";
 import { JobQueue, type ClaimedJob } from "./queue.js";
 
 /* ------------------------------------------------------------------ *
@@ -24,6 +26,8 @@ export interface JobContext {
   audit: AuditService;
   config: Config;
   log: Logger;
+  mailReleases: MailReleaseService;
+  mailSecrets: MailSecretStore;
   job: ClaimedJob;
   /** Emits a job log line and pushes it to any open job drawer. */
   log_(level: "debug" | "info" | "warn" | "error", message: string): Promise<void>;
@@ -50,6 +54,8 @@ export class JobWorker {
       audit: AuditService;
       config: Config;
       log: Logger;
+      mailReleases: MailReleaseService;
+      mailSecrets: MailSecretStore;
     },
   ) {}
 

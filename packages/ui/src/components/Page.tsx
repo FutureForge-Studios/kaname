@@ -48,7 +48,7 @@ export const PageHeader = React.forwardRef<HTMLElement, PageHeaderProps>(functio
       )}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="truncate text-xl font-medium tracking-tight text-[var(--kn-text)]">
+          <h1 className="kn-display truncate text-xl font-medium text-[var(--kn-text)]">
             {title}
           </h1>
           {subtitle && (
@@ -185,7 +185,7 @@ export const ResourceHeader = React.forwardRef<HTMLElement, ResourceHeaderProps>
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 flex-col gap-1">
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-              <h1 className="truncate text-xl font-medium tracking-tight text-[var(--kn-text)]">
+              <h1 className="kn-display truncate text-xl font-medium text-[var(--kn-text)]">
                 {name}
               </h1>
               {connection && (

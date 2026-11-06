@@ -110,6 +110,14 @@ uses an argv slice — never a string handed to `sh -c`.
 Namespaces: `system`, `service`, `process`, `container`, `fs`, `site`, `cert`, `dns`, `mail`,
 `db`, `fw`, `ssh`, `backup`, `log`, `pty`.
 
+The `mail` namespace is Yunori Mail Server ([KD-034](../DECISIONS.md#kd-034)): every verb is one
+`yunori-mail` CLI invocation on the host (`mail.status`, `mail.preflight`, `mail.doctor`,
+`mail.deploy`, `mail.update`, `mail.domain.*`, `mail.mailbox.*`, `mail.alias.*`,
+`mail.certificate.*`, `mail.logs`). `mail.deploy` is gated on `systemd` because it is what
+installs the binary; everything else requires the `yunori` capability, which the agent advertises
+when `/usr/local/bin/yunori-mail` exists. `mail.mailbox.add` and `mail.mailbox.passwd` return a
+generated password once; the control plane never persists it ([KD-035](../DECISIONS.md#kd-035)).
+
 Each method declares:
 
 - `params` / `result` — Zod schemas, validated on both ends.
@@ -123,7 +131,7 @@ Each method declares:
 
 Every path parameter is validated twice: by `absolutePath` in the contract before it leaves the
 control plane, and again by the agent, which requires an absolute path, rejects any `..`
-segment and any NUL byte, applies `filepath.Clean`, and refuses symlink escapes out of the
+segment and any NUL byte, cleans it with POSIX rules, and refuses symlink escapes out of the
 requested root. Archive extraction additionally guards against zip-slip.
 
 ---
@@ -148,13 +156,13 @@ Unsolicited pushes from the agent. Anything not in this list is dropped rather t
 ## 5. Capabilities
 
 `hlo.capabilities` is how a host says what it can actually do: `systemd`, `docker`, `podman`,
-`nginx`, `mysql`, `postgres`, `mail`, `nftables`, `fail2ban`, `restic`, and so on. The Linux
+`nginx`, `mysql`, `postgres`, `yunori`, `nftables`, `fail2ban`, `restic`, and so on. The Linux
 provider probes for each at startup; the simulated provider reports a fixed plausible set plus
 `simulated`, so the panel can label those servers unmistakably
 ([KD-010](../DECISIONS.md)).
 
-The panel uses capabilities to decide what to show. A host without `mail` does not get an Email
-section that fails when clicked — it does not get one at all.
+The panel uses capabilities to decide what to show. A host without `yunori` is offered **Deploy
+Yunori Mail Server**, not an Email section that fails when clicked.
 
 ---
 

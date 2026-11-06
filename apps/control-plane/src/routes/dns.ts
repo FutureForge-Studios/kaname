@@ -1,6 +1,14 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { and, asc, desc, eq, isNotNull, isNull, sql, type Database } from "@kaname/db";
-import { certificates, dnsRecords, domains, mailDomains, servers, sites } from "@kaname/db/schema";
+import {
+  certificates,
+  dnsRecords,
+  domains,
+  mailDomains,
+  mailServers,
+  servers,
+  sites,
+} from "@kaname/db/schema";
 import {
   createDnsRecordInput,
   dnsRecordListQuery,
@@ -634,8 +642,9 @@ async function validateZone(db: Database, domain: DomainRow): Promise<DnsValidat
   const mail =
     (
       await db
-        .select({ mailHostname: mailDomains.mailHostname })
+        .select({ mailHostname: mailServers.hostname })
         .from(mailDomains)
+        .innerJoin(mailServers, eq(mailDomains.mailServerId, mailServers.id))
         .where(eq(mailDomains.domainId, domain.id))
         .limit(1)
     )[0] ?? null;
@@ -742,7 +751,7 @@ async function validateZone(db: Database, domain: DomainRow): Promise<DnsValidat
       summary: `Authorise this host and nothing else: ${line}`,
       actions: [
         { label: "Copy the record", copy: line },
-        { label: "Mail authentication", href: "/email/authentication" },
+        { label: "Mail authentication", href: "/email/domains" },
       ],
     });
   }
@@ -762,7 +771,7 @@ async function validateZone(db: Database, domain: DomainRow): Promise<DnsValidat
         summary: `Add ${line}`,
         actions: [
           { label: "Copy the record", copy: line },
-          { label: "Mail authentication", href: "/email/authentication" },
+          { label: "Mail authentication", href: "/email/domains" },
         ],
       },
     );
@@ -787,7 +796,7 @@ async function validateZone(db: Database, domain: DomainRow): Promise<DnsValidat
           ...(proxiedTarget
             ? [{ label: "Open the record", href: `/websites/dns?domain_id=${domain.id}` }]
             : []),
-          { label: "Mail authentication", href: "/email/authentication" },
+          { label: "Mail authentication", href: "/email/domains" },
         ],
       },
     );
@@ -811,7 +820,7 @@ async function validateZone(db: Database, domain: DomainRow): Promise<DnsValidat
           ),
         actions: [
           { label: "Copy the record", copy: line },
-          { label: "Mail authentication", href: "/email/authentication" },
+          { label: "Mail authentication", href: "/email/domains" },
         ],
       },
     );

@@ -72,11 +72,11 @@ describe("job worker shutdown", () => {
     ctx.events.on("jobs", (event) => seen.push(event));
 
     ctx.worker.register("service.restart", (job) => untilAborted(job.signal));
-    ctx.worker.register("mail.mailbox.create", (job) => untilAborted(job.signal));
+    ctx.worker.register("mail.alias.add", (job) => untilAborted(job.signal));
 
     // No server: claimable without a connected agent.
     const restart = await ctx.queue.enqueue({ type: "service.restart", serverId: null });
-    const create = await ctx.queue.enqueue({ type: "mail.mailbox.create", serverId: null });
+    const create = await ctx.queue.enqueue({ type: "mail.alias.add", serverId: null });
 
     ctx.worker.start();
     await waitFor(
