@@ -11,9 +11,9 @@
 @import "@kaname/ui/styles.css";
 @import "@kaname/ui/tailwind";
 
-@import "@fontsource-variable/geist";
-@import "@fontsource-variable/geist-mono";
-@import "@fontsource-variable/fraunces";
+@import "@fontsource-variable/inter";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
 
 /*
  * Tailwind scans the project it lives in and skips node_modules, so the
@@ -23,21 +23,14 @@
 @source "../../../packages/ui/src";
 
 /*
- * The Yunori faces, self-hosted (a control panel must not call Google
- * Fonts). @fontsource-variable registers them as "Geist Variable",
- * "Geist Mono Variable" and "Fraunces Variable" — the same names the
- * token stack in @kaname/ui leads with — so the app only pins the stack
- * to those registrations, with the static-family names as fallbacks.
+ * Faces. The interface is set in the Apple system face where there is one
+ * (SF Pro, SF Mono); elsewhere it falls back to the self-hosted Inter and
+ * JetBrains Mono below, never to Google Fonts. The token stack in
+ * @kaname/ui already names "Inter Variable", the @fontsource-variable
+ * registration, so nothing is widened here. Page titles use Geist Pixel
+ * Square, loaded by next/font in app/layout.tsx (OFL, from `geist`).
+ * Satoshi is licensed to the ffstudios site only and is not used.
  */
-:root,
-[data-theme="dark"],
-[data-theme="light"] {
-  --kn-font-sans: "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system,
-    BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --kn-font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SFMono-Regular", "SF Mono",
-    Menlo, Consolas, monospace;
-  --kn-font-display: "Fraunces Variable", "Fraunces", ui-serif, Georgia, serif;
-}
 
 html,
 body {

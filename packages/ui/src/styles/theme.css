@@ -45,6 +45,7 @@
   --radius-sm: var(--kn-r-sm);
   --radius-md: var(--kn-r-md);
   --radius-lg: var(--kn-r-lg);
+  --radius-xl: var(--kn-r-xl);
 
   --shadow-sm: var(--kn-shadow-sm);
   --shadow-md: var(--kn-shadow-md);
