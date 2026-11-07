@@ -312,3 +312,14 @@ export function binaryBytes(size: number, seed = 7): Buffer {
   }
   return out;
 }
+
+/**
+ * The value inside a CopyableCode block, found by the copy button its
+ * label names ("Copy Password"). The block carries no ARIA label of its
+ * own, but its button does, and the code is that button's sibling.
+ */
+export function codeBlock(scope: Locator, label: string): Locator {
+  return scope
+    .getByRole("button", { name: `Copy ${label}`, exact: true })
+    .locator("xpath=ancestor::div[code][1]/code");
+}

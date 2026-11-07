@@ -102,8 +102,7 @@ test("an empty, short or wrong token is refused with the reason", async () => {
 
   await field.fill("kn_setup_0000000000000000000000000000");
   await go.click();
-  const refused = page.getByRole("alert").first();
-  await expect(refused).toBeVisible();
+  await expect(page.getByText("does not match")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Enter your setup token" })).toBeVisible();
   expect((await state(await cookieOf())).authorized).toBe(false);
 });
@@ -290,9 +289,11 @@ test("each optional step can be skipped, is recorded as skipped, and a reload re
 
     /* Wait for the step's footer to settle before choosing. */
     await expect(
-      page.getByRole("button", {
-        name: /^(Continue|Continue without email|Save and continue|Add domain|Create website|Deploy mail server|Schedule backups|Send invitation)$/,
-      }),
+      page
+        .getByRole("button", {
+          name: /^(Continue|Continue without email|Save and continue|Add domain|Create website|Deploy mail server|Schedule backups|Send invitation)$/,
+        })
+        .last(),
     ).toBeEnabled({ timeout: 30_000 });
     await skipCurrent();
 
