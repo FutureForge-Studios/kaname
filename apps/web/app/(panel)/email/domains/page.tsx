@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { Globe, Network, Plus, RefreshCw, Trash2 } from "lucide-react";
 import type { Domain, MailDomain } from "@kaname/contract";
 import {
@@ -62,6 +63,7 @@ const DNS_OPTIONS = [
 
 export default function MailDomainsPage() {
   const can = useCan();
+  const router = useRouter();
 
   const state = useResourceListState({
     defaultSort: { id: "domain_name", order: "asc" },
@@ -211,7 +213,9 @@ export default function MailDomainsPage() {
     </Button>
   );
 
-  const blocked = removing !== null && removing.mailbox_count > 0;
+  // The control plane refuses while either mailboxes or aliases remain, so
+  // the dialog has to know about both or it arms a removal that cannot work.
+  const blocked = removing !== null && (removing.mailbox_count > 0 || removing.alias_count > 0);
 
   return (
     <>
@@ -274,14 +278,21 @@ export default function MailDomainsPage() {
         title={`Remove ${removing?.domain_name ?? "domain"} from ${removing?.server_name ?? "the server"}?`}
         description={
           blocked
-            ? `${removing?.domain_name} still has ${formatCount(removing?.mailbox_count)} ${removing?.mailbox_count === 1 ? "mailbox" : "mailboxes"}. Delete them first: removing the domain would take their mail with it, so Yunori refuses.`
+            ? `${removing?.domain_name} still has ${formatCount(removing?.mailbox_count)} ${removing?.mailbox_count === 1 ? "mailbox" : "mailboxes"} and ${formatCount(removing?.alias_count)} ${removing?.alias_count === 1 ? "alias" : "aliases"}. Delete them first: removing the domain would take their mail with it, so Kaname refuses.`
             : "Yunori stops accepting mail for this domain and drops its aliases and DKIM keys. The records at your DNS provider stay; remove them yourself. The domain itself stays in Kaname."
         }
         confirmText={blocked ? undefined : removing?.domain_name}
-        confirmLabel={blocked ? "Remove anyway" : "Remove domain"}
+        // Blocked, the only useful next step is the list to empty. This
+        // button used to read "Remove anyway" and silently do nothing.
+        confirmLabel={blocked ? "Open its mailboxes" : "Remove domain"}
+        destructive={!blocked}
         loading={remove.isPending}
         onConfirm={() => {
-          if (!removing || blocked) return;
+          if (!removing) return;
+          if (blocked) {
+            router.push(`/email/mailboxes?mail_domain_id=${removing.id}`);
+            return;
+          }
           remove.mutate(
             { id: removing.id, domain_name: removing.domain_name },
             { onSuccess: () => setRemoving(null) },
@@ -290,7 +301,7 @@ export default function MailDomainsPage() {
       >
         {blocked && (
           <p className="text-sm text-[var(--kn-text-2)]">
-            Go to Mailboxes, filter on this domain and delete each one; then come back.
+            Delete each mailbox and alias on this domain, then come back.
           </p>
         )}
       </ConfirmDialog>
