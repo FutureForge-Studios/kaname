@@ -724,18 +724,34 @@ and are redacted from the job log; the job log says where to find them.
 
 ---
 
-## KD-036 — The panel wears the Yunori design
+## KD-036 — The panel wears the FF Studios design, with an Apple UI layer
 
-**Decision.** The token sheet carries the Yunori design (yunori.email): warm paper light theme as
-the default, a navy-ink dark theme, the torii accent, Geist and Geist Mono, Fraunces for page
-titles. Every `--kn-*` token name is unchanged, so the component kit and fifty thousand lines of
-pages did not move.
+**Decision.** The token sheet carries the FutureForge Studios design: the ink canvas
+(`#0A0A0C`, surfaces `#131316` / `#1A1A1F`, recess `#060608`), white-alpha hairlines, three
+text tiers, and brand purple `#7A4FF4` as the only accent. Semantic colour comes from its
+secondary hues (teal, yellow, red; info is a derived blue). Dark is the default and the design
+target; light is built from the ffstudios paper palette. On top sits an Apple-style UI layer:
+continuous rounded corners (6 / 8 / 10 / 14 / 16px), translucent vibrancy materials on the
+sidebar and top bar, soft layered shadows on floating surfaces and cards, the
+`cubic-bezier(0.32, 0.72, 0, 1)` ease at 140 / 240 / 360 ms, and a 3px focus halo. The
+interface face is SF Pro (Inter off Apple platforms), mono is SF Mono (JetBrains Mono
+elsewhere), and page titles are Geist Pixel Square at 26.32px. Every `--kn-*` token name is
+unchanged, so the component kit and the pages did not move. This replaces the earlier Yunori
+skin.
 
-**Why.** Kaname and Yunori Mail Server are now one operator's two consoles for the same host, and
-an operator who opens Yunori's console from Kaname's Email page should not feel a seam. The
-design-system rules that matter for an infrastructure panel (status colour means status, two
-status axes never collapsed, monospace for anything you would grep, density) are unchanged;
-only the palette and the type changed.
+**Why.** The owner asked for the FF Studios design with an Apple UI. FF Studios supplies
+identity (palette, accent discipline, the pixel display face); the Apple layer supplies the
+feel of a native operator tool. The design-system rules that matter for an infrastructure panel
+(status colour means status, two status axes never collapsed, monospace for anything you would
+grep, density) are unchanged.
 
-**Cost accepted.** Light became the default, which inverts KD-005's assumption; the contrast
-table in `docs/design-system.md` was redone for both themes rather than trusted.
+**Deliberate deviations from the ffstudios system.** Its "radius 0 everywhere, no shadows, no
+glows" rule is overridden by the Apple layer: corners are rounded, cards and overlays carry
+soft neutral shadows (still no coloured glows). Satoshi is not used, because it is licensed to
+the ffstudios site and this repository is public. Geist Pixel ships under the OFL in the
+`geist` npm package and is redistributable.
+
+**Cost accepted.** Light paper needs its own accent text value (`primary-ink #6A3EE8`), since
+ffstudios' accent-fg is 2.4:1 there. The light focus halo is 75% rather than 60% to stay above
+3:1. White on the dark danger fill is 3.2:1. Backdrop blur costs GPU time on the two chrome
+surfaces; `prefers-reduced-transparency` turns it off.

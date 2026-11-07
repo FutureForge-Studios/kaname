@@ -47,9 +47,9 @@ const THEME_KEY = "kaname.theme";
 export function applyTheme(choice: ThemeChoice): void {
   const resolved =
     choice === "system"
-      ? window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light"
+      ? window.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark"
       : choice;
   document.documentElement.setAttribute("data-theme", resolved);
   try {
@@ -106,7 +106,7 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
   return (
     <header
       className={cn(
-        "flex h-[var(--kn-topbar-h)] shrink-0 items-center gap-2 border-b border-[var(--kn-border)] bg-[var(--kn-bg)] px-3",
+        "flex h-[var(--kn-topbar-h)] shrink-0 items-center gap-2 kn-material border-b border-[var(--kn-border)] px-3",
         className,
       )}
     >

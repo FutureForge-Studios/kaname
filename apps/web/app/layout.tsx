@@ -1,16 +1,21 @@
 import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
+import { GeistPixelSquare } from "geist/font/pixel/square";
 import { Providers } from "./providers";
 import "./globals.css";
 
 /* ------------------------------------------------------------------ *
  * Root layout.
  *
- * Light (the Yunori design: warm paper, ink text) is the default and the
- * design target; dark ships with the same token names. The choice is
- * applied before first paint by the inline script below — a theme
- * resolved in an effect would flash the wrong palette on every
- * navigation, which for an operator who chose dark is a white strobe.
+ * Dark (the FF Studios ink canvas) is the default and the design target;
+ * light ships with the same token names on the ffstudios paper palette.
+ * The choice is applied before first paint by the inline script below — a
+ * theme resolved in an effect would flash the wrong palette on every
+ * navigation, which on a near-black panel is a white strobe.
+ *
+ * GeistPixelSquare (OFL, from the `geist` package) only defines
+ * --font-geist-pixel-square on <html>; the token sheet decides where the
+ * face is used (.kn-display, page titles).
  * ------------------------------------------------------------------ */
 
 export const metadata: Metadata = {
@@ -29,18 +34,23 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#060913" },
-    { media: "(prefers-color-scheme: light)", color: "#faf7f2" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0c" },
+    { media: "(prefers-color-scheme: light)", color: "#f5f4f0" },
   ],
-  colorScheme: "light dark",
+  colorScheme: "dark light",
 };
 
 /** Mirrors applyTheme() in components/Topbar.tsx. */
-const THEME_SCRIPT = `(function(){try{var s=localStorage.getItem("kaname.theme");var t=s==="light"||s==="dark"?s:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.setAttribute("data-theme",t)}catch(e){document.documentElement.setAttribute("data-theme","light")}})()`;
+const THEME_SCRIPT = `(function(){try{var s=localStorage.getItem("kaname.theme");var t=s==="light"||s==="dark"?s:(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");document.documentElement.setAttribute("data-theme",t)}catch(e){document.documentElement.setAttribute("data-theme","dark")}})()`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" data-theme="light" suppressHydrationWarning>
+    <html
+      lang="en"
+      data-theme="dark"
+      className={GeistPixelSquare.variable}
+      suppressHydrationWarning
+    >
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>

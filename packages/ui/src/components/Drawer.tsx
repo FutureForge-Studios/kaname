@@ -239,7 +239,7 @@ export const Drawer = React.forwardRef<HTMLDivElement, DrawerProps>(function Dra
                 )
               : cn(
                   "inset-x-0 bottom-0 max-h-[85vh] border-t border-[var(--kn-border)]",
-                  "rounded-t-[var(--kn-r-lg)]",
+                  "rounded-t-[var(--kn-r-xl)]",
                   entered ? "translate-y-0" : "translate-y-full",
                 ),
             className,

@@ -205,7 +205,7 @@ export const Dialog = React.forwardRef<HTMLDivElement, DialogProps>(function Dia
           onKeyDown={handleKeyDown}
           className={cn(
             "flex max-h-full w-full flex-col overflow-hidden outline-none",
-            "rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)]",
+            "rounded-[var(--kn-r-xl)] border border-[var(--kn-border)] bg-[var(--kn-surface)]",
             "text-base text-[var(--kn-text)] shadow-[var(--kn-shadow-lg)]",
             "animate-[var(--animate-scale-in)]",
             variant(SIZES, size, "md"),

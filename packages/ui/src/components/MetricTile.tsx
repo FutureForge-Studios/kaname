@@ -95,7 +95,7 @@ export const MetricTile = React.forwardRef<HTMLDivElement, MetricTileProps>(func
     <div
       ref={ref}
       className={cn(
-        "min-w-0 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] px-3 py-2.5",
+        "min-w-0 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] px-3 py-2.5 shadow-[var(--kn-shadow-sm)]",
         className,
       )}
       {...props}
