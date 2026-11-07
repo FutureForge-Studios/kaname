@@ -144,6 +144,10 @@ test("the deploy dialog does not offer a host whose agent is away", async ({ pag
     const dialog = page.getByRole("dialog", { name: "Deploy Yunori Mail Server" });
     await dialog.getByRole("combobox", { name: "Server", exact: true }).click();
     const options = page.getByRole("listbox", { name: "Server" }).getByRole("option");
+    console.log("servers seen by the page:", JSON.stringify(await page.evaluate(async () => {
+      const res = await fetch("/api/v1/servers?per_page=100");
+      return ((await res.json()) as { data: { name: string; connection: string }[] }).data.map((s) => [s.name, s.connection]);
+    })), await options.allInnerTexts());
     await expect(options.filter({ hasText: "forge-01" })).toHaveCount(1);
     await expect(options.filter({ hasText: "edge-01" })).toHaveCount(0);
 

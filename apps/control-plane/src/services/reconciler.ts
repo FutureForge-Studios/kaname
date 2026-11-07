@@ -60,7 +60,11 @@ export class Reconciler {
     hub.on("disconnected", (serverId) => {
       void db
         .update(servers)
-        .set({ connection: "disconnected", updatedAt: new Date() })
+        // Health goes with it, in the same write: the sweep would get there
+        // within 15s, but it publishes nothing for health, so a page that
+        // refetched on `server.disconnected` kept the last verdict of a host
+        // nobody can see any more ("Disconnected · Warning") until reload.
+        .set({ connection: "disconnected", health: "unknown", updatedAt: new Date() })
         .where(eq(servers.id, serverId))
         .then(() =>
           events.publish("servers", "server.disconnected", { server_id: serverId }, serverId),

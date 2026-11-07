@@ -48,8 +48,10 @@ test("failed-only narrows the fleet to units that really failed, on every host",
   const table = page.getByRole("table", { name: "Services" });
   await expect(table.locator("tbody tr").first()).toBeVisible();
 
-  await page.getByRole("switch", { name: "Failed only" }).check();
+  const failedOnly = page.getByRole("switch", { name: "Failed only" });
+  await failedOnly.click();
   await expect(page).toHaveURL(/active_state=failed/);
+  await expect(failedOnly).toBeChecked();
 
   const state = await columnIndex(table, "State");
   const serverCol = await columnIndex(table, "Server");

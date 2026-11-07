@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { serverNamed } from "../support/api.js";
 import { missingId } from "../support/config.js";
 import { sectionNamed } from "../support/ui.js";
 import {
@@ -7,11 +6,13 @@ import {
   choose,
   drawerJob,
   expectJobStatus,
+  field,
   get,
   rowWith,
   settledJob,
   unique,
   type JobRow,
+  serverNamed,
 } from "../support/websites.js";
 
 /* ------------------------------------------------------------------ *
@@ -106,9 +107,9 @@ test("an http-01 certificate is issued from the site and served from its webroot
   await expect(dialog).toBeVisible();
   /* Prefilled from where it was opened: the site's domain and host, and
    * the signed-in operator as the ACME contact. */
-  await expect(dialog.getByLabel("Server")).toHaveValue(HOST);
-  await expect(dialog.getByLabel("Contact email")).not.toHaveValue("");
-  await expect(dialog.getByLabel("Challenge")).toHaveValue("http-01");
+  await expect(field(dialog, "Server")).toHaveValue(HOST);
+  await expect(field(dialog, "Contact email")).not.toHaveValue("");
+  await expect(field(dialog, "Challenge")).toHaveValue("http-01");
   /* A manual zone cannot publish a dns-01 record in time, so it is not offered. */
   await expect(dialog.getByRole("option", { name: "dns-01 (DNS record)" })).toBeDisabled();
 
@@ -147,11 +148,11 @@ test("a dns-01 certificate is issued for an API-driven zone without a site", asy
   await expect(page.getByRole("heading", { level: 1, name: "SSL / TLS" })).toBeVisible();
   await page.getByRole("button", { name: "Issue certificate" }).first().click();
   const dialog = page.getByRole("dialog", { name: /^Issue a certificate/ });
-  await choose(page, dialog.getByLabel("Domain"), name);
-  await expect(dialog.getByLabel("Server")).toHaveValue(HOST);
-  await dialog.getByLabel("Additional names").fill("");
-  await dialog.getByLabel("Challenge").selectOption("dns-01");
-  await dialog.getByLabel("Key type").selectOption("rsa");
+  await choose(page, field(dialog, "Domain"), name);
+  await expect(field(dialog, "Server")).toHaveValue(HOST);
+  await field(dialog, "Additional names").fill("");
+  await field(dialog, "Challenge").selectOption("dns-01");
+  await field(dialog, "Key type").selectOption("rsa");
   await dialog.getByRole("button", { name: "Request certificate" }).click();
   await expect(dialog).toBeHidden();
 
@@ -179,16 +180,16 @@ test("issuance that cannot work is refused before an ACME order is spent", async
   const dialog = page.getByRole("dialog", { name: /^Issue a certificate/ });
 
   /* Field checks first. */
-  await dialog.getByLabel("Contact email").fill("not-an-address");
+  await field(dialog, "Contact email").fill("not-an-address");
   await dialog.getByRole("button", { name: "Request certificate" }).click();
   await expect(dialog.getByText("Pick the domain this certificate covers.")).toBeVisible();
   await expect(dialog.getByText("Let's Encrypt sends expiry warnings here.")).toBeVisible();
 
-  await choose(page, dialog.getByLabel("Domain"), lonely.data.name);
-  await dialog.getByLabel("Additional names").fill("ok.e2e.test, not_valid");
+  await choose(page, field(dialog, "Domain"), lonely.data.name);
+  await field(dialog, "Additional names").fill("ok.e2e.test, not_valid");
   await expect(dialog.getByText('"not_valid" is not a domain name.')).toBeVisible();
-  await dialog.getByLabel("Additional names").fill("");
-  await dialog.getByLabel("Contact email").fill("ops@e2e.test");
+  await field(dialog, "Additional names").fill("");
+  await field(dialog, "Contact email").fill("ops@e2e.test");
   await dialog.getByRole("button", { name: "Request certificate" }).click();
   await expect(dialog.getByRole("alert").filter({ hasText: "precondition_failed" })).toContainText(
     `${lonely.data.name} is not attached to a site, so there is no webroot to serve the http-01 challenge from.`,
@@ -229,7 +230,7 @@ test("renewing pushes the expiry out and is shown in place", async ({ page }) =>
 
   await page.goto(`/websites/ssl/${before.id}`);
   await expect(page.getByRole("heading", { level: 1, name: domain.name })).toBeVisible();
-  await page.getByRole("button", { name: "Renew now" }).click();
+  await page.getByRole("button", { name: "Renew now" }).first().click();
 
   const panel = certificateJob(page);
   await expectJobStatus(panel, "Succeeded");
@@ -287,7 +288,9 @@ test("revoking a certificate ends its life and disables renewal", async ({ page 
 
   await expectJobStatus(certificateJob(page), "Succeeded");
   await expect(page.getByText("Revoked").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Renew now" })).toBeDisabled();
+  for (const renew of await page.getByRole("button", { name: "Renew now" }).all()) {
+    await expect(renew).toBeDisabled();
+  }
   expect((await certificateFor(domain.name)).status).toBe("revoked");
 
   /* And the API agrees there is nothing left to renew or revoke. */
@@ -373,7 +376,7 @@ test("a failed renewal of an expiring certificate is visible where it is triaged
 }) => {
   const shop = await certificateFor("shop.futureforge.dev");
   await page.goto(`/websites/ssl/${shop.id}`);
-  await page.getByRole("button", { name: "Renew now" }).click();
+  await page.getByRole("button", { name: "Renew now" }).first().click();
   await expectJobStatus(certificateJob(page), "Failed");
 
   const after = await certificateFor("shop.futureforge.dev");

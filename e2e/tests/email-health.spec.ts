@@ -136,10 +136,10 @@ test("the live tail streams the host's journal as messages, filters on the host 
   await expect(viewer).toContainText("DKIM verification passed");
   await expect(viewer).not.toContainText("Message delivered");
 
-  await page.getByRole("button", { name: "Stop" }).click();
+  await page.getByRole("button", { name: "Stop", exact: true }).click();
   await expect(page.getByText("Stopped", { exact: true })).toBeVisible();
   await expect(viewer).toContainText("The tail is stopped.");
-  await page.getByRole("button", { name: "Start" }).click();
+  await page.getByRole("button", { name: "Start", exact: true }).click();
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
   await expect(viewer).toContainText("DKIM verification passed");
 });

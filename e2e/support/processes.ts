@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { createWriteStream, mkdirSync } from "node:fs";
+import { closeSync, createWriteStream, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { logsDir } from "./config.js";
 
@@ -30,6 +30,13 @@ export interface Managed {
 export interface LaunchOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  /**
+   * Write output straight to the log file instead of through a pipe to
+   * this process. For anything started from inside a test: Playwright
+   * replaces its worker after a failure, and a child whose stdout is a
+   * pipe to the dead worker dies on its next write.
+   */
+  detachOutput?: boolean;
 }
 
 export function launch(
@@ -39,6 +46,28 @@ export function launch(
   options: LaunchOptions,
 ): Managed {
   mkdirSync(logsDir, { recursive: true });
+  const logPath = join(logsDir, `${name}.log`);
+  if (options.detachOutput) {
+    const fd = openSync(logPath, "w");
+    const detachedChild = spawn(command, [...args], {
+      cwd: options.cwd,
+      env: { ...process.env, ...options.env },
+      stdio: ["ignore", fd, fd],
+      windowsHide: true,
+      detached: process.platform !== "win32",
+    });
+    closeSync(fd);
+    if (!detachedChild.pid) throw new Error(`${name}: could not start ${command}`);
+    detachedChild.unref();
+    const tailOfFile = (): string => {
+      try {
+        return readFileSync(logPath, "utf8").split("\n").filter((l) => l.trim()).slice(-TAIL_LINES).join("\n");
+      } catch {
+        return "";
+      }
+    };
+    return { name, pid: detachedChild.pid, child: detachedChild, tail: tailOfFile };
+  }
   const child = spawn(command, [...args], {
     cwd: options.cwd,
     env: { ...process.env, ...options.env },
@@ -50,7 +79,7 @@ export function launch(
 
   if (!child.pid) throw new Error(`${name}: could not start ${command}`);
 
-  const log = createWriteStream(join(logsDir, `${name}.log`), { flags: "w" });
+  const log = createWriteStream(logPath, { flags: "w" });
   const recent: string[] = [];
 
   const capture = (chunk: Buffer): void => {

@@ -89,11 +89,13 @@ export async function startFeed(): Promise<void> {
   const url = feedUrl();
   writeFeed();
   if (feedProcess) return;
+  if (await fetch(`${url.origin}/latest.json`).then((r) => r.ok).catch(() => false)) return;
   feedProcess = spawn(
     "python3",
     ["-m", "http.server", url.port || "80", "--bind", "127.0.0.1", "--directory", feedDir],
     { stdio: "ignore", detached: true },
   );
+  feedProcess.unref();
   if (feedProcess.pid) record(feedProcess.pid);
   await waitUntil(`the release feed on ${url.origin}`, async () => {
     const res = await fetch(`${url.origin}/latest.json`);
@@ -103,6 +105,12 @@ export async function startFeed(): Promise<void> {
 
 export async function stopFeed(): Promise<void> {
   const url = feedUrl();
+  // The handle is per worker; a server started by an earlier worker is
+  // found by its command line in this stack's pid list.
+  for (const pid of stackPids()) {
+    const line = cmdline(pid);
+    if (line.includes("http.server") && line.includes(` ${url.port} `)) killTree(pid);
+  }
   if (feedProcess?.pid) killTree(feedProcess.pid);
   feedProcess = null;
   await waitUntil(`the release feed on ${url.origin} to go away`, async () => {
@@ -412,7 +420,7 @@ export async function startAgent(name: string): Promise<void> {
     `agent-${name}`,
     agentBinary,
     ["run", "--simulate", "--state-dir", join(agentStateRoot, name), "--log-level", "info"],
-    { cwd: repoRoot, env: { KANAME_ENV: "development" } },
+    { cwd: repoRoot, env: { KANAME_ENV: "development" }, detachOutput: true },
   );
   record(agent.pid);
   await waitUntil(`${name} to reconnect`, async () => (await connection(name)) === "connected", {
@@ -443,7 +451,7 @@ export async function withControlPlaneStopped<T>(whileDown: () => Promise<T>): P
     result = await whileDown();
   } finally {
     keepLog("control-plane");
-    const cp = startControlPlane();
+    const cp = startControlPlane({ detachOutput: true });
     record(cp.pid);
     await waitUntil(`the control plane and ${fleetSize} agents`, () => healthy(fleetSize), {
       timeoutMs: 150_000,

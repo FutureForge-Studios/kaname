@@ -69,7 +69,16 @@ export function FormDialog({
       dismissible={!submitting}
       aria-busy={submitting || undefined}
     >
+      {/*
+       * noValidate: FormField marks its control `required`, and the
+       * browser's own constraint check then blocked the submit with a
+       * generic "Please fill out this field" bubble. The submit handler
+       * never ran, so every dialog's field-specific message ("Pick the
+       * host this site runs on.", "A record needs a name…") was
+       * unreachable. Each dialog validates itself; let it.
+       */}
       <form
+        noValidate
         className="flex min-h-0 flex-1 flex-col"
         onSubmit={(event) => {
           event.preventDefault();

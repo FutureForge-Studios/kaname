@@ -133,9 +133,9 @@ test("the account step names each problem and the server has the last word", asy
   await expect(page.getByText("Choose a password.")).toBeVisible();
   await expect(page.getByText("Type the password again.")).toBeVisible();
 
-  await page.getByLabel("Name").fill(OWNER.name);
-  await page.getByLabel("Email").fill(OWNER.email);
-  await page.getByLabel("Password", { exact: true }).fill("wren-fresh-password-1");
+  await page.getByRole("textbox", { name: /^Name/ }).fill(OWNER.name);
+  await page.getByRole("textbox", { name: /^Email/ }).fill(OWNER.email);
+  await page.getByLabel(/^Password/).fill("wren-fresh-password-1");
   await page.getByLabel("Confirm password").fill("something else entirely");
   await create.click();
   await expect(page.getByText("Do not reuse your name or email in the password.").first()).toBeVisible();
@@ -159,9 +159,9 @@ test("the account step names each problem and the server has the last word", asy
   await page.reload();
   await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
 
-  await page.getByLabel("Name").fill(OWNER.name);
-  await page.getByLabel("Email").fill(OWNER.email);
-  await page.getByLabel("Password", { exact: true }).fill(OWNER.password);
+  await page.getByRole("textbox", { name: /^Name/ }).fill(OWNER.name);
+  await page.getByRole("textbox", { name: /^Email/ }).fill(OWNER.email);
+  await page.getByLabel(/^Password/).fill(OWNER.password);
   await page.getByLabel("Confirm password").fill(OWNER.password);
   await create.click();
   await expect(page.getByRole("heading", { name: "Name this instance" })).toBeVisible();

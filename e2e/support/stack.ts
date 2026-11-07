@@ -149,8 +149,9 @@ export async function buildAgent(): Promise<void> {
   await copyFile(built, agentBinary);
 }
 
-export function startControlPlane(): Managed {
+export function startControlPlane(options: { detachOutput?: boolean } = {}): Managed {
   return launch("control-plane", process.execPath, ["--import", "tsx", "src/main.ts"], {
+    ...options,
     cwd: join(repoRoot, "apps", "control-plane"),
     env: {
       KANAME_ENV: "development",

@@ -4,6 +4,7 @@ import {
   api,
   drawerJob,
   expectJobStatus,
+  field,
   get,
   rowWith,
   settledJob,
@@ -111,10 +112,10 @@ test("a site without a repository can only be deployed from an upload", async ({
   await expect(refusal).toContainText(
     "legacy-shop has no repository configured, so there is nothing to deploy.",
   );
-  await expect(refusal.getByRole("link", { name: "Site settings" })).toBeVisible();
+  await expect(refusal.getByRole("button", { name: "Site settings" })).toBeVisible();
 
-  await dialog.getByLabel("Source").selectOption("upload");
-  await expect(dialog.getByLabel("Repository")).toHaveCount(0);
+  await field(dialog, "Source").selectOption("upload");
+  await expect(field(dialog, "Repository")).toHaveCount(0);
   await dialog.getByRole("button", { name: "Start deployment" }).click();
   await expect(dialog).toBeHidden();
   await expectJobStatus(drawerJob(page, "Deploy", "legacy-shop"), "Succeeded");
@@ -133,18 +134,18 @@ test("the revision field is checked, and redeploying the running commit needs fo
   await page.getByRole("button", { name: "Deploy", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Deploy futureforge-www" });
 
-  await dialog.getByLabel("Revision").fill("not-a-sha");
+  await field(dialog, "Revision").fill("not-a-sha");
   await dialog.getByRole("button", { name: "Start deployment" }).click();
   await expect(
     dialog.getByText("Must be a git object id — 7 to 40 hexadecimal characters."),
   ).toBeVisible();
   /* Boundary: six characters is one short of the shortest object id. */
-  await dialog.getByLabel("Revision").fill("abcdef");
+  await field(dialog, "Revision").fill("abcdef");
   await expect(
     dialog.getByText("Must be a git object id — 7 to 40 hexadecimal characters."),
   ).toBeVisible();
 
-  await dialog.getByLabel("Revision").fill(running.commit_sha!);
+  await field(dialog, "Revision").fill(running.commit_sha!);
   await dialog.getByRole("button", { name: "Start deployment" }).click();
   await expect(dialog.getByRole("alert").filter({ hasText: "conflict" })).toContainText(
     `futureforge-www already runs ${running.commit_sha}.`,
@@ -213,8 +214,13 @@ test("the deployments list filters by status and opens a run", async ({ page }) 
   await expect(page.getByRole("heading", { level: 1, name: "Deployments" })).toBeVisible();
   const table = page.getByRole("table", { name: "Deployments" });
   await page.getByRole("combobox", { name: "Status" }).selectOption("failed");
-  await expect.poll(async () => table.locator("tbody tr").count()).toBeGreaterThan(0);
-  for (const text of await table.locator("tbody tr").allInnerTexts()) expect(text).toContain("Failed");
+  /* Wait for the filtered page itself, not for whatever rows were there. */
+  await expect
+    .poll(async () => {
+      const rows = await table.locator("tbody tr").allInnerTexts();
+      return rows.length > 0 && rows.every((text) => text.includes("Failed"));
+    })
+    .toBe(true);
 
   await rowWith(table, "Failed").first().getByRole("button", { name: "Row actions" }).click();
   await page.getByRole("menuitem", { name: "Open build log" }).click();

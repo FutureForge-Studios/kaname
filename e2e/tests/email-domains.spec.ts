@@ -79,6 +79,8 @@ test("Check DNS now re-reads the host and the drawer shows its answer", async ({
   await drawer.getByRole("button", { name: "Check now" }).click();
   await expectJobInDrawer(page, "Check mail DNS records");
   await closeJobDrawer(page);
+  /* The DNS drawer stays open under the job drawer. */
+  await expect(drawer).toBeVisible();
 
   /* What the simulated Yunori publishes: its own DKIM selector (ym1), the
    * full checklist with the optional records, and a zone file it wrote. */
@@ -90,8 +92,9 @@ test("Check DNS now re-reads the host and the drawer shows its answer", async ({
   expect(report.records.map((r) => r.name)).toContain(`ym1._domainkey.${PRIMARY}`);
   expect(report.zone_file).toContain(`; Yunori Mail Server records for ${PRIMARY}`);
 
-  await tableRow(page, "Mail domains", PRIMARY).click();
-  const records = page.getByRole("dialog").getByRole("list", { name: "DNS records" });
+  /* The drawer that was open the whole time refreshed by itself when the
+   * job landed; nothing was reopened to see the host's answer. */
+  const records = drawer.getByRole("list", { name: "DNS records" });
   await expect(records.getByRole("listitem").filter({ hasText: `ym1._domainkey.${PRIMARY}` })).toHaveAttribute(
     "data-record-status",
     "fail",

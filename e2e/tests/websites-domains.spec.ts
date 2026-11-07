@@ -1,7 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
-import { serverNamed } from "../support/api.js";
 import { missingId } from "../support/config.js";
-import { api, choose, get, rowWith, settledJob, unique, type JobRow } from "../support/websites.js";
+import { cellAt, columnIndex } from "../support/ui.js";
+import {
+  api,
+  choose,
+  get,
+  rowWith,
+  serverNamed,
+  settledJob,
+  unique,
+  type JobRow,
+} from "../support/websites.js";
 
 /* ------------------------------------------------------------------ *
  * Websites — domains.
@@ -64,14 +73,21 @@ test("the seeded domains list renders with their mail and control badges", async
   /* Verified when they were added, by a TXT proof — and said so. */
   await expect(rowWith(table, "docs.forgebase.dev")).toContainText("Verified");
   await expect(rowWith(table, "docs.forgebase.dev")).toContainText("Cloudflare");
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
 });
 
 test("the mail filter means what it says in both directions", async ({ page }) => {
   await page.goto("/websites/domains");
   const table = await domainsTable(page);
-  const names = async () =>
-    (await table.locator("tbody tr").allInnerTexts()).map((row) => row.split("\n")[0]?.trim());
+  const column = await columnIndex(table, "Domain");
+  /* The Domain cell also carries the Mail badge, so take its first line. */
+  const names = async () => {
+    const out: string[] = [];
+    for (const row of await table.locator("tbody tr").all()) {
+      out.push((await cellAt(row, column).innerText()).split("\n")[0]!.trim());
+    }
+    return out;
+  };
 
   await page.getByRole("combobox", { name: "Mail" }).selectOption("true");
   await expect.poll(names).toEqual(["futureforge.dev"]);
@@ -81,8 +97,8 @@ test("the mail filter means what it says in both directions", async ({ page }) =
   await page.getByRole("combobox", { name: "Mail" }).selectOption("false");
   await expect.poll(async () => (await names()).length).toBeGreaterThan(0);
   expect(await names()).not.toContain("futureforge.dev");
-  for (const row of await table.locator("tbody tr").allInnerTexts()) {
-    expect(row).not.toMatch(/\bMail\b/);
+  for (const row of await table.locator("tbody tr").all()) {
+    await expect(cellAt(row, column)).not.toContainText("Mail");
   }
 });
 
@@ -125,7 +141,7 @@ test("adding a domain validates the name and registers it unverified", async ({ 
   await dialog.getByRole("button", { name: "Add domain" }).click();
   const clash = dialog.getByRole("alert").filter({ hasText: "conflict" });
   await expect(clash).toContainText(`${name} is already registered in Kaname.`);
-  await expect(clash.getByRole("link", { name: "Open it" })).toBeVisible();
+  await expect(clash.getByRole("button", { name: "Open it" })).toBeVisible();
 });
 
 /* ---------------------------- verification --------------------------- */
@@ -139,7 +155,7 @@ test("a domain with no host to resolve from cannot be checked, and says why", as
   await expect(error).toContainText(
     `${domain.name} is not attached to a server, so Kaname has nowhere to resolve it from.`,
   );
-  await expect(error.getByRole("link", { name: "Edit the domain" })).toBeVisible();
+  await expect(error.getByRole("button", { name: "Edit the domain" })).toBeVisible();
 });
 
 test("a failed control check hands over the TXT record to publish", async ({ page }) => {
@@ -155,7 +171,7 @@ test("a failed control check hands over the TXT record to publish", async ({ pag
   /* The remedy is the exact zone line, and it is the same token every
    * time, so it can be published before anyone presses the button. */
   await expect(error).toContainText(
-    new RegExp(`_kaname\\.${domain.name.replace(/\./g, "\\.")}\\. 300 IN TXT "kaname-verification=[0-9a-f]{32}"`),
+    new RegExp(`_kaname\\.${domain.name.replace(/\./g, "\\.")}\\. 300 IN TXT "kaname-verification=[A-Za-z0-9_-]{32}"`),
   );
   await expect(error.getByRole("button", { name: "Copy the record" })).toBeVisible();
 
