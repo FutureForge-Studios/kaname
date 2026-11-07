@@ -306,7 +306,7 @@ export function GettingStarted() {
           onClick={toggle}
           aria-expanded={!collapsed}
           aria-controls="getting-started-body"
-          className="flex min-w-0 items-center gap-2 rounded-[var(--kn-r-xs)] text-left outline-none focus-visible:ring-[3px] focus-visible:ring-[var(--kn-ring)]"
+          className="flex min-w-0 items-center gap-2 rounded-[var(--kn-r-xs)] text-left"
         >
           {collapsed ? (
             <ChevronRight size={14} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
