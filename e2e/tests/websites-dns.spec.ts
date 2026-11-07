@@ -112,6 +112,8 @@ test("a manual zone's records are created, edited and deleted from the DNS page"
     `${domain.name} already has that exact A record.`,
   );
   await again.getByRole("button", { name: "Cancel" }).click();
+  await expect(again).toBeHidden();
+  await page.getByRole("list", { name: "Notifications" }).getByRole("button", { name: "Dismiss" }).first().click({ timeout: 8000 }); // G4DEBUG
   /* The refusal's toast is dismissed here: once the edit dialog is open
    * it is modal and the toast stack behind it no longer takes a click. */
   await dismissToasts(page);
