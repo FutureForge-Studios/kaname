@@ -242,7 +242,9 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
     emailValid &&
     !emailOnOwnDomain &&
     mailboxValid &&
-    relayValid;
+    relayValid &&
+    // The job resolves the same feed; with it unreadable the deploy can only fail.
+    !release.isError;
 
   const submit = () => {
     if (!serverId || !domain) return;
@@ -303,7 +305,13 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
               )}
             </>
           ) : release.isError ? (
-            "The release feed could not be read; the control plane installs the newest version it knows."
+            // There is no "newest version it knows" to fall back on: without
+            // the feed the control plane has no archive URL or checksum, so
+            // the deploy job would only fail. Say that, with the reason.
+            <span role="alert" className="text-[var(--kn-danger)]">
+              The yunori-mail release feed could not be read, so a deploy cannot start:{" "}
+              {release.error.message}
+            </span>
           ) : (
             "Looking up the latest release…"
           )}

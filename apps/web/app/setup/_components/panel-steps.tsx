@@ -53,7 +53,6 @@ import {
 import { domainProblem, normalizeDomain, type PanelAddress } from "@/lib/address";
 import { api } from "@/lib/api";
 import { useJob, useServers } from "@/lib/queries";
-import { PasswordField } from "@/app/(panel)/_components/password";
 import {
   EMPTY_RELAY,
   FinishSetupPanel,
@@ -63,6 +62,7 @@ import {
   relayInput,
   type RelayDraft,
 } from "@/app/(panel)/email/_components/ServerDialogs";
+import { useLatestMailRelease } from "@/app/(panel)/email/_components/queries";
 import {
   EMAIL_RE,
   Needs,
@@ -264,7 +264,7 @@ export function AddressStep({ state, onAdvance, onStale }: StepProps) {
       {panel !== null && (panel === "unavailable" || !panel.managed) && (
         <Note>
           This panel was not deployed by the installer, so whatever runs it owns its address and
-          certificate. The ACME address below is still used for the certificates Kaname issues for
+          certificate. The certificate contact below is still used for the certificates Kaname issues for
           your websites.
         </Note>
       )}
@@ -534,17 +534,7 @@ export function WebsiteStep({ onAdvance, onStale }: StepProps) {
         </>
       )}
 
-      {done && (
-        <>
-          <Note>
-            <MonoText className="text-[var(--kn-text)]">{created}</MonoText>{" "}
-            {job
-              ? "is being set up on the server. You can carry on; the job finishes on its own."
-              : "is registered. Add a website for it from Websites whenever you are ready."}
-          </Note>
-          {job && <JobLine job={job} />}
-        </>
-      )}
+      {done && created && <CreatedWebsite name={created} job={job} />}
 
       <StepError
         error={create.error ?? answer.error}
@@ -561,6 +551,28 @@ export function WebsiteStep({ onAdvance, onStale }: StepProps) {
         laterLabel="Add a website later"
       />
     </StepForm>
+  );
+}
+
+/** What happened to the website just created, in words that follow its job. */
+function CreatedWebsite({ name, job: initial }: { name: string; job: Job | null }) {
+  const query = useJob(initial?.id ?? null);
+  const job = query.data ?? initial;
+  const failed = job && ["failed", "cancelled", "timed_out"].includes(job.status);
+  return (
+    <>
+      <Note tone={failed ? "warn" : "neutral"}>
+        <MonoText className="text-[var(--kn-text)]">{name}</MonoText>{" "}
+        {!job
+          ? "is registered. Add a website for it from Websites whenever you are ready."
+          : job.status === "succeeded"
+            ? "is set up. Put your files in its folder, or deploy to it from Websites."
+            : failed
+              ? "could not be set up on the server. The reason is below; fix it and retry from Websites. The rest of setup does not depend on it."
+              : "is being set up on the server. You can carry on; the job finishes on its own."}
+      </Note>
+      {job && <JobLine job={job} />}
+    </>
   );
 }
 
@@ -591,6 +603,9 @@ export function EmailStep({ state, onAdvance, onStale }: StepProps) {
 
   const tracked = state.email_deploy;
   const trackedJob = useJob(tracked?.job_id ?? null);
+  // The deploy job resolves the same feed; when it cannot be read the job
+  // can only fail, so the step says so instead of starting one.
+  const release = useLatestMailRelease(!tracked);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -645,7 +660,7 @@ export function EmailStep({ state, onAdvance, onStale }: StepProps) {
       await answer.answer("done");
       return;
     }
-    if (!server) {
+    if (!server || release.isError) {
       await answer.answer("skipped");
       return;
     }
@@ -784,6 +799,13 @@ export function EmailStep({ state, onAdvance, onStale }: StepProps) {
             />
           )}
 
+          {release.isError && (
+            <Note tone="warn">
+              The yunori-mail release feed could not be read, so a deploy cannot start right now:{" "}
+              {release.error.message} Continue without email and deploy it later from Email.
+            </Note>
+          )}
+
           <FormField
             label="Mail domain"
             required
@@ -911,13 +933,21 @@ export function EmailStep({ state, onAdvance, onStale }: StepProps) {
 
       <StepFooter
         primary={
-          !ready || onThisServer || !server ? "Continue" : "Deploy mail server"
+          !ready || onThisServer || !server
+            ? "Continue"
+            : release.isError
+              ? "Continue without email"
+              : "Deploy mail server"
         }
-        icon={!ready || onThisServer || !server ? ArrowRight : undefined}
+        icon={!ready || onThisServer || !server || release.isError ? ArrowRight : undefined}
         pending={deploy.pending || answer.pending}
-        disabled={!ready}
+        disabled={!ready || (Boolean(server) && !onThisServer && release.isLoading)}
         primaryAutoFocus={ready && (Boolean(onThisServer) || !server)}
-        later={ready && !onThisServer && server ? () => void answer.answer("skipped") : undefined}
+        later={
+          ready && !onThisServer && server && !release.isError
+            ? () => void answer.answer("skipped")
+            : undefined
+        }
         laterLabel="Set up email later"
       />
     </StepForm>
@@ -1165,13 +1195,21 @@ export function BackupsStep({ onAdvance, onStale }: StepProps) {
               >
                 <Input mono size="md" value={draft.accessKeyId} onChange={(e) => set("accessKeyId", e.target.value)} spellCheck={false} autoComplete="off" />
               </FormField>
-              <PasswordField
+              <FormField
                 label={draft.kind === "b2" ? "Application key" : "Secret access key"}
-                value={draft.secret}
-                onChange={(next) => set("secret", next)}
+                required
                 description="Stored encrypted. Kaname never shows it again."
                 error={err("secret")}
-              />
+              >
+                <Input
+                  type="password"
+                  mono
+                  size="md"
+                  value={draft.secret}
+                  onChange={(e) => set("secret", e.target.value)}
+                  autoComplete="off"
+                />
+              </FormField>
             </>
           )}
 
@@ -1413,7 +1451,9 @@ export function NotificationsStep({ onAdvance, onStale }: StepProps) {
               <FormField label="Username">
                 <Input mono size="md" spellCheck={false} autoComplete="off" value={smtp.username} onChange={(e) => setSmtp({ ...smtp, username: e.target.value })} />
               </FormField>
-              <PasswordField label="Password" value={smtp.password} onChange={(next) => setSmtp({ ...smtp, password: next })} />
+              <FormField label="Password" description="Stored encrypted; never shown again.">
+                <Input type="password" mono size="md" autoComplete="new-password" value={smtp.password} onChange={(e) => setSmtp({ ...smtp, password: e.target.value })} />
+              </FormField>
             </div>
             <FormField label="Sender" description="Defaults to the address above." error={err("from", true)}>
               <Input mono size="md" type="email" spellCheck={false} autoComplete="off" value={smtp.from_address} onChange={(e) => setSmtp({ ...smtp, from_address: e.target.value })} />

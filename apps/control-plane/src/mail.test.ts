@@ -238,10 +238,28 @@ describe("mail servers", () => {
     expect(dump).not.toContain("token=abc");
   });
 
-  it("refuses to forget a server that still hosts domains, and never uninstalls", async () => {
-    const res = await send("DELETE", `/api/v1/mail-servers/${mailServer.id}`);
-    expect(res.statusCode).toBe(409);
-    expect(error(res).remediation?.summary).toContain("never uninstalls");
+  it("refuses to forget a server that still hosts domains besides its primary, and never uninstalls", async () => {
+    // The primary domain goes with the record (it cannot be removed on its
+    // own); a domain an operator added is what makes forgetting refuse.
+    const extra = data<Domain[]>(await get("/api/v1/domains?per_page=50")).find((d) => !d.has_mail)!;
+    const [added] = await handle.db
+      .insert(mailDomains)
+      .values({
+        domainId: extra.id,
+        serverId: mailServer.server_id,
+        mailServerId: mailServer.id,
+        isPrimary: false,
+        status: "active",
+      })
+      .returning({ id: mailDomains.id });
+    try {
+      const res = await send("DELETE", `/api/v1/mail-servers/${mailServer.id}`);
+      expect(res.statusCode).toBe(409);
+      expect(error(res).message).toContain("besides its primary");
+      expect(error(res).remediation?.summary).toContain("never uninstalls");
+    } finally {
+      await handle.db.delete(mailDomains).where(eq(mailDomains.id, added!.id));
+    }
   });
 });
 
@@ -646,6 +664,39 @@ describe("mail log tail", () => {
       expect(res.body).toContain("event: mail.log");
       expect(res.body).toContain("delivered to");
       expect(res.body).not.toContain("event: error");
+    } finally {
+      ctx.hub.disconnect(mailServer.server_id, "test over");
+    }
+  });
+
+  it("unwraps the JSON records the agent streams, even split across chunks", async () => {
+    const socket = connect(mailServer.server_id, ["systemd", "yunori"]);
+    const record = JSON.stringify({
+      ts: "2026-11-07T06:59:31.099Z",
+      level: "info",
+      source: "mail",
+      message: "stalwart-mail[1181]: INFO Message delivered to hello@futureforge.dev",
+      cursor: "mail:1",
+    });
+    socket.script = (frame) => {
+      const id = String(frame.id);
+      socket.receive({ t: "chk", id, seq: 0, data: record.slice(0, 40) });
+      socket.receive({ t: "chk", id, seq: 1, data: `${record.slice(40)}\n` });
+      socket.receive({ t: "res", id, ok: true, result: { records: [] } });
+      socket.receive({ t: "end", id, ok: true });
+    };
+    try {
+      const res = await get(tailUrl());
+      const frames = res.body
+        .split("\n\n")
+        .filter((f) => f.startsWith("event: mail.log"))
+        .map((f) => JSON.parse(f.slice(f.indexOf("data: ") + 6)) as { ts: string; line: string });
+      expect(frames).toEqual([
+        expect.objectContaining({
+          ts: "2026-11-07T06:59:31.099Z",
+          line: "stalwart-mail[1181]: INFO Message delivered to hello@futureforge.dev",
+        }),
+      ]);
     } finally {
       ctx.hub.disconnect(mailServer.server_id, "test over");
     }

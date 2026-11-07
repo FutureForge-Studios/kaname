@@ -67,6 +67,7 @@ import {
   sortColumn,
   type ServerRow,
 } from "./_shared.js";
+import { recordDecoder } from "./logs.js";
 
 /* ------------------------------------------------------------------ *
  * Email: Yunori Mail Server on a managed host (KD-023).
@@ -382,13 +383,20 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     const { id } = parseParams(req, idParam);
     const row = await loadMailServer(req, id, "email.servers:write");
 
+    // Only the domains an operator added block this. The primary domain
+    // cannot be removed on its own ("it goes with the server", see
+    // DELETE /mail-domains/:id), so counting it here made every installed
+    // server impossible to forget: each refusal pointed at the other. It
+    // and its mailbox and alias rows go with the record (FK cascade);
+    // nothing on the host is touched, and a sync after re-adopting reads
+    // them back.
     const [counts] = await req.ctx.db
       .select({ domains: sql<number>`count(*)::int` })
       .from(mailDomains)
-      .where(eq(mailDomains.mailServerId, id));
+      .where(and(eq(mailDomains.mailServerId, id), eq(mailDomains.isPrimary, false)));
     if ((counts?.domains ?? 0) > 0) {
       throw conflict(
-        `${row.mailServer.hostname ?? row.server.name} still hosts ${counts!.domains} mail domain(s).`,
+        `${row.mailServer.hostname ?? row.server.name} still hosts ${counts!.domains} mail domain(s) besides its primary one.`,
         {
           summary:
             "Remove its mail domains first. Forgetting the record never uninstalls anything on the host.",
@@ -397,6 +405,13 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
+    // The Kaname domain stays; it just no longer hosts mail here.
+    await req.ctx.db
+      .update(domains)
+      .set({ hasMail: false, updatedAt: new Date() })
+      .where(
+        sql`${domains.id} in (select domain_id from mail_domains where mail_server_id = ${id})`,
+      );
     await req.ctx.db.delete(mailServers).where(eq(mailServers.id, id));
     await req.ctx.audit.record({
       actor: helpers(req).actor(),
@@ -541,7 +556,8 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
         `${row.domainName} still has ${counts!.mailboxes} mailbox(es) and ${counts!.aliases} alias(es).`,
         {
           summary: "Delete the mailboxes and aliases first; their mail goes with them.",
-          actions: [{ label: "Mailboxes", href: `/email/mailboxes?domain=${row.domainName}` }],
+          // The Mailboxes page filters on mail_domain_id; `?domain=` is not a filter it reads.
+          actions: [{ label: "Mailboxes", href: `/email/mailboxes?mail_domain_id=${id}` }],
         },
       );
     }
@@ -825,7 +841,9 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
     if (target.serverId !== domain.server.id) {
       throw conflict(`${target.address} is not hosted on ${domain.server.name}.`, {
         summary: "An alias delivers to a mailbox on the same mail server.",
-        actions: [{ label: "Mailboxes", href: `/email/mailboxes?domain=${domain.domainName}` }],
+        actions: [
+          { label: "Mailboxes", href: `/email/mailboxes?mail_domain_id=${domain.mailDomain.id}` },
+        ],
       });
     }
 
@@ -911,22 +929,25 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
         server.id,
         "mail.logs",
         { lines: q.lines, follow: true, ...(q.q ? { query: q.q } : {}) },
-        async (data) => {
-          for (const line of data.split("\n")) {
-            if (!line.trim()) continue;
-            if (reply.raw.writableEnded || reply.raw.destroyed) return;
-            const payload = {
-              server_id: server.id,
-              server_name: server.name,
-              ts: new Date().toISOString(),
-              line,
-            };
-            // A browser that is behind holds the next line, and the agent with it.
-            if (!reply.raw.write(`event: mail.log\ndata: ${JSON.stringify(payload)}\n\n`)) {
-              await drained(reply.raw);
-            }
+        // Both providers stream one JSON LogRecord per line (the journal
+        // entry, already parsed on the host). Forwarding the raw line put
+        // the whole record — braces, cursor and all — in front of the
+        // operator as the "message", and split a record that straddled two
+        // chunks. The shared decoder carries partial lines over and keeps
+        // a plain-text line as it is.
+        recordDecoder("mail", async (record) => {
+          if (reply.raw.writableEnded || reply.raw.destroyed) return;
+          const payload = {
+            server_id: server.id,
+            server_name: server.name,
+            ts: record.ts,
+            line: record.message,
+          };
+          // A browser that is behind holds the next line, and the agent with it.
+          if (!reply.raw.write(`event: mail.log\ndata: ${JSON.stringify(payload)}\n\n`)) {
+            await drained(reply.raw);
           }
-        },
+        }),
         { timeoutMs: TAIL_TIMEOUT_MS },
       );
     } catch (err) {
@@ -1166,7 +1187,8 @@ async function assertDomainHostsNoMail(
   if (existing[0]) {
     throw conflict(`${domain.name} already hosts mail.`, {
       summary: "A domain receives mail on one server. Open the existing mail domain instead.",
-      actions: [{ label: "Open mail domain", href: `/email/domains?id=${existing[0].id}` }],
+      // The Domains page has no `?id=` deep link; its search box is in the URL.
+      actions: [{ label: "Open mail domain", href: `/email/domains?q=${encodeURIComponent(domain.name)}` }],
     });
   }
 }

@@ -81,13 +81,23 @@ export default function MailLogsPage() {
     });
   }, [hosts.data, mailServers.data]);
 
+  /* As on Health: a link to a server that is not here must not quietly
+   * tail a different one. */
+  const unmatched =
+    fromUrl !== null &&
+    !mailServers.isLoading &&
+    !hosts.isLoading &&
+    eligible.length > 0 &&
+    !eligible.some((row) => row.id === fromUrl || row.server_id === fromUrl);
+
   const selected = React.useMemo<MailServer | null>(() => {
     if (fromUrl) {
       const match = eligible.find((row) => row.id === fromUrl || row.server_id === fromUrl);
       if (match) return match;
+      if (unmatched) return null;
     }
     return eligible[0] ?? null;
-  }, [eligible, fromUrl]);
+  }, [eligible, fromUrl, unmatched]);
 
   const select = React.useCallback(
     (server: MailServer | null) => {
@@ -275,7 +285,20 @@ export default function MailLogsPage() {
           />
         )}
 
-        {!serverId && !loading && !mailServers.isError ? (
+        {unmatched ? (
+          <SectionCard>
+            <EmptyState
+              icon={Send}
+              title="No mail server matches this link"
+              description={`The link names ${fromUrl}, which is not a mail server you can tail here. It may have been forgotten, or Yunori is no longer installed on it.`}
+              action={
+                <Button variant="secondary" size="sm" onClick={() => select(eligible[0] ?? null)}>
+                  Tail {eligible[0]?.server_name}
+                </Button>
+              }
+            />
+          </SectionCard>
+        ) : !serverId && !loading && !mailServers.isError ? (
           <SectionCard>
             <EmptyState
               icon={Send}

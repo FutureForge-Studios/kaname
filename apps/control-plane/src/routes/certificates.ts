@@ -335,7 +335,13 @@ export async function certificateRoutes(app: FastifyInstance): Promise<void> {
       targetType: "certificate",
       targetId: id,
       targetLabel: cert.subject,
-      params: { certificate_id: id, subject: cert.subject, force: body.force },
+      // The row is marked pending below; a failed renewal restores this.
+      params: {
+        certificate_id: id,
+        subject: cert.subject,
+        force: body.force,
+        previous_status: cert.status,
+      },
     });
 
     await req.ctx.db

@@ -193,7 +193,10 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
         </MenuItem>
 
         {user && (
-          <MenuItem icon={UserRound} onSelect={() => window.location.assign("/administration/users")}>
+          // /account, not /administration/users: the account page is where
+          // your own password, two-factor and sessions live, and the users
+          // list is forbidden to every role without admin.users:read.
+          <MenuItem icon={UserRound} onSelect={() => window.location.assign("/account")}>
             Your profile and sessions
           </MenuItem>
         )}

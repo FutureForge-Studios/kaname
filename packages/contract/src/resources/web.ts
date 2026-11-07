@@ -7,6 +7,7 @@ import {
   identifier,
   isoDate,
   listQuery,
+  queryBoolean,
   remediation,
   uuid,
 } from "../primitives.js";
@@ -169,7 +170,7 @@ export const domainListQuery = listQuery.extend({
   server_id: uuid.optional(),
   dns_provider: dnsProvider.optional(),
   status: domainStatus.optional(),
-  has_mail: z.coerce.boolean().optional(),
+  has_mail: queryBoolean.optional(),
   expiring_within_days: z.coerce.number().int().min(1).max(365).optional(),
 });
 export type DomainListQuery = z.infer<typeof domainListQuery>;
@@ -228,7 +229,7 @@ export const dnsRecordListQuery = listQuery.extend({
   domain_id: uuid.optional(),
   type: dnsRecordType.optional(),
   managed_by: managedBy.optional(),
-  drifted: z.coerce.boolean().optional(),
+  drifted: queryBoolean.optional(),
 });
 export type DnsRecordListQuery = z.infer<typeof dnsRecordListQuery>;
 
@@ -355,7 +356,7 @@ export const certificateListQuery = listQuery.extend({
   server_id: uuid.optional(),
   domain_id: uuid.optional(),
   status: certStatus.optional(),
-  auto_renew: z.coerce.boolean().optional(),
+  auto_renew: queryBoolean.optional(),
   expiring_within_days: z.coerce.number().int().min(1).max(365).optional(),
 });
 export type CertificateListQuery = z.infer<typeof certificateListQuery>;
