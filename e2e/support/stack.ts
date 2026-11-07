@@ -1,6 +1,7 @@
 import { copyFile } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import {
   agentBinary,
@@ -232,8 +233,56 @@ function buildPanel(): Promise<void> {
         KANAME_PUBLIC_URL: webUrl,
         KANAME_NEXT_DIST_DIR: nextDistDir,
       },
-    }),
+    }).finally(tidyTsconfig),
   );
+}
+
+/*
+ * `next build` adds `<distDir>/types/**\/*.ts` to tsconfig.json and
+ * reformats it, so a build into a per-stack directory leaves a path to it
+ * in a tracked file. Only those per-stack entries are removed; if what is
+ * left matches the committed file, its exact text is restored so the
+ * reformatting goes too. A plain save-and-restore would let two
+ * overlapping builds put back each other's edits.
+ */
+export function tidyTsconfig(): void {
+  const path = join(repoRoot, "apps", "web", "tsconfig.json");
+  try {
+    const current = JSON.parse(readFileSync(path, "utf8")) as { include?: string[] };
+    current.include = (current.include ?? []).filter(
+      (entry) => !/^\.next-[^/]+\/types\//.test(entry),
+    );
+    let committed: string | null = null;
+    try {
+      committed = execFileSync("git", ["show", "HEAD:apps/web/tsconfig.json"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+      });
+    } catch {
+      /* not a git checkout: fall back to plain JSON below */
+    }
+    if (committed !== null && sameJson(JSON.parse(committed), current)) {
+      writeFileSync(path, committed);
+    } else {
+      writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`);
+    }
+  } catch {
+    /* never fail a run over tidying a config file */
+  }
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  const norm = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? [...v].map(norm).sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)))
+      : v && typeof v === "object"
+        ? Object.fromEntries(
+            Object.entries(v as Record<string, unknown>)
+              .sort(([x], [y]) => x.localeCompare(y))
+              .map(([k, w]) => [k, norm(w)]),
+          )
+        : v;
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
 }
 
 function startPanel(): Managed {
