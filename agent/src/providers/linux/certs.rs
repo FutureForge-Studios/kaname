@@ -367,7 +367,10 @@ pub fn check_revocation_reason(reason: &str) -> PResult<()> {
 /// Reports where a subject's material lives, preferring Let's Encrypt's
 /// layout and falling back to what cert.install wrote.
 pub fn certificate_paths(subject: &str) -> Option<(String, String)> {
-    for root in [LETS_ENCRYPT_DIR, INSTALLED_CERT_DIR] {
+    // An installed certificate is one the operator chose over ACME for
+    // this name (the panel keeps one certificate per name per host), so it
+    // wins over a Let's Encrypt lineage that may still be on disk.
+    for root in [INSTALLED_CERT_DIR, LETS_ENCRYPT_DIR] {
         let chain = format!("{root}/{subject}/fullchain.pem");
         let key = format!("{root}/{subject}/privkey.pem");
         if file_exists(&chain) && file_exists(&key) {

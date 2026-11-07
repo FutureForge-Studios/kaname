@@ -3,6 +3,7 @@
 import { useCallback } from "react";
 import {
   keepPreviousData,
+  useMutation,
   useQuery,
   useQueryClient,
   type UseQueryResult,
@@ -17,6 +18,7 @@ import type {
   ExtractInput,
   FileContent,
   FileListing,
+  FileRow,
   FtpAccount,
   FtpSession,
   Job,
@@ -29,6 +31,7 @@ import type {
 } from "@kaname/contract";
 import { api, buildPath, type ApiError, type ListResult, type QueryParams } from "@/lib/api";
 import { LIST_STALE_TIME, queryKeys, useList, useMutationWithJob } from "@/lib/queries";
+import { uploadFile } from "./upload";
 
 /* ------------------------------------------------------------------ *
  * The Files module's data layer.
@@ -165,6 +168,43 @@ export function useWriteFile() {
     mutationFn: (input) => api.post<{ job: Job }>("/files/write", input),
     invalidates: FILE_FAMILIES,
     describe: (input) => `Write ${input.path}`,
+  });
+}
+
+export interface SaveFileVars {
+  serverId: string;
+  path: string;
+  content: string;
+}
+
+/**
+ * The editor's save. It goes through the streamed upload route rather
+ * than the `fs.write` job, because one agent request is capped at
+ * 512 KiB and the editor opens files up to EDITOR_MAX_BYTES: a 600 KiB
+ * config opened fine and then could not be saved. The upload path
+ * chunks the body under the frame cap and replaces the file atomically,
+ * keeping its mode and owner (the agent preserves them on overwrite).
+ */
+export function useSaveFile() {
+  const client = useQueryClient();
+  return useMutation<FileRow, ApiError, SaveFileVars>({
+    mutationFn: ({ serverId, path, content }) => {
+      const slash = path.lastIndexOf("/");
+      const directory = slash <= 0 ? "/" : path.slice(0, slash);
+      const name = path.slice(slash + 1);
+      // A File (not a string) so the declared size is the UTF-8 byte
+      // count the agent will receive, not the UTF-16 length.
+      const file = new File([content], name, { type: "text/plain;charset=utf-8" });
+      return uploadFile({ serverId, directory, file, overwrite: true, onProgress: () => {} })
+        .done;
+    },
+    onSuccess: async () => {
+      await Promise.all(
+        FILE_FAMILIES.map((family) =>
+          client.invalidateQueries({ queryKey: queryKeys.family(family) }),
+        ),
+      );
+    },
   });
 }
 

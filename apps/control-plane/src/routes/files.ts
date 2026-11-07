@@ -23,6 +23,7 @@ import {
   type FileRow,
   type JobType,
   type Permission,
+  queryBoolean,
 } from "@kaname/contract";
 import {
   MAX_CHUNK_BYTES,
@@ -87,7 +88,7 @@ const uploadQuery = z.object({
    */
   size: z.coerce.number().int().nonnegative(),
   mode: fileMode.optional(),
-  overwrite: z.coerce.boolean().default(false),
+  overwrite: queryBoolean.default(false),
 });
 
 export async function fileRoutes(app: FastifyInstance): Promise<void> {
@@ -529,7 +530,7 @@ async function live<M extends AgentMethod>(
 }
 
 function translateAgentError(server: ServerRow, err: unknown): Error {
-  if (err instanceof AgentOfflineError) return agentOffline(server.name, server.lastSeenAt);
+  if (err instanceof AgentOfflineError) return agentOffline(server);
   if (err instanceof AgentRpcError) return fromAgentError(server.name, err.agentError);
   return err instanceof Error ? err : new Error(String(err));
 }

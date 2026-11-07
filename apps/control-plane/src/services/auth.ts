@@ -37,9 +37,15 @@ export interface Principal {
 const RECENCY_WRITE_MS = 60_000;
 
 export class AuthService {
+  /**
+   * `now` is the clock every expiry and lockout decision here reads.
+   * Injectable so tests can walk an API key past its expiry, or a
+   * failure out of the lockout window, without waiting for it.
+   */
   constructor(
     private readonly db: Database,
     private readonly config: Config,
+    readonly now: () => number = Date.now,
   ) {}
 
   /* --------------------------- passwords --------------------------- */
@@ -152,7 +158,8 @@ export class AuthService {
 
     const key = rows[0];
     if (!key) return null;
-    if (key.expiresAt && key.expiresAt < new Date()) return null;
+    // Expired at the instant itself, not a millisecond after.
+    if (key.expiresAt && key.expiresAt.getTime() <= this.now()) return null;
     if (!constantTimeEquals(key.secretHash, hashToken(secret))) return null;
 
     if (!key.lastUsedAt || Date.now() - key.lastUsedAt.getTime() > RECENCY_WRITE_MS) {
@@ -335,26 +342,54 @@ export class AuthService {
    * be a hard-coded 15 minutes, so the setting the panel offers (and saves)
    * changed nothing: an owner who chose two minutes still locked people
    * out for fifteen.
+   *
+   * `windowMinutes` is the counting window, and it was ignored the same
+   * way: failures only ever reset on a successful sign-in, so eight typos
+   * spread across a month locked an account as surely as eight guesses
+   * in a minute. Each failure's time is now kept, and only those inside
+   * the window count. It is a sliding window — the oldest failure ages
+   * out on its own — and the list is capped at the threshold, which is
+   * all a decision ever needs.
+   *
+   * One UPDATE, so two concurrent failures cannot both read the old list
+   * and lose a count between them.
    */
   async noteFailedLogin(
     userId: string,
     lockoutThreshold: number,
     lockoutMinutes = 15,
-  ): Promise<void> {
-    await this.db
+    windowMinutes = 15,
+  ): Promise<{ failures: number; lockedUntil: Date | null }> {
+    const now = new Date(this.now());
+    const cutoff = new Date(now.getTime() - windowMinutes * 60_000);
+    const lockUntil = new Date(now.getTime() + lockoutMinutes * 60_000);
+    const keep = Math.max(1, lockoutThreshold);
+    const recent = sql`(array(
+      select t from unnest(${users.failedLoginAt} || ${now.toISOString()}::timestamptz) as t
+      where t > ${cutoff.toISOString()}::timestamptz order by t desc limit ${keep}))`;
+
+    const [row] = await this.db
       .update(users)
       .set({
-        failedLoginCount: sql`${users.failedLoginCount} + 1`,
-        lockedUntil: sql`case when ${users.failedLoginCount} + 1 >= ${lockoutThreshold}
-          then now() + make_interval(mins => ${lockoutMinutes}) else ${users.lockedUntil} end`,
+        failedLoginAt: recent,
+        failedLoginCount: sql`cardinality(${recent})`,
+        lockedUntil: sql`case when cardinality(${recent}) >= ${lockoutThreshold}
+          then ${lockUntil.toISOString()}::timestamptz else ${users.lockedUntil} end`,
       })
-      .where(eq(users.id, userId));
+      .where(eq(users.id, userId))
+      .returning({ failures: users.failedLoginCount, lockedUntil: users.lockedUntil });
+    return { failures: row?.failures ?? 0, lockedUntil: row?.lockedUntil ?? null };
   }
 
   async clearFailedLogins(userId: string): Promise<void> {
     await this.db
       .update(users)
-      .set({ failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date() })
+      .set({
+        failedLoginCount: 0,
+        failedLoginAt: [],
+        lockedUntil: null,
+        lastLoginAt: new Date(this.now()),
+      })
       .where(eq(users.id, userId));
   }
 }

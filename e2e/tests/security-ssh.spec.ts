@@ -1,7 +1,7 @@
 import { generateKeyPairSync, createHash } from "node:crypto";
 import { expect, test, type Page } from "@playwright/test";
 import { missingId } from "../support/config.js";
-import { auditRows, hostFile, owner, server, type JobRow } from "../support/secops.js";
+import { auditRows, hostFile, owner, server, settled, type JobRow } from "../support/secops.js";
 import { jobStatusPill } from "../support/ui.js";
 
 /* ------------------------------------------------------------------ *
@@ -17,6 +17,15 @@ import { jobStatusPill } from "../support/ui.js";
 const AUTHORIZED = "/root/.ssh/authorized_keys";
 const SSHD = "/etc/ssh/sshd_config";
 const WINDOW_S = 30;
+
+interface ConfigRead {
+  allow_users: string[];
+  pending_rollback: { expires_at: string; seconds: number; job_id: string | null; changes: string[] } | null;
+}
+
+function rollbackBanner(page: Page, serverName: string) {
+  return page.getByRole("status").filter({ hasText: `${serverName} reverts its sshd configuration in` });
+}
 
 /** A real OpenSSH ed25519 public key line, and its SHA256 fingerprint. */
 function freshKey(comment: string): { line: string; fingerprint: string } {
@@ -171,11 +180,22 @@ test.describe("ssh", () => {
     const appliedAt = Date.now();
     await expect.poll(() => hostFile(forge.id, SSHD)).toContain("MaxAuthTries 6");
 
-    const banner = page
-      .getByRole("status")
-      .filter({ hasText: "forge-01 reverts its sshd configuration in" });
+    /* The window is in the config read, with what would revert... */
+    const api = await owner();
+    const during = await api.get<ConfigRead>(`/ssh/config?server_id=${forge.id}`);
+    expect(during.pending_rollback, "no pending window in the config read").not.toBeNull();
+    expect(during.pending_rollback!.seconds).toBe(WINDOW_S);
+    expect(Date.parse(during.pending_rollback!.expires_at)).toBeGreaterThan(Date.now());
+    expect(during.pending_rollback!.changes).toContain("MaxAuthTries 6");
+
+    /* ...so reloading inside it keeps the banner and a Confirm that works. */
+    await page.reload();
+    const banner = rollbackBanner(page, "forge-01");
+    await expect(banner).toBeVisible();
+    await expect(banner.getByRole("list", { name: "Waiting to be confirmed" })).toContainText("MaxAuthTries 6");
     await banner.getByRole("button", { name: "Confirm — keep these changes" }).click();
     await expect(banner).toBeHidden();
+    expect((await api.get<ConfigRead>(`/ssh/config?server_id=${forge.id}`)).pending_rollback).toBeNull();
 
     /* Past the window, sshd still has it. */
     await expect
@@ -213,13 +233,144 @@ test.describe("ssh", () => {
     ).toBeVisible({ timeout: (WINDOW_S + 15) * 1000 });
     await expect.poll(() => hostFile(edge.id, SSHD), { timeout: 20_000 }).toContain(`MaxAuthTries ${before}`);
 
-    /* A fresh look at the page reads the reverted host, not the stale cache. */
+    /* A fresh look at the page reads the reverted host, not the stale cache,
+     * and offers no window that has already closed. */
     await page.reload();
     await expect(page.getByLabel("MaxAuthTries")).toHaveValue(before);
+    await expect(rollbackBanner(page, "edge-01")).toHaveCount(0);
 
     const api = await owner();
+    expect((await api.get<ConfigRead>(`/ssh/config?server_id=${edge.id}`)).pending_rollback).toBeNull();
     const late = await api.call("POST", "/ssh/config/confirm", { server_id: edge.id });
     expect(late.status).toBe(409);
+  });
+
+  test("a key goes to the POSIX account it names, and only to that one", async ({ page }) => {
+    const forge = await server("forge-01");
+    const key = freshKey("e2e@alice");
+    const blob = key.line.split(" ")[1]!;
+    const ALICE = "/home/alice/.ssh/authorized_keys";
+    const rootBefore = await hostFile(forge.id, AUTHORIZED);
+
+    await page.goto("/security/ssh");
+    const table = page.getByRole("table", { name: "Authorized keys" });
+    await expect(table.locator("tbody tr").filter({ hasText: "detective@workstation" })).toBeVisible();
+    /* Every key says whose file it is in. */
+    await expect(table.locator("tbody tr").filter({ hasText: "ci-deploy" })).toContainText("deploy");
+
+    await page.getByRole("button", { name: "Add key" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Add an authorized key" });
+    const add = dialog.getByRole("button", { name: "Add key" });
+    await dialog.getByLabel("Name").fill("e2e alice laptop");
+    await dialog.getByLabel("Public key").fill(key.line);
+    const account = dialog.getByLabel("Account on the host");
+    await expect(account).toHaveValue("root");
+
+    /* The account name is validated before anything is sent. */
+    for (const bad of ["-alice", "al ice", "../root"]) {
+      await account.fill(bad);
+      await expect(dialog.getByText("must start with a letter or underscore")).toBeVisible();
+      await expect(add).toBeDisabled();
+    }
+    await account.fill("");
+    await expect(dialog.getByText("an account name is required")).toBeVisible();
+    await expect(add).toBeDisabled();
+    await account.fill("alice");
+    await expect(add).toBeEnabled();
+
+    await dialog.getByRole("combobox").click();
+    await page.getByRole("listbox").getByRole("option", { name: /forge-01/ }).click();
+    await page.keyboard.press("Escape");
+    await add.click();
+    expect(await drawerJob(page, "alice@forge-01")).toContain("Succeeded");
+
+    const row = table.locator("tbody tr").filter({ hasText: "e2e alice laptop" });
+    await expect(row).toContainText("alice");
+
+    /* In alice's own file, owned by alice, and nowhere near root's. */
+    await expect.poll(() => hostFile(forge.id, ALICE)).toContain(blob);
+    expect(await hostFile(forge.id, AUTHORIZED)).toBe(rootBefore);
+    const api = await owner();
+    const stat = await api.get<{ owner: string; mode: string }>(
+      `/files/stat?server_id=${forge.id}&path=${encodeURIComponent(ALICE)}`,
+    );
+    expect(stat.owner).toBe("alice");
+    expect(stat.mode).toBe("0600");
+
+    /* Removing alice's only key empties her file: she is not on any other
+     * key, so the rewrite has to name her explicitly. */
+    const [created] = await api.get<{ id: string }[]>(`/ssh/keys?q=${encodeURIComponent("e2e alice laptop")}`);
+    const removed = await api.call<{ jobs: JobRow[] }>("DELETE", `/ssh/keys/${created!.id}`);
+    expect(removed.status).toBe(202);
+    for (const job of removed.data.jobs) expect((await settled(job.id)).status).toBe("succeeded");
+    await expect.poll(() => hostFile(forge.id, ALICE)).not.toContain(blob);
+  });
+
+  test("a key for an account the host does not have fails its job by name", async () => {
+    const api = await owner();
+    const forge = await server("forge-01");
+    const key = freshKey("e2e@ghost");
+
+    const created = await api.call<{ jobs: JobRow[]; ssh_key: { id: string; posix_user: string } }>(
+      "POST",
+      "/ssh/keys",
+      { name: "e2e ghost account", public_key: key.line, posix_user: "mallory", server_ids: [forge.id] },
+    );
+    expect(created.status, JSON.stringify(created.error)).toBe(202);
+    expect(created.data.ssh_key.posix_user).toBe("mallory");
+    // One job per account on the server; mallory's is the one that must fail.
+    const mine = created.data.jobs.find((j) =>
+      (j as unknown as { target_label: string }).target_label.endsWith("for mallory@forge-01"),
+    );
+    expect(mine, "no key job for mallory").toBeTruthy();
+    const job = await settled(mine!.id);
+    expect(job.status).toBe("failed");
+    expect(job.error?.message).toBe("no POSIX account named mallory on this host");
+    expect(await hostFile(forge.id, "/home/mallory/.ssh/authorized_keys")).toMatch(/^<unreadable: 404/);
+
+    /* The API applies the same name rule as the form and the agent. */
+    for (const bad of ["../etc", "root;id", ""]) {
+      const refused = await api.call("POST", "/ssh/keys", {
+        name: "bad account",
+        public_key: freshKey("x").line,
+        posix_user: bad,
+      });
+      expect(refused.status, bad).toBe(422);
+      expect(refused.error?.fields?.["posix_user"], bad).toBeTruthy();
+    }
+
+    const cleanup = await api.call<{ jobs: JobRow[] }>("DELETE", `/ssh/keys/${created.data.ssh_key.id}`);
+    expect(cleanup.status).toBe(202);
+  });
+
+  test("clearing AllowUsers removes the directive on the host", async ({ page }) => {
+    const mail = await server("mail-01");
+    const api = await owner();
+    await openConfig(page, "mail-01");
+    const field = page.getByLabel("AllowUsers");
+    await expect(field).not.toHaveValue("");
+    expect(await hostFile(mail.id, SSHD)).toMatch(/^AllowUsers \S/m);
+
+    await field.fill("");
+    await page.getByRole("button", { name: "Review and apply" }).click();
+    const dialog = page.getByRole("dialog", { name: "Apply sshd configuration to mail-01" });
+    await expect(dialog).toContainText("(unset — every account)");
+    await dialog.getByLabel("Rollback window").selectOption(String(WINDOW_S));
+    await dialog.getByRole("button", { name: "Apply" }).click();
+    expect(await drawerJob(page, "mail-01")).toContain("Succeeded");
+
+    /* Empty means "clear the directive", not "leave it alone". */
+    await expect.poll(() => hostFile(mail.id, SSHD)).not.toMatch(/^AllowUsers/m);
+    const during = await api.get<ConfigRead>(`/ssh/config?server_id=${mail.id}`);
+    expect(during.allow_users).toEqual([]);
+    expect(during.pending_rollback?.changes).toContain("AllowUsers (cleared)");
+
+    await rollbackBanner(page, "mail-01").getByRole("button", { name: "Confirm — keep these changes" }).click();
+    await expect(rollbackBanner(page, "mail-01")).toBeHidden();
+    await page.reload();
+    await expect(page.getByLabel("AllowUsers")).toHaveValue("");
+    const live = await api.get<ConfigRead>(`/ssh/config?server_id=${mail.id}&refresh=true`);
+    expect(live.allow_users).toEqual([]);
   });
 
   test("a change that would end SSH access is refused without a window", async ({ page }) => {

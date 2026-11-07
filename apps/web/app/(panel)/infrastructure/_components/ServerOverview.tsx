@@ -435,7 +435,8 @@ export function ServerOverview({ server, commands }: ServerOverviewProps) {
                 variant="danger-subtle"
                 size="sm"
                 icon={ShieldOff}
-                disabled={!can("infra.servers:write", server.id) || server.connection === "revoked"}
+                // Revoking is granted by infra.servers:delete, as the API checks it.
+                disabled={!can("infra.servers:delete", server.id) || server.connection === "revoked"}
                 onClick={() => commands.request("revoke", server)}
               >
                 Revoke

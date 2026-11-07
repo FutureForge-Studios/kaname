@@ -251,7 +251,9 @@ trade.
 **Decision.** `POST /terminal/sessions` checks `terminal.session:exec` for the target server and
 returns a single-use, 30-second, IP-bound ticket. The WebSocket upgrade accepts only that
 ticket. Every session writes an audit event on open and close, and the full I/O stream is
-recorded to `job_logs`-style storage with a retention setting.
+recorded to `job_logs`-style storage with a retention setting. A container's Exec tab is the same
+path: the request names a `container_id`, the socket opens `container.exec` instead of
+`pty.open`, and the ticket additionally needs `infra.containers:exec` on that host.
 
 **Why.** The terminal is the one place where the "no shell strings" rule cannot hold, so it gets
 compensating controls instead: it is explicitly a separate permission (a Developer role can
@@ -755,3 +757,30 @@ the ffstudios site and this repository is public. Geist Pixel ships under the OF
 ffstudios' accent-fg is 2.4:1 there. The light focus halo is 75% rather than 60% to stay above
 3:1. White on the dark danger fill is 3.2:1. Backdrop blur costs GPU time on the two chrome
 surfaces; `prefers-reduced-transparency` turns it off.
+
+---
+
+## KD-037 — A job's creator may cancel it; revoking is `infra.servers:delete`
+
+**Decision.** `POST /jobs/:id/cancel` is allowed for the user who created the job, and otherwise
+needs `infra.servers:write` on the job's server, as before. `POST /servers/:id/revoke` needs
+`infra.servers:delete`, the permission whose description already said it is what revokes. The job
+drawer only offers Cancel to someone the API would accept, and the revoke controls follow
+`infra.servers:delete`.
+
+**Alternatives.** Cancel with the permission of the job's own spec (`JOB_SPECS[type].permission`);
+leave cancel on `infra.servers:write`; change the description of `infra.servers:delete` instead
+of the code.
+
+**Why.** Cancelling never does more than the job would have done, so the person who started it
+needs no fresher grant than the one that enqueued it — and a Developer who could restart a unit
+but not take the restart back had the two verbs the wrong way round. The spec's permission was
+the closer runner-up, but one spec can serve several permission sets: every `db.*` spec names
+the MySQL set and the route overrides it for PostgreSQL, so a PostgreSQL-only role would have been
+refused its own job. Revoking cuts a host off until it is enrolled again; it belongs with removal,
+not with renaming, and the sentence an owner reads in the role editor must be the rule the API
+applies.
+
+**Cost accepted.** A user cannot cancel a colleague's job without `infra.servers:write`, even one
+of a kind they could start themselves. API keys have no creator identity on a job, so they cancel
+only with `infra.servers:write`.

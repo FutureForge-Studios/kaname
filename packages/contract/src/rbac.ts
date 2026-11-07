@@ -160,8 +160,12 @@ export const PERMISSION_GROUP_LABELS: Record<string, string> = {
 
 /** One-line explanations of what granting each permission actually allows. */
 export const PERMISSION_DESCRIPTIONS: Partial<Record<Permission, string>> = {
+  // POST /servers/:id/revoke checks exactly this, so the sentence and the code agree.
   "infra.servers:delete": "Remove a server from the fleet and revoke its agent certificate.",
-  "infra.containers:exec": "Start, stop and run commands inside containers.",
+  // A shell inside a container is a shell on the host's kernel, so Exec
+  // needs terminal.session:exec as well; this alone is the lifecycle verbs.
+  "infra.containers:exec":
+    "Start, stop and restart containers. A shell inside one also needs terminal.session:exec.",
   "terminal.session:exec": "Open an interactive root shell on the server. Sessions are recorded.",
   "backups.restore:exec": "Restore data over live files or databases. Destructive.",
   "security.audit:read": "Read the append-only audit trail and verify its hash chain.",

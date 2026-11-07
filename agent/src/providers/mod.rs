@@ -11,6 +11,7 @@
 //! injection structurally impossible rather than a code-review
 //! responsibility.
 
+pub mod ftp;
 pub mod payloads;
 
 #[cfg(target_os = "linux")]
@@ -52,6 +53,10 @@ pub mod cap {
     pub const FAIL2BAN: &str = "fail2ban";
     pub const CERTBOT: &str = "certbot";
     pub const RESTIC: &str = "restic";
+    /// sshd is installed: SFTP transfer accounts can be chrooted under it.
+    pub const SFTP: &str = "sftp";
+    /// vsftpd is installed: FTPS transfer accounts can be served.
+    pub const VSFTPD: &str = "vsftpd";
     pub const SIMULATED: &str = "simulated";
 }
 
@@ -393,6 +398,18 @@ pub trait Sites: Send + Sync {
     async fn remove(&self, ctx: &Ctx, p: SiteRemoveParams) -> PResult<()>;
     async fn test_config(&self, ctx: &Ctx) -> PResult<SiteTestConfigResult>;
     async fn reload(&self, ctx: &Ctx) -> PResult<()>;
+    /// Writes `<root>/releases/<release>` and swaps `<root>/current` onto it.
+    async fn release(&self, _ctx: &Ctx, _p: SiteReleaseParams) -> PResult<SiteReleaseResult> {
+        Err(ProviderError::unsupported_because(
+            "this host cannot write releases",
+        ))
+    }
+    /// Swaps `<root>/current` onto a release that is already on disk.
+    async fn activate(&self, _ctx: &Ctx, _p: SiteActivateParams) -> PResult<SiteActivateResult> {
+        Err(ProviderError::unsupported_because(
+            "this host cannot switch releases",
+        ))
+    }
 }
 
 /// DNS resolves from the managed host's own vantage point: what the panel's
@@ -400,6 +417,14 @@ pub trait Sites: Send + Sync {
 #[async_trait]
 pub trait Dns: Send + Sync {
     async fn resolve(&self, ctx: &Ctx, p: DnsResolveParams) -> PResult<Vec<ResolvedRecord>>;
+    /// Simulated hosts only (the method requires `simulated`): a real
+    /// host's resolver answers from the internet and is never told what
+    /// to say, so the default refuses.
+    async fn publish(&self, _ctx: &Ctx, _p: DnsPublishParams) -> PResult<()> {
+        Err(ProviderError::unsupported_because(
+            "only a simulated host serves a published zone",
+        ))
+    }
 }
 
 /// Mail is Yunori Mail Server on the host (KD-023). Every method is one
@@ -524,6 +549,12 @@ pub trait Provider: Send + Sync {
     fn ssh(&self) -> &dyn Ssh;
     fn backups(&self) -> &dyn Backups;
     fn pty(&self) -> &dyn Pty;
+    /// Transfer accounts. Defaulted to a refusing stub so a provider that
+    /// has not wired FTP still compiles and answers `unsupported`, rather
+    /// than every test double having to grow a fifth empty impl.
+    fn ftp(&self) -> &dyn ftp::Ftp {
+        &ftp::NO_FTP
+    }
 
     async fn close(&self);
 }

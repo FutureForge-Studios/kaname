@@ -130,7 +130,7 @@ async function agentRead<T>(server: ServerRow, run: () => Promise<T>): Promise<T
     return await run();
   } catch (err) {
     if (err instanceof AgentRpcError) throw fromAgentError(server.name, err.agentError);
-    if (err instanceof AgentOfflineError) throw agentOffline(server.name, server.lastSeenAt);
+    if (err instanceof AgentOfflineError) throw agentOffline(server);
     throw err;
   }
 }

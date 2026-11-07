@@ -348,6 +348,27 @@ export const renewCertificateInput = z.object({
 });
 export type RenewCertificateInput = z.infer<typeof renewCertificateInput>;
 
+/**
+ * An externally issued certificate. The chain is the leaf first, then
+ * any intermediates, as every CA hands it over; the key is sent once,
+ * sealed for the job that installs it, and never returned.
+ */
+export const installCertificateInput = z.object({
+  server_id: uuid,
+  domain_id: uuid,
+  certificate_pem: z
+    .string()
+    .trim()
+    .min(1, "Paste the certificate chain, leaf first.")
+    .max(64 * 1024, "A certificate chain is never larger than 64 KiB."),
+  key_pem: z
+    .string()
+    .trim()
+    .min(1, "Paste the private key that belongs to the certificate.")
+    .max(64 * 1024, "A private key is never larger than 64 KiB."),
+});
+export type InstallCertificateInput = z.infer<typeof installCertificateInput>;
+
 /** Everything else about a certificate comes from ACME, not from the operator. */
 export const updateCertificateInput = z.object({ auto_renew: z.boolean() }).partial();
 export type UpdateCertificateInput = z.infer<typeof updateCertificateInput>;
@@ -406,6 +427,13 @@ export const deployment = z.object({
   job_id: uuid.nullable(),
   /** False once the run's log has aged out of retention. */
   log_available: z.boolean(),
+  /**
+   * The release directory this run wrote (or, for a rollback, switched
+   * back to). Null until the host has written it, and again once
+   * retention has pruned it — which is exactly when it cannot be rolled
+   * back to.
+   */
+  release_path: z.string().nullable(),
   created_at: isoDate,
   updated_at: isoDate,
 });

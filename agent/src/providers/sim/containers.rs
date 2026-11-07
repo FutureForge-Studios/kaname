@@ -505,7 +505,7 @@ impl Containers for SimContainers {
     }
 
     async fn exec(&self, ctx: &Ctx, p: ContainerExecParams, s: StreamRef) -> PResult<()> {
-        let (fs, prompt) = {
+        let (fs, name, short_id) = {
             let mut w = self.0.world.lock();
             let Some(idx) = find_container(&w, &p.id) else {
                 return Err(ProviderError::not_found(format!("container {}", p.id)));
@@ -523,11 +523,12 @@ impl Containers for SimContainers {
             let c = &w.containers[idx];
             (
                 c.fs.clone().expect("container filesystem"),
-                format!("root@{}", &c.info.id[..12]),
+                c.info.name.clone(),
+                c.info.id[..12].to_string(),
             )
         };
 
-        let session = PtySession::new(self.0.clone(), fs, &prompt, "/", p.cols, p.rows);
+        let session = PtySession::for_container(self.0.clone(), fs, &name, &short_id, p.cols, p.rows);
         session.run(ctx, &*s).await.map(|_| ())
     }
 
@@ -572,5 +573,111 @@ impl Containers for SimContainers {
             reclaimed_bytes: reclaimed,
             removed,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+
+    use parking_lot::Mutex;
+
+    use super::*;
+    use crate::providers::{Encoding, Options, Stream};
+
+    /// Types the given keystrokes, then hangs up, and keeps what came back.
+    struct Keyboard {
+        input: Mutex<VecDeque<Vec<u8>>>,
+        output: Mutex<Vec<u8>>,
+    }
+
+    #[async_trait]
+    impl Stream for Keyboard {
+        async fn send(&self, data: &[u8], _enc: Encoding) -> PResult<()> {
+            self.output.lock().extend_from_slice(data);
+            Ok(())
+        }
+        async fn recv(&self) -> PResult<Option<Vec<u8>>> {
+            Ok(self.input.lock().pop_front())
+        }
+    }
+
+    fn sim(name: &str) -> Arc<Sim> {
+        Sim::new(Options {
+            agent_version: "0.1.0".into(),
+            state_dir: std::env::temp_dir().join(format!("kaname-sim-containers-{name}")),
+        })
+    }
+
+    async fn exec(sim: &Arc<Sim>, id: &str, typed: &[&str]) -> PResult<String> {
+        let keyboard = Arc::new(Keyboard {
+            input: Mutex::new(typed.iter().map(|t| t.as_bytes().to_vec()).collect()),
+            output: Mutex::new(Vec::new()),
+        });
+        SimContainers(sim.clone())
+            .exec(
+                &Ctx::background(),
+                ContainerExecParams {
+                    id: id.into(),
+                    cols: 80,
+                    rows: 24,
+                },
+                keyboard.clone(),
+            )
+            .await?;
+        let out = String::from_utf8_lossy(&keyboard.output.lock()).into_owned();
+        Ok(out)
+    }
+
+    /// The Exec tab's whole promise: what you type runs inside the
+    /// container, against its filesystem and its hostname, not the host's.
+    #[tokio::test]
+    async fn exec_lands_inside_the_container_not_on_the_host() {
+        let sim = sim("exec");
+        let short = {
+            let w = sim.world.lock();
+            let idx = find_container(&w, "kaname-redis").expect("seeded redis");
+            w.containers[idx].info.id[..12].to_string()
+        };
+
+        let out = exec(
+            &sim,
+            "kaname-redis",
+            &["hostname\r", "cat /etc/os-release\r", "exit\r"],
+        )
+        .await
+        .expect("exec into a running container");
+        assert!(out.contains("Inside container"), "{out}");
+        assert!(out.contains("kaname-redis"), "{out}");
+        assert!(
+            out.contains(&format!("\r\n{short}\r\n")),
+            "hostname should be the container's: {out}"
+        );
+        assert!(!out.contains(&format!("\r\n{}\r\n", sim.id.hostname)), "{out}");
+        assert!(out.contains("Alpine Linux"), "{out}");
+        assert!(out.contains(&format!("root@{short}")), "{out}");
+        sim.close().await;
+    }
+
+    #[tokio::test]
+    async fn exec_into_a_stopped_or_missing_container_is_refused() {
+        let sim = sim("exec-refused");
+        let stopped = {
+            let w = sim.world.lock();
+            w.containers
+                .iter()
+                .find(|c| c.info.state != "running")
+                .map(|c| c.info.name.clone())
+                .expect("the seed has a container that is not running")
+        };
+        match exec(&sim, &stopped, &[]).await {
+            Err(ProviderError::PreconditionFailed(msg)) => assert!(msg.contains(&stopped), "{msg}"),
+            other => panic!("expected PreconditionFailed, got {other:?}"),
+        }
+        assert!(matches!(
+            exec(&sim, "no-such-container", &[]).await,
+            Err(ProviderError::NotFound(_))
+        ));
+        sim.close().await;
     }
 }

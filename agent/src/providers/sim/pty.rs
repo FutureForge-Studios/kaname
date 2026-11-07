@@ -63,6 +63,11 @@ pub struct PtySession {
     fs: FsRef,
     who: String,
     user: String,
+    /// What `hostname` answers. A container is its own UTS namespace, so
+    /// a shell inside one names the container, not the host it runs on.
+    hostname: String,
+    /// The container this shell is inside, for the banner; None on the host.
+    container: Option<String>,
     pub pid: i64,
     #[allow(dead_code)]
     start: DateTime<Utc>,
@@ -81,6 +86,8 @@ impl PtySession {
         let now = Utc::now();
         let pid = 4000 + (mix(sim.seed ^ now.timestamp_nanos_opt().unwrap_or(0) as u64) % 20000) as i64;
         Arc::new(PtySession {
+            hostname: sim.id.hostname.clone(),
+            container: None,
             sim,
             fs,
             who: who.into(),
@@ -97,6 +104,24 @@ impl PtySession {
             }),
             cancel: CancellationToken::new(),
         })
+    }
+
+    /// A shell inside a container (`container.exec`): rooted in the
+    /// container's own filesystem, named after the container's short id the
+    /// way Docker names its hostname, and saying so in the banner.
+    pub fn for_container(
+        sim: Arc<Sim>,
+        fs: FsRef,
+        name: &str,
+        short_id: &str,
+        cols: i64,
+        rows: i64,
+    ) -> Arc<PtySession> {
+        let base = PtySession::new(sim, fs, &format!("root@{short_id}"), "/", cols, rows);
+        let mut session = Arc::into_inner(base).expect("a session nobody else holds yet");
+        session.hostname = short_id.to_string();
+        session.container = Some(name.to_string());
+        Arc::new(session)
     }
 
     pub fn resize(&self, cols: i64, rows: i64) {
@@ -229,6 +254,12 @@ impl PtySession {
     }
 
     fn banner(&self) -> String {
+        if let Some(name) = &self.container {
+            return format!(
+                "{ANSI_DIM}Inside container {ANSI_RESET}{ANSI_BOLD}{name}{ANSI_RESET}{ANSI_DIM} on {}. This is a simulated container; nothing you type here reaches a real machine.{ANSI_RESET}\r\nType {ANSI_BOLD}help{ANSI_RESET} for the commands it understands.\r\n\r\n",
+                self.sim.id.hostname
+            );
+        }
         format!(
             "Linux {} {} #1 SMP PREEMPT_DYNAMIC x86_64\r\n\r\n{ANSI_DIM}This is a simulated host. Nothing you type here reaches a real machine.{ANSI_RESET}\r\nType {ANSI_BOLD}help{ANSI_RESET} for the commands it understands.\r\n\r\n",
             self.sim.id.hostname, self.sim.id.kernel
@@ -267,7 +298,7 @@ impl PtySession {
             "help" => self.help(),
             "pwd" => format!("{}\r\n", self.current_dir()),
             "whoami" => format!("{}\r\n", self.user),
-            "hostname" => format!("{}\r\n", self.sim.id.hostname),
+            "hostname" => format!("{}\r\n", self.hostname),
             "clear" => "\x1b[2J\x1b[H".into(),
             "echo" => format!("{}\r\n", args.join(" ")),
             "cd" => self.cd(&args),

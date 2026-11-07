@@ -45,6 +45,7 @@ import {
 import { AgentOfflineError, AgentRpcError, type StreamHandle } from "../agent/hub.js";
 import {
   ApiException,
+  agentOffline,
   agentUnsupported,
   conflict,
   fromAgentError,
@@ -1237,7 +1238,9 @@ async function callAgent<T>(server: ServerRow, call: () => Promise<T>): Promise<
   } catch (err) {
     if (err instanceof AgentRpcError) throw fromAgentError(server.name, err.agentError);
     if (err instanceof AgentOfflineError) {
-      throw new ApiException("agent_offline", `The agent on ${server.name} disconnected.`);
+      // The shared builder, so this error carries the same remediation
+      // (and the same link to this host) as every other agent_offline.
+      throw agentOffline(server, `The agent on ${server.name} disconnected.`);
     }
     throw err;
   }

@@ -101,6 +101,16 @@ pub fn detect_capabilities(probe: &HostProbe<'_>) -> Vec<String> {
     if (probe.has_binary)("restic") {
         add(cap::RESTIC);
     }
+    // Transfer accounts: the daemon is the capability, so a host without
+    // one answers ftp.account.* with `unsupported` at the gate. sshd and
+    // vsftpd live in sbin, which an agent started outside systemd may not
+    // have on its PATH, so the usual install paths are checked too.
+    if (probe.has_binary)("sshd") || (probe.file_exists)("/usr/sbin/sshd") {
+        add(cap::SFTP);
+    }
+    if (probe.has_binary)("vsftpd") || (probe.file_exists)("/usr/sbin/vsftpd") {
+        add(cap::VSFTPD);
+    }
 
     let mut list: Vec<String> = caps.into_iter().map(String::from).collect();
     list.sort();
@@ -159,6 +169,16 @@ mod tests {
         assert_eq!(detect(None, &["yunori-mail"]), vec!["yunori"]);
         // Postfix and Dovecot no longer mean anything to Kaname.
         assert!(detect(None, &["postconf", "postqueue", "doveadm"]).is_empty());
+    }
+
+    #[test]
+    fn transfer_capabilities_are_the_daemons() {
+        assert_eq!(detect(None, &["sshd"]), vec!["sftp"]);
+        assert_eq!(detect(None, &["/usr/sbin/sshd"]), vec!["sftp"]);
+        assert_eq!(detect(None, &["/usr/sbin/vsftpd"]), vec!["vsftpd"]);
+        assert_eq!(detect(None, &["sshd", "vsftpd"]), vec!["sftp", "vsftpd"]);
+        // pure-ftpd or proftpd are not what the agent configures.
+        assert!(detect(None, &["pure-ftpd", "proftpd"]).is_empty());
     }
 
     #[test]

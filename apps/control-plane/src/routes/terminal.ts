@@ -1,7 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import type { RawData } from "ws";
 import { and, asc, desc, eq, gt, isNotNull, isNull, sql, type Database } from "@kaname/db";
-import { servers, settings, terminalRecordings, terminalSessions } from "@kaname/db/schema";
+import {
+  containers,
+  servers,
+  settings,
+  terminalRecordings,
+  terminalSessions,
+} from "@kaname/db/schema";
 import {
   can,
   idParam,
@@ -12,7 +18,12 @@ import {
 } from "@kaname/contract";
 import { MAX_DEADLINE_MS, ptyResizeParams, type MethodResult } from "@kaname/contract/agent";
 import { z } from "zod";
-import { AgentOfflineError, AgentRpcError, type StreamHandle } from "../agent/hub.js";
+import {
+  AgentOfflineError,
+  AgentRpcError,
+  type ChunkEncoding,
+  type StreamHandle,
+} from "../agent/hub.js";
 import {
   helpers,
   item,
@@ -90,8 +101,19 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
+    /*
+     * Container exec is the same act as a host shell — free-form input on
+     * the host's kernel — so it is gated by the terminal permission above
+     * and rides this ticket, audit and recording path unchanged (KD-013).
+     * It also needs the container permission, so a scoped grant on the
+     * terminal alone does not reach into workloads someone else manages.
+     */
+    const target = body.container_id ? await loadExecTarget(req.ctx.db, body.container_id, server) : null;
+    if (target) h.authorize("infra.containers:exec", server.id);
+
     const ticket = generateToken("kn_tty");
-    const expiresAt = new Date(Date.now() + TICKET_TTL_MS);
+    // Minted and checked on the same (injectable) clock: see ticketRefusal.
+    const expiresAt = new Date(req.ctx.auth.now() + TICKET_TTL_MS);
     const recorded = await recordingEnabled(req.ctx.db);
 
     const [row] = await req.ctx.db
@@ -100,7 +122,10 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
         serverId: server.id,
         userId: principal.id,
         userName: principal.name,
-        posixUser: body.user ?? "root",
+        // The image decides who a container shell runs as, not the caller.
+        posixUser: target ? "container" : (body.user ?? "root"),
+        containerRef: target?.containerId ?? null,
+        containerName: target?.name ?? null,
         ticketHash: hashToken(ticket),
         ip: req.ip ?? null,
         recorded,
@@ -113,9 +138,15 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
       action: "terminal.session.requested",
       targetType: "terminal_session",
       targetId: row!.id,
-      targetLabel: server.name,
+      targetLabel: sessionLabel(server.name, row!.containerName),
       serverId: server.id,
-      metadata: { posix_user: row!.posixUser, recorded, cols: body.cols, rows: body.rows },
+      metadata: {
+        posix_user: row!.posixUser,
+        recorded,
+        cols: body.cols,
+        rows: body.rows,
+        ...(target ? { container_id: target.containerId, container_name: target.name } : {}),
+      },
     });
 
     const response: TerminalSessionTicket = {
@@ -125,6 +156,7 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
       server_id: server.id,
       server_name: server.name,
       recorded,
+      container_name: row!.containerName,
     };
     return item(reply, response, 201);
   });
@@ -272,16 +304,9 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
     }
     const { session, server } = found;
 
-    if (session.startedAt) {
-      socket.close(4401, "ticket already used");
-      return;
-    }
-    if (session.expiresAt.getTime() <= Date.now()) {
-      socket.close(4401, "ticket expired");
-      return;
-    }
-    if (normalizeIp(session.ip) !== normalizeIp(req.ip)) {
-      socket.close(4403, "ticket is bound to a different address");
+    const refused = ticketRefusal(session, req.ip, req.ctx.auth.now());
+    if (refused) {
+      socket.close(refused.code, refused.reason);
       return;
     }
 
@@ -339,9 +364,17 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
       action: "terminal.session.opened",
       targetType: "terminal_session",
       targetId: session.id,
-      targetLabel: server.name,
+      targetLabel: sessionLabel(server.name, session.containerName),
       serverId: session.serverId,
-      metadata: { posix_user: session.posixUser, recorded: session.recorded, cols, rows: rows_ },
+      metadata: {
+        posix_user: session.posixUser,
+        recorded: session.recorded,
+        cols,
+        rows: rows_,
+        ...(session.containerRef
+          ? { container_id: session.containerRef, container_name: session.containerName }
+          : {}),
+      },
     });
     req.ctx.events.publish(
       "audit",
@@ -389,9 +422,9 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
     const flushTimer = setInterval(() => void flush(), RECORDING_FLUSH_MS);
     flushTimer.unref?.();
 
-    let handle: StreamHandle<MethodResult<"pty.open">>;
+    let handle: StreamHandle<unknown>;
     try {
-      handle = openPty();
+      handle = openShell();
     } catch (err) {
       // The agent dropped between the connectivity check above and here,
       // or does not offer a shell. Nothing is wired to the socket yet, so
@@ -408,9 +441,45 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
           ? `the agent on ${server.name} is not connected`
           : err instanceof AgentRpcError
             ? err.agentError.message
-            : "could not open a shell on the host";
+            : session.containerRef
+              ? `could not exec into ${session.containerName ?? "the container"}`
+              : "could not open a shell on the host";
       socket.close(4503, reason.slice(0, 120));
       return;
+    }
+
+    /*
+     * One output path for both kinds of shell, so recording, the byte
+     * counters and the browser back-pressure cannot differ between a host
+     * terminal and a container exec.
+     */
+    async function onOutput(data: string, encoding: ChunkEncoding): Promise<void> {
+      const buf = encoding === "base64" ? Buffer.from(data, "base64") : Buffer.from(data, "utf8");
+      bytesOut += buf.length;
+      record("out", buf);
+      if (socket.readyState !== socket.OPEN) return;
+      socket.send(buf);
+      // ws has no drain event for its send queue, so a browser that has
+      // stopped reading shows up here; waiting holds the PTY output too.
+      while (socket.bufferedAmount > OUTPUT_HIGH_WATER_BYTES && socket.readyState === socket.OPEN) {
+        await new Promise((resolve) => setTimeout(resolve, OUTPUT_POLL_MS));
+      }
+    }
+
+    function openShell(): StreamHandle<unknown> {
+      // A container session is `container.exec` against the runtime id
+      // captured when the ticket was minted; everything around it is the
+      // same audited, recorded socket as a host shell.
+      if (session.containerRef) {
+        return req.ctx.hub.stream(
+          session.serverId,
+          "container.exec",
+          { id: session.containerRef, cols, rows: rows_ },
+          onOutput,
+          { timeoutMs: MAX_DEADLINE_MS },
+        );
+      }
+      return openPty();
     }
 
     function openPty(): StreamHandle<MethodResult<"pty.open">> {
@@ -423,22 +492,7 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
           user: session.posixUser,
           term: "xterm-256color",
         },
-        async (data, encoding) => {
-          const buf =
-            encoding === "base64" ? Buffer.from(data, "base64") : Buffer.from(data, "utf8");
-          bytesOut += buf.length;
-          record("out", buf);
-          if (socket.readyState !== socket.OPEN) return;
-          socket.send(buf);
-          // ws has no drain event for its send queue, so a browser that has
-          // stopped reading shows up here; waiting holds the PTY output too.
-          while (
-            socket.bufferedAmount > OUTPUT_HIGH_WATER_BYTES &&
-            socket.readyState === socket.OPEN
-          ) {
-            await new Promise((resolve) => setTimeout(resolve, OUTPUT_POLL_MS));
-          }
-        },
+        onOutput,
         // A shell stays open as long as the operator wants it open, up to
         // the six hours the agent itself allows a request.
         { timeoutMs: MAX_DEADLINE_MS },
@@ -470,7 +524,7 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
         action: "terminal.session.closed",
         targetType: "terminal_session",
         targetId: session.id,
-        targetLabel: server.name,
+        targetLabel: sessionLabel(server.name, session.containerName),
         serverId: session.serverId,
         metadata: {
           reason,
@@ -505,6 +559,11 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
         const text = toBuffer(raw).toString("utf8");
         const control = parseControl(text);
         if (control) {
+          // `pty.resize` addresses the host shell opened last on this
+          // connection, and container.exec has no resize verb of its own,
+          // so a container session keeps the geometry it was opened with
+          // rather than resizing somebody else's host terminal.
+          if (session.containerRef) return;
           void req.ctx.hub
             .call(session.serverId, "pty.resize", { cols: control.cols, rows: control.rows })
             .catch((err: unknown) =>
@@ -535,6 +594,37 @@ export async function terminalRoutes(app: FastifyInstance): Promise<void> {
 
 /* ------------------------------------------------------------------ */
 
+/** The container row a `container.exec` ticket is for, checked against the host. */
+async function loadExecTarget(
+  db: Database,
+  containerId: string,
+  server: { id: string; name: string },
+): Promise<typeof containers.$inferSelect> {
+  const rows = await db.select().from(containers).where(eq(containers.id, containerId)).limit(1);
+  const found = rows[0];
+  // A container on another host is answered as missing rather than as
+  // forbidden, so a ticket request cannot probe the rest of the fleet.
+  if (!found || found.serverId !== server.id) throw notFound("Container", containerId);
+  if (found.state !== "running") {
+    throw new ApiException(
+      "precondition_failed",
+      `${found.name} is ${found.state} on ${server.name}, so there is nothing to exec into.`,
+      {
+        remediation: {
+          summary: "Start the container, then open the Exec tab again.",
+          actions: [{ label: "Container", href: `/infrastructure/containers/${found.id}` }],
+        },
+      },
+    );
+  }
+  return found;
+}
+
+/** What the audit trail names a session after: the host, and the container when there is one. */
+function sessionLabel(serverName: string, containerName: string | null): string {
+  return containerName ? `${containerName} on ${serverName}` : serverName;
+}
+
 /** Recording is on by default; disabling it is itself audited (KD-013). */
 async function recordingEnabled(db: Database): Promise<boolean> {
   const rows = await db
@@ -556,6 +646,28 @@ function socketUrl(base: string, ticket: string, cols: number, rows: number): st
 }
 
 /** IPv4-mapped IPv6 and plain IPv4 are the same address to an operator. */
+/**
+ * Why a presented ticket may not open a shell, or null when it may. A
+ * pure function of the row, the caller's address and the clock, so the
+ * 30-second expiry is provable without a socket or a wait
+ * (expiry.test.ts). Single use is decided again by the claiming UPDATE.
+ */
+export function ticketRefusal(
+  session: { startedAt: Date | null; expiresAt: Date; ip: string | null },
+  ip: string | undefined,
+  now: number,
+): { code: number; reason: string } | null {
+  if (session.startedAt) return { code: 4401, reason: "ticket already used" };
+  if (session.expiresAt.getTime() <= now) return { code: 4401, reason: "ticket expired" };
+  if (normalizeIp(session.ip) !== normalizeIp(ip)) {
+    return { code: 4403, reason: "ticket is bound to a different address" };
+  }
+  return null;
+}
+
+/** Ticket lifetime, exported for the expiry test. */
+export { TICKET_TTL_MS };
+
 function normalizeIp(value: string | null | undefined): string | null {
   if (!value) return null;
   return value.startsWith("::ffff:") ? value.slice(7) : value;
@@ -595,5 +707,6 @@ function toRecord(
     bytes_out: row.bytesOut,
     command_count: row.commandCount,
     recording_available: row.recorded && recordingAvailable,
+    container_name: row.containerName,
   };
 }

@@ -9,7 +9,6 @@ import {
   Badge,
   Button,
   ByteSize,
-  CopyableCode,
   DetailLayout,
   DropdownMenu,
   IconButton,
@@ -34,6 +33,7 @@ import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { PageError } from "@/components/PageError";
 import { useCan, useResource } from "@/lib/queries";
 import { formatCount, formatDuration, formatPercent } from "@/lib/format";
+import { ContainerExec } from "../../_components/ContainerExec";
 import { LogTailPanel } from "../../_components/LogTailPanel";
 import { useContainerCommands } from "../../_components/ContainerControls";
 import { CONTAINER_ACTION_ICONS, CONTAINER_STATE_TONE, useContainerDetail } from "../../_lib/infra";
@@ -181,7 +181,6 @@ export default function ContainerDetailPage() {
   const mounts = readMounts(container.inspect);
   const env = readEnv(container.inspect);
   const actions = commands.rowActions(container).filter((action) => action.id !== "open");
-  const execCommand = `${container.runtime} exec -it ${container.name} sh`;
 
   const rail = (
     <>
@@ -493,36 +492,8 @@ export default function ContainerDetailPage() {
         </TabPanel>
 
         <TabPanel value="exec">
-          <SectionCard
-            title="Exec"
-            description="A shell inside a container is a shell on the host's kernel, so it goes through the same audited path as any other terminal (KD-013)."
-          >
-            <div className="flex flex-col gap-4">
-              <p className="text-[var(--kn-text-2)]">
-                Open a terminal on <MonoText muted>{container.server_name}</MonoText> and run this.
-                The session is permission-gated, ticketed and recorded; nothing here is sent as a
-                shell string through the RPC surface.
-              </p>
-              <CopyableCode value={execCommand} label="Copy exec command" block />
-              <div>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  icon={SquareTerminal}
-                  disabled={!connected || !can("terminal.session:exec", container.server_id)}
-                  onClick={() => router.push(`/terminal?server_id=${container.server_id}`)}
-                >
-                  Open terminal on {container.server_name}
-                </Button>
-              </div>
-              {!can("terminal.session:exec", container.server_id) && (
-                <p className="text-[var(--kn-text-3)]">
-                  This account does not hold <MonoText muted>terminal.session:exec</MonoText> on
-                  this host, which is deliberately a separate permission from managing containers.
-                </p>
-              )}
-            </div>
-          </SectionCard>
+          {/* container.exec over the terminal's ticketed, recorded path. */}
+          <ContainerExec container={container} connected={connected} />
         </TabPanel>
       </div>
 

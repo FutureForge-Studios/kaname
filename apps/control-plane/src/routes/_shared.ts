@@ -40,7 +40,7 @@ export async function loadConnectedServer(
 ): Promise<ServerRow> {
   const server = await loadServer(req, serverId, permission);
   if (!req.ctx.hub.isConnected(serverId)) {
-    throw agentOffline(server.name, server.lastSeenAt);
+    throw agentOffline(server);
   }
   return server;
 }

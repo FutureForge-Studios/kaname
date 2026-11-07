@@ -442,7 +442,16 @@ impl Files for FileOps {
         let target = validate_path(&p.path)?;
         ensure_target(&target, p.overwrite)?;
 
-        let mut mode = DEFAULT_FILE_MODE;
+        // The editor saves through this path (it is the only write that is
+        // not capped at one agent frame), so replacing a file has to keep
+        // what it was: a 0600 secret saved from the editor must not come
+        // back 0644 and root-owned. An explicit mode still wins.
+        let replaced = if p.overwrite {
+            std::fs::symlink_metadata(&target).ok().filter(|m| m.is_file())
+        } else {
+            None
+        };
+        let mut mode = replaced.as_ref().map_or(DEFAULT_FILE_MODE, |m| m.mode() & 0o7777);
         if let Some(m) = p.mode.as_deref().filter(|m| !m.is_empty()) {
             mode = parse_mode(m)?;
         }
@@ -491,6 +500,14 @@ impl Files for FileOps {
             )));
         }
 
+        if let Some(previous) = &replaced {
+            nix::unistd::chown(
+                temp_name.as_str(),
+                Some(previous.uid().into()),
+                Some(previous.gid().into()),
+            )
+            .map_err(|e| ProviderError::internal(format!("chown {temp_name}: {e}")))?;
+        }
         temp.set_permissions(std::fs::Permissions::from_mode(mode))
             .await
             .map_err(|e| ProviderError::internal(format!("chmod {temp_name}: {e}")))?;
@@ -2246,6 +2263,53 @@ mod tests {
                 None => std::future::pending().await,
             }
         }
+    }
+
+    #[tokio::test]
+    async fn an_overwriting_upload_keeps_the_replaced_files_mode_and_owner() {
+        // The editor saves through upload; a secret saved there must not
+        // come back world-readable.
+        let root = tempfile::tempdir().unwrap();
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+        let target = root.path().join("secret.env");
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let before = std::fs::metadata(&target).unwrap();
+
+        let body = vec![b'x'; 700 * 1024];
+        let stream = Arc::new(NeverEnds(tokio::sync::Mutex::new(
+            body.chunks(192 * 1024).map(<[u8]>::to_vec).collect(),
+        )));
+        let params = FsUploadParams {
+            path: s(&target),
+            size: body.len() as i64,
+            mode: None,
+            overwrite: true,
+        };
+        let entry = ops.upload(&ctx, params, stream).await.unwrap();
+        assert_eq!(entry.size, body.len() as i64);
+        let after = std::fs::metadata(&target).unwrap();
+        assert_eq!(after.mode() & 0o777, 0o600);
+        assert_eq!((after.uid(), after.gid()), (before.uid(), before.gid()));
+        assert_eq!(std::fs::read(&target).unwrap(), body);
+
+        // A new file still gets the default, and an explicit mode still wins.
+        let fresh = root.path().join("fresh.txt");
+        let stream = Arc::new(NeverEnds(tokio::sync::Mutex::new(VecDeque::from(vec![
+            b"hi".to_vec(),
+        ]))));
+        let params = FsUploadParams {
+            path: s(&fresh),
+            size: 2,
+            mode: None,
+            overwrite: true,
+        };
+        ops.upload(&ctx, params, stream).await.unwrap();
+        assert_eq!(
+            std::fs::metadata(&fresh).unwrap().mode() & 0o777,
+            DEFAULT_FILE_MODE
+        );
     }
 
     #[tokio::test]

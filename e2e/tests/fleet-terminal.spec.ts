@@ -137,7 +137,8 @@ test("resizing the window resizes the pty on the same socket", async ({ page }) 
   await page.locator(".xterm-screen").click();
   await page.keyboard.type("hostname");
   await page.keyboard.press("Enter");
-  await expect(page.locator(".xterm-rows")).toContainText(".kaname.internal");
+  /* Its own name: simulated hosts no longer share a hostname pool. */
+  await expect(page.locator(".xterm-rows")).toContainText(`${HOST}.kaname.internal`);
 });
 
 test("disconnecting closes the session and the history says it ended", async ({ page }) => {

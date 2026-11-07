@@ -9,7 +9,10 @@ use crate::providers::{
 use crate::registry::{Registry, Request, StreamMode};
 use crate::wire::WireError;
 
-use super::{Handlers, NEEDS_DOCKER, check_container_id, decode, method, or_default, reply, require_stream};
+use super::{
+    Handlers, NEEDS_DOCKER, check_container_id, check_dimensions, decode, method, or_default, reply,
+    require_stream,
+};
 
 fn decode_container_id(req: &Request) -> Result<ContainerIdParams, WireError> {
     let p: ContainerIdParams = decode(req)?;
@@ -114,6 +117,10 @@ pub(super) fn register(r: &mut Registry, h: &Arc<Handlers>) {
             check_container_id(&p.id)?;
             p.cols = or_default(p.cols, 80);
             p.rows = or_default(p.rows, 24);
+            // The same bounds as pty.open: a container shell is the same
+            // audited interactive path, and a runtime handed a zero or
+            // absurd geometry fails deep inside the exec rather than here.
+            check_dimensions(p.cols, p.rows)?;
             let stream = require_stream(&req)?;
             h.provider.containers().exec(&ctx, p, stream).await?;
             reply(OK)

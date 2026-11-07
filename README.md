@@ -500,8 +500,8 @@ Further reading: [`docs/agent-protocol.md`](docs/agent-protocol.md) for the wire
   than erroring — so the chain, not the rule, is the real guarantee. **Security → Audit** shows the
   verification state and can re-verify on demand.
 - **Firewall changes apply behind a rollback window.** If you do not confirm within the timeout,
-  the host reverts. This is what stops you locking yourself out. (sshd changes arm the same window
-  on the agent, but the panel has no confirm path for them yet — see Status.)
+  the host reverts. This is what stops you locking yourself out. sshd changes arm the same window,
+  and both windows are part of the status reads, so a reload keeps the countdown and its Confirm.
 - **Terminal sessions are a separate permission** (`terminal.session:exec`), ticketed, IP-bound,
   audited on open and close, and recorded by default. Note this is not a privilege boundary on its
   own: `files.manager:write` reaches every path on the host through a root agent, so any role
@@ -527,15 +527,15 @@ simulated provider. The installer likewise has no automated test beyond shellche
 **Scaffolding — present in the UI, not wired to a host:**
 
 - Deployments record state but build, clone and copy nothing.
-- FTP is panel-side only. The agent has no FTP verb, so no account is ever created, changed or
-  removed on the host.
+- FTP accounts are real POSIX users (`ftp.account.*`): SFTP through an sshd `Match Group`
+  chroot, FTPS through vsftpd, quotas through `setquota` where the filesystem has user quotas.
+  Like the rest of the Linux provider, that path has only run against the simulator and unit
+  tests, never a real host.
 - Email is Yunori Mail Server ([KD-034](DECISIONS.md#kd-034)): deploying, adopting, domains,
   mailboxes, aliases, the DNS checklist and health all go through the `yunori-mail` CLI on the
   host. The parsers are pinned to yunori-mail 0.1.0's print formats; a `--json` flag on its list
   commands is the planned follow-up in that repository.
 - DNS is implemented for Cloudflare and manual zones only, despite the wider provider list.
-- sshd configuration changes arm a rollback timer on the agent with no way to confirm them, so a
-  change made with the default window silently reverts.
 - Agent certificates are valid 90 days and do not auto-rotate.
 - Terminal recordings are never pruned. (Finished jobs and their logs, expired sessions and spent
   tokens are — after `JOB_RETENTION_DAYS` and `SESSION_RETENTION_DAYS`.)

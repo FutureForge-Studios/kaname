@@ -13,7 +13,9 @@ use async_trait::async_trait;
 
 use super::mail::{MAIL_IP, expected_records};
 use super::state::Sim;
-use crate::providers::{Ctx, Dns, DnsResolveParams, MailCheckStatus, PResult, ResolvedRecord};
+use crate::providers::{
+    Ctx, Dns, DnsPublishParams, DnsResolveParams, MailCheckStatus, PResult, ResolvedRecord,
+};
 
 type Zone = HashMap<String, HashMap<String, Vec<String>>>;
 
@@ -95,7 +97,31 @@ pub fn zone(sim: &Sim) -> Zone {
         vec![format!("{}.", sim.id.hostname)],
     );
     add(&reverse_name(ip), "PTR", vec![format!("{}.", sim.id.hostname)]);
+
+    // What the control plane published wins over the fixed zone for each
+    // name and type it covers: it is the record set the world would serve.
+    let mut published: Zone = HashMap::new();
+    for records in w.published_zones.values() {
+        for r in records {
+            published
+                .entry(normalize(&r.name))
+                .or_default()
+                .entry(r.r#type.to_uppercase())
+                .or_default()
+                .push(r.content.clone());
+        }
+    }
+    for (name, types) in published {
+        let entry = zone.entry(name).or_default();
+        for (rtype, values) in types {
+            entry.insert(rtype, values);
+        }
+    }
     zone
+}
+
+fn normalize(name: &str) -> String {
+    name.trim().trim_end_matches('.').to_lowercase()
 }
 
 pub struct SimDns(pub Arc<Sim>);
@@ -133,5 +159,18 @@ impl Dns for SimDns {
             ttl: Some(ttl),
             resolver,
         }])
+    }
+
+    /// Replaces the zone wholesale, so a record deleted in Kaname stops
+    /// resolving here too; an empty set withdraws the zone.
+    async fn publish(&self, _ctx: &Ctx, p: DnsPublishParams) -> PResult<()> {
+        let zone = normalize(&p.zone);
+        let mut w = self.0.world.lock();
+        if p.records.is_empty() {
+            w.published_zones.remove(&zone);
+        } else {
+            w.published_zones.insert(zone, p.records);
+        }
+        Ok(())
     }
 }

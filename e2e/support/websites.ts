@@ -288,11 +288,13 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * Chooses the combobox option whose label is exactly `text`. Matching
- * on the label alone matters: the filter also searches descriptions,
- * and a simulated host reports a hostname from a small pool — db-01's
- * can read "edge-01.kaname.internal" — so "the first option mentioning
- * edge-01" was sometimes db-01.
+ * Chooses the combobox option whose label is exactly `text`. The filter
+ * also searches descriptions, so the label is what is matched on. There
+ * is no `.first()`: simulated hosts used to report hostnames from a
+ * shared pool (db-01 could read "edge-01.kaname.internal"), which this
+ * helper papered over by taking whichever match came first. Each host
+ * now reports its own name, so exactly one option must match, and a
+ * duplicate fails here instead of picking the wrong server.
  */
 export async function choose(page: Page, field: Locator, text: string): Promise<void> {
   await field.click();
@@ -300,8 +302,7 @@ export async function choose(page: Page, field: Locator, text: string): Promise<
   const option = page
     .getByRole("listbox")
     .getByRole("option")
-    .filter({ has: page.getByText(text, { exact: true }) })
-    .first();
+    .filter({ has: page.getByText(text, { exact: true }) });
   await expect(option).toBeVisible();
   await option.click();
   await expect(field).toHaveValue(text);

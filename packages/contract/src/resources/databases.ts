@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { absolutePath, bytes, identifier, isoDate, listQuery, port, uuid } from "../primitives.js";
+import { absolutePath, bytes, identifier, isoDate, listQuery, port, queryBoolean, uuid } from "../primitives.js";
 import { dbEngine, dbPrivilege } from "../enums.js";
 
 /* ------------------------------------------------------------------ *
@@ -176,7 +176,7 @@ export const dbUserListQuery = listQuery.extend({
   instance_id: uuid.optional(),
   engine: dbEngine.optional(),
   database_id: uuid.optional(),
-  can_login: z.coerce.boolean().optional(),
+  can_login: queryBoolean.optional(),
 });
 export type DbUserListQuery = z.infer<typeof dbUserListQuery>;
 

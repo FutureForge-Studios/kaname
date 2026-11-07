@@ -33,6 +33,7 @@ import {
   type UpdateCheckInterval,
   type UpdateTier,
   type User,
+  type UserInvitation as InvitedUserInvite,
 } from "@kaname/contract";
 import {
   Button,
@@ -1529,7 +1530,8 @@ export function NotificationsStep({ onAdvance, onStale }: StepProps) {
  * 10. Invite a teammate
  * ------------------------------------------------------------------ */
 
-type InvitedUser = User & { invite: { url: string; expires_at: string } };
+// The contract's shape: `invite.email` says whether "Email the invitation" worked.
+type InvitedUser = User & { invite: InvitedUserInvite };
 
 export function TeamStep({ onAdvance, onStale }: StepProps) {
   const [roles, setRoles] = React.useState<Role[] | null>(null);
@@ -1636,6 +1638,15 @@ export function TeamStep({ onAdvance, onStale }: StepProps) {
 
       {invited && (
         <div className="flex flex-col gap-2">
+          {invited.invite.email && (
+            // The invitation stands even when the email did not leave, so
+            // the outcome is said plainly and the link is the fallback.
+            <p className="text-sm text-[var(--kn-text-2)]">
+              {invited.invite.email.sent
+                ? `Emailed to ${invited.email}.`
+                : `The invitation email could not be sent: ${invited.invite.email.error ?? "the mail server refused it"}`}
+            </p>
+          )}
           <CopyableCode value={invited.invite.url} label={`Invitation link for ${invited.email}`} block />
           <p className="text-sm text-[var(--kn-text-2)]">
             Shown once. Expires <RelativeTime value={invited.invite.expires_at} />. Send it over a

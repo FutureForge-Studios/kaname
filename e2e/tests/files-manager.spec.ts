@@ -13,6 +13,7 @@ import {
   qs,
   settle,
   unique,
+  uploadBytes,
 } from "../support/data.js";
 import { cellAt, columnIndex } from "../support/ui.js";
 
@@ -83,6 +84,18 @@ async function writeText(path: string, content: string): Promise<void> {
   expect((await settle(job.id)).status).toBe("succeeded");
 }
 
+/** A text file too big for one fs.write job, put on the host through the upload route. */
+async function writeTextInChunks(path: string, content: string): Promise<void> {
+  const slash = path.lastIndexOf("/");
+  const status = await uploadBytes(
+    serverId,
+    path.slice(0, slash),
+    path.slice(slash + 1),
+    Buffer.from(content, "utf8"),
+  );
+  expect(status).toBe(201);
+}
+
 async function listing(path: string): Promise<Listing["entries"]> {
   return (
     await data<Listing>("GET", `/files?${qs({ server_id: serverId, path, show_hidden: true })}`)
@@ -110,9 +123,9 @@ function rowFor(table: Locator, path: string): Locator {
 
 async function rowAction(page: Page, row: Locator, action: string): Promise<void> {
   await row.getByRole("button", { name: "Row actions" }).click();
-  /* A file that only downloads lists "Download" twice: as its open
-   * action and as the download action. Either does the same. */
-  await page.getByRole("menuitem", { name: action, exact: true }).first().click();
+  /* Exactly one item per name: a download-only file no longer lists
+   * "Download" twice, so a strict locator is the assertion. */
+  await page.getByRole("menuitem", { name: action, exact: true }).click();
 }
 
 function sha(buffer: Buffer): string {
@@ -157,6 +170,52 @@ test("browses the seeded tree with breadcrumbs, the parent button, hidden files 
   await page.reload();
   await expect(crumbs.locator('[aria-current="page"]')).toHaveText("deploy");
   await expect(rowFor(table, "/home/deploy/deploy.sh")).toBeVisible();
+});
+
+test("Back and Forward walk the directories visited, and filter tweaks add no history", async ({
+  page,
+}) => {
+  const table = await open(page, "/home/deploy");
+  const crumbs = page.getByRole("navigation", { name: "Path" });
+  const here = crumbs.locator('[aria-current="page"]');
+
+  await rowFor(table, "/home/deploy/projects").click();
+  await expect(here).toHaveText("projects");
+  await rowFor(table, "/home/deploy/projects/storefront").click();
+  await expect(here).toHaveText("storefront");
+
+  /* Filters rewrite the current entry in place: still storefront, now
+   * showing only files and dotfiles. */
+  await page.getByLabel("Entry type").selectOption("file");
+  await expect(page).toHaveURL(/kind=file/);
+  await page.getByRole("switch", { name: "Hidden" }).check();
+  await expect(page).toHaveURL(/hidden=1/);
+
+  /* One Back is one directory up the trail, not out of the page and not
+   * through each filter click. */
+  await page.goBack();
+  await expect(here).toHaveText("projects");
+  await expect(page).toHaveURL(/path=%2Fhome%2Fdeploy%2Fprojects(&|$)/);
+  await expect(rowFor(table, "/home/deploy/projects/storefront")).toBeVisible();
+  await page.goBack();
+  await expect(here).toHaveText("deploy");
+  await expect(rowFor(table, "/home/deploy/deploy.sh")).toBeVisible();
+
+  /* Forward returns to storefront with the filters it was left with. */
+  await page.goForward();
+  await expect(here).toHaveText("projects");
+  await page.goForward();
+  await expect(here).toHaveText("storefront");
+  await expect(page).toHaveURL(/kind=file/);
+  await expect(page.getByLabel("Entry type")).toHaveValue("file");
+  await expect(page.getByRole("switch", { name: "Hidden" })).toBeChecked();
+  await expect(rowFor(table, "/home/deploy/projects/storefront/README.md")).toBeVisible();
+
+  /* The breadcrumb is a directory change too, so it is a history entry. */
+  await crumbs.getByRole("button", { name: "home", exact: true }).click();
+  await expect(here).toHaveText("home");
+  await page.goBack();
+  await expect(here).toHaveText("storefront");
 });
 
 test("a path that does not exist and an empty directory each say what they are", async ({
@@ -230,8 +289,9 @@ test("creates a file, edits it in the editor and saves it byte for byte", async 
   await page.keyboard.insertText(text);
   await expect(pane.getByText("unsaved")).toBeVisible();
 
+  /* The editor saves through the streamed upload path, not a job, so
+   * the badge clearing is the page's own word that the host has it. */
   await pane.getByRole("button", { name: "Save" }).click();
-  await jobSucceeds(page, "Write file", `${dir}/app.conf`);
   await expect(pane.getByText("unsaved")).toBeHidden();
 
   const stored = await readBack(`${dir}/app.conf`);
@@ -358,8 +418,11 @@ test("a binary file is never offered to the editor as text", async ({ page }) =>
   const pane = page.getByRole("region", { name: `File ${dir}/mislabelled.txt` });
   await expect(pane.getByText("This file is not text")).toBeVisible();
   await expect(pane.locator(".cm-content")).toHaveCount(0);
-  /* Nothing can be written back over the binary from here. */
-  await expect(pane.getByRole("button", { name: "Save" })).toBeDisabled();
+  /* Nothing can be written back over the binary from here, and the pane
+   * says why rather than showing a Save that never enables. */
+  await expect(pane.getByRole("button", { name: "Save" })).toHaveCount(0);
+  await expect(pane.getByText("binary", { exact: true })).toBeVisible();
+  await expect(pane.getByText(/nothing to edit or save here/)).toBeVisible();
   await pane.getByRole("button", { name: "Close file" }).click();
 
   /* A file whose type is binary is a download, straight from the row. */
@@ -368,6 +431,20 @@ test("a binary file is never offered to the editor as text", async ({ page }) =>
   ]);
   const row = rowFor(table, `${dir}/image.iso`);
   await expect(row).toBeVisible();
+
+  /* Its open action is the download, so the menu lists it once. */
+  await row.getByRole("button", { name: "Row actions" }).click();
+  await expect(page.getByRole("menuitem", { name: "Download", exact: true })).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  /* An editable file still offers both: Edit to open, Download to fetch. */
+  await writeText(`${dir}/notes.txt`, "hello\n");
+  await page.getByRole("button", { name: "Re-read this directory" }).click();
+  await expect(rowFor(table, `${dir}/notes.txt`)).toBeVisible();
+  await rowFor(table, `${dir}/notes.txt`).getByRole("button", { name: "Row actions" }).click();
+  await expect(page.getByRole("menuitem", { name: "Edit", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("menuitem", { name: "Download", exact: true })).toHaveCount(1);
+  await page.keyboard.press("Escape");
+
   const pending = page.waitForEvent("download");
   await row.click();
   const file = await pending;
@@ -687,6 +764,59 @@ test("a directory cannot be downloaded or read as a file", async () => {
   const read = await call("GET", `/files/read?${qs({ server_id: serverId, path: "/etc" })}`);
   expect(read.status).toBe(400);
   expect(read.body.error?.fields?.["path"]).toBe("expected a file");
+});
+
+test("the editor saves a file larger than one agent request, keeping its mode and owner", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  /* 700 KiB: past the 512 KiB one agent frame carries, inside the 1 MiB
+   * the editor opens. It used to open fine and then fail to save. */
+  const dir = `${root}/${unique("bigedit-")}`;
+  await mkdir(dir);
+  const path = `${dir}/large.conf`;
+  const body = Array.from({ length: 700 }, (_, i) => `line ${i} ${"x".repeat(1010)}`).join("\n");
+  expect(Buffer.byteLength(body)).toBeGreaterThan(512 * 1024);
+  expect(Buffer.byteLength(body)).toBeLessThan(1024 * 1024);
+  await writeTextInChunks(path, body);
+
+  /* A secret-shaped mode and an owner that is not root, which a save
+   * must not reset. */
+  const chmod = await data<{ job: { id: string } }>("POST", "/files/chmod", {
+    server_id: serverId,
+    paths: [path],
+    mode: "0600",
+  });
+  expect((await settle(chmod.job.id)).status).toBe("succeeded");
+  const chown = await data<{ job: { id: string } }>("POST", "/files/chown", {
+    server_id: serverId,
+    paths: [path],
+    owner: "deploy",
+    group: "deploy",
+  });
+  expect((await settle(chown.job.id)).status).toBe("succeeded");
+
+  const table = await open(page, dir);
+  await rowFor(table, path).click();
+  const pane = page.getByRole("region", { name: `File ${path}` });
+  const editor = pane.locator(".cm-content");
+  await expect(editor).toBeVisible();
+  await expect(pane.getByText("truncated")).toHaveCount(0);
+
+  await editor.click();
+  await page.keyboard.press("ControlOrMeta+Home");
+  await page.keyboard.insertText("# edited\n");
+  await expect(pane.getByText("unsaved")).toBeVisible();
+  await pane.getByRole("button", { name: "Save" }).click();
+  await expect(pane.getByText("unsaved")).toBeHidden({ timeout: 60_000 });
+  await expect(pane.getByRole("alert")).toHaveCount(0);
+
+  const expected = `# edited\n${body}`;
+  const stored = await readBack(path);
+  expect(stored.size).toBe(Buffer.byteLength(expected));
+  expect(stored.content).toBe(expected);
+  const entry = (await listing(dir)).find((e) => e.name === "large.conf");
+  expect(entry).toMatchObject({ mode: "0600", owner: "deploy" });
 });
 
 test("a write too large for one agent request fails on its own and leaves the host connected", async () => {

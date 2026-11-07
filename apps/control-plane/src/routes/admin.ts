@@ -30,6 +30,7 @@ import {
   updateUserInput,
   userListQuery,
   uuid,
+  type InvitedUser,
   type Permission,
   type Role,
   type RoleGrant,
@@ -176,28 +177,47 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
     await setUserRoles(req.ctx.db, row!.id, body.role_ids);
 
+    const url = `${req.ctx.config.KANAME_PUBLIC_URL}/invite/${token}`;
+
+    /*
+     * "Email the invitation" used to be recorded in the audit entry and
+     * nothing else: no message ever left. It now goes through the same
+     * outgoing mail server as Settings > Outgoing mail's test email.
+     * A send failure (no server configured, a refused login) does not
+     * undo the invitation — the account and its link are already good —
+     * so the outcome rides back beside the link the inviter is shown
+     * once, and the panel says why the email did not go.
+     */
+    const emailed = body.send_invite
+      ? await req.ctx.notifications.sendInvitation({
+          to: email,
+          inviteeName: body.name,
+          inviterName: h.actor().name,
+          url,
+          expiresAt,
+        })
+      : null;
+
     await req.ctx.audit.record({
       actor: h.actor(),
       action: "user.invited",
       targetType: "user",
       targetId: row!.id,
       targetLabel: email,
-      metadata: { send_invite: body.send_invite },
+      metadata: {
+        send_invite: body.send_invite,
+        email_sent: emailed?.sent ?? false,
+        ...(emailed?.error ? { email_error: emailed.error } : {}),
+      },
       after: { email, name: body.name, role_ids: body.role_ids },
     });
     req.ctx.events.publish("audit", "user.invited", { user_id: row!.id });
 
-    return item(
-      reply,
-      {
-        ...(await serializeUser(req.ctx.db, row!)),
-        invite: {
-          url: `${req.ctx.config.KANAME_PUBLIC_URL}/invite/${token}`,
-          expires_at: expiresAt.toISOString(),
-        },
-      },
-      201,
-    );
+    const created: InvitedUser = {
+      ...(await serializeUser(req.ctx.db, row!)),
+      invite: { url, expires_at: expiresAt.toISOString(), email: emailed },
+    };
+    return item(reply, created, 201);
   });
 
   app.get("/users/:id", async (req, reply) => {
@@ -213,6 +233,14 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     h.authorize("admin.users:write");
 
     const before = await loadUser(req, id);
+
+    // The same refusal POST /users/:id/activate makes. Without it the
+    // edit dialog's Status select was a way round that check: an invited
+    // account with no password became "active", an account nobody could
+    // ever sign in to, and its invitation link stopped working too.
+    if (body.status === "active" && before.status !== "active" && !before.passwordHash) {
+      throw neverSetPassword(before.email);
+    }
 
     if (body.status && body.status !== "active" && before.status === "active") {
       await assertNotLastOwner(req.ctx.db, before, "suspended");
@@ -352,17 +380,17 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     h.authorize("admin.users:write");
 
     const user = await loadUser(req, id);
-    if (!user.passwordHash) {
-      throw conflict(`${user.email} has never set a password.`, {
-        summary:
-          "Re-invite the account instead — activating it would leave an account nobody can sign in to.",
-        actions: [{ label: "Manage users", href: "/administration/users" }],
-      });
-    }
+    if (!user.passwordHash) throw neverSetPassword(user.email);
 
     const [row] = await req.ctx.db
       .update(users)
-      .set({ status: "active", failedLoginCount: 0, lockedUntil: null, updatedAt: new Date() })
+      .set({
+        status: "active",
+        failedLoginCount: 0,
+        failedLoginAt: [],
+        lockedUntil: null,
+        updatedAt: new Date(),
+      })
       .where(eq(users.id, id))
       .returning();
 
@@ -376,6 +404,44 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       after: { status: "active" },
     });
     req.ctx.events.publish("audit", "user.activated", { user_id: id });
+
+    return item(reply, await serializeUser(req.ctx.db, row!));
+  });
+
+  /*
+   * Clears a failed-sign-in lockout and nothing else. The lockout message
+   * told people an owner could "reactivate" a locked account, but a
+   * locked account is still `active`, so the users page only offered
+   * Suspend for it — the way out it promised did not exist. Unlocking
+   * leaves status, roles and sessions alone and is audited on its own,
+   * because lifting a brute-force guard early is worth seeing in the
+   * trail.
+   */
+  app.post("/users/:id/unlock", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const h = helpers(req);
+    h.authorize("admin.users:write");
+
+    const user = await loadUser(req, id);
+    const [row] = await req.ctx.db
+      .update(users)
+      .set({ failedLoginCount: 0, failedLoginAt: [], lockedUntil: null, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+
+    await req.ctx.audit.record({
+      actor: h.actor(),
+      action: "user.unlocked",
+      targetType: "user",
+      targetId: id,
+      targetLabel: user.email,
+      before: {
+        locked_until: user.lockedUntil?.toISOString() ?? null,
+        failed_login_count: user.failedLoginCount,
+      },
+      after: { locked_until: null, failed_login_count: 0 },
+    });
+    req.ctx.events.publish("audit", "user.unlocked", { user_id: id });
 
     return item(reply, await serializeUser(req.ctx.db, row!));
   });
@@ -985,6 +1051,11 @@ export async function serializeUser(db: Database, row: UserRow): Promise<User> {
     roles: await roleRefsFor(db, row.id),
     last_login_at: row.lastLoginAt?.toISOString() ?? null,
     last_login_ip: row.lastLoginIp,
+    // Only a lock still in force: an expired one has already lifted itself.
+    locked_until:
+      row.lockedUntil && row.lockedUntil.getTime() > Date.now()
+        ? row.lockedUntil.toISOString()
+        : null,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };
@@ -1143,6 +1214,13 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
 }
+
+const neverSetPassword = (email: string) =>
+  conflict(`${email} has never set a password.`, {
+    summary:
+      "Re-invite the account instead — activating it would leave an account nobody can sign in to.",
+    actions: [{ label: "Manage users", href: "/administration/users" }],
+  });
 
 const systemRoleImmutable = (slug: string, name: string) =>
   conflict(

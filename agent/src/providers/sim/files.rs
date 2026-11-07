@@ -1058,7 +1058,21 @@ impl Files for SimFiles {
             )));
         }
 
-        write_file(&self.0, &target, buffer, &default_mode(p.mode), true)
+        // Overwriting keeps the replaced file's mode (write_file keeps its
+        // owner), because the editor saves through upload and a 0600 file
+        // must not come back 0644. An explicit mode still wins.
+        let mode = match p.mode.filter(|m| !m.is_empty()) {
+            Some(m) => m,
+            None if exists => self
+                .0
+                .fs
+                .read()
+                .lookup(&target, false)
+                .map(|(n, _)| n.mode.clone())
+                .unwrap_or_else(|_| default_mode(None)),
+            None => default_mode(None),
+        };
+        write_file(&self.0, &target, buffer, &mode, true)
     }
 
     async fn usage(&self, _ctx: &Ctx, p: FsUsageParams) -> PResult<FsUsageResult> {
@@ -1170,7 +1184,9 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
         "/etc/resolv.conf",
         "nameserver 127.0.0.1\noptions edns0 trust-ad\nsearch kaname.internal\n",
     );
-    f.file("/etc/fstab", "# /etc/fstab: static file system information.\nUUID=9f2c1b70-4d5e-4b21-9c0a-2f1a7e6d4c33 /               ext4    errors=remount-ro 0 1\nUUID=1a4d-9C2E                            /boot           ext4    defaults          0 2\nUUID=c81f9a5d-3e7b-4f10-8a26-5d9e0c4b7a12 /srv            xfs     defaults,noatime  0 2\nUUID=7b3e2c41-8f6a-4d09-b52c-16e8d3f0a945 /var/lib/docker ext4    defaults          0 2\n/dev/vda3                                 none            swap    sw                0 0\n");
+    // /srv carries user quotas and / does not, so the simulated fleet
+    // can both apply an FTP quota and refuse one honestly (sim/ftp.rs).
+    f.file("/etc/fstab", "# /etc/fstab: static file system information.\nUUID=9f2c1b70-4d5e-4b21-9c0a-2f1a7e6d4c33 /               ext4    errors=remount-ro 0 1\nUUID=1a4d-9C2E                            /boot           ext4    defaults          0 2\nUUID=c81f9a5d-3e7b-4f10-8a26-5d9e0c4b7a12 /srv            xfs     defaults,noatime,usrquota 0 2\nUUID=7b3e2c41-8f6a-4d09-b52c-16e8d3f0a945 /var/lib/docker ext4    defaults          0 2\n/dev/vda3                                 none            swap    sw                0 0\n");
     f.file("/etc/passwd", "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nbin:x:2:2:bin:/bin:/usr/sbin/nologin\nsys:x:3:3:sys:/dev:/usr/sbin/nologin\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\nmessagebus:x:100:107::/nonexistent:/usr/sbin/nologin\nsshd:x:104:65534::/run/sshd:/usr/sbin/nologin\npostgres:x:108:117:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash\nmysql:x:110:120:MariaDB Server,,,:/nonexistent:/bin/false\nstalwart:x:115:125:Stalwart Mail Server,,,:/opt/stalwart:/usr/sbin/nologin\nunbound:x:116:126::/var/lib/unbound:/usr/sbin/nologin\ndeploy:x:1000:1000:Deploy,,,:/home/deploy:/bin/bash\nalice:x:1001:1001:Alice Nakamura,,,:/home/alice:/bin/bash\n");
     f.file("/etc/group", "root:x:0:\nadm:x:4:deploy,alice\nsudo:x:27:deploy\nwww-data:x:33:deploy\nshadow:x:42:\nstalwart:x:125:\nunbound:x:126:\ndocker:x:998:deploy\ndeploy:x:1000:\nalice:x:1001:\n");
     // The hashes are placeholders on purpose: nothing in a simulated host
@@ -1377,7 +1393,7 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
     );
     f.file("/proc/cpuinfo", &cpuinfo_file(id));
     f.file("/proc/meminfo", &meminfo_file(id));
-    f.file("/proc/mounts", "/dev/vda1 / ext4 rw,relatime,errors=remount-ro 0 0\n/dev/vda2 /boot ext4 rw,relatime 0 0\n/dev/vdb1 /srv xfs rw,noatime 0 0\n/dev/vdc1 /var/lib/docker ext4 rw,relatime 0 0\n");
+    f.file("/proc/mounts", "/dev/vda1 / ext4 rw,relatime,errors=remount-ro 0 0\n/dev/vda2 /boot ext4 rw,relatime 0 0\n/dev/vdb1 /srv xfs rw,noatime,usrquota 0 0\n/dev/vdc1 /var/lib/docker ext4 rw,relatime 0 0\n");
 
     Arc::new(RwLock::new(f))
 }

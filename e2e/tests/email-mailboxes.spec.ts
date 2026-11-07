@@ -125,7 +125,7 @@ test("the create form names what is wrong, field by field", async ({ page }) => 
    * names the field. Nothing reaches the host. */
   await addressField.fill("x".repeat(65));
   await create.click();
-  await expect(dialog.getByText("String must contain at most 64 character(s)")).toBeVisible();
+  await expect(dialog.getByText("Must be 64 characters or fewer.")).toBeVisible();
   expect(await mailboxAt(api, `${"x".repeat(65)}@${DOMAIN}`)).toBeUndefined();
 
   const direct = await api.post("/mailboxes", {
@@ -133,9 +133,7 @@ test("the create form names what is wrong, field by field", async ({ page }) => 
     local_part: "x".repeat(65),
   });
   expect(direct.status).toBe(422);
-  expect(direct.body.error?.fields?.["local_part"]).toBe(
-    "String must contain at most 64 character(s)",
-  );
+  expect(direct.body.error?.fields?.["local_part"]).toBe("Must be 64 characters or fewer.");
 });
 
 test("an address already taken by a mailbox or an alias is refused before the host is asked", async ({

@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import type { FileEntry } from "@kaname/contract";
 import {
+  InlineError,
   Badge,
   Button,
   ByteSize,
@@ -68,7 +69,7 @@ import {
   useDirectory,
   useDirectoryLoader,
   useFileContent,
-  useWriteFile,
+  useSaveFile,
   type BrowseSort,
 } from "../_components/queries";
 import {
@@ -132,21 +133,70 @@ export default function FileManagerPage() {
   const serverId = selection.serverId;
 
   const path = searchParams.get("path") ?? "/";
+  const kindParam = searchParams.get("kind");
+  const urlKind: KindFilter =
+    kindParam === "directory" || kindParam === "file" || kindParam === "symlink" ? kindParam : "";
+  const urlHidden = searchParams.get("hidden") === "1";
+  /* The URL is the source of truth (so Back and Forward restore filters),
+   * but router.replace lands a tick later; a control bound straight to it
+   * would snap back for a frame on every click. Local state answers the
+   * click at once and follows the URL whenever history moves it. */
+  const [kindFilter, setKindState] = React.useState<KindFilter>(urlKind);
+  const [showHidden, setHiddenState] = React.useState(urlHidden);
+  React.useEffect(() => setKindState(urlKind), [urlKind]);
+  React.useEffect(() => setHiddenState(urlHidden), [urlHidden]);
 
-  const setPath = React.useCallback(
-    (next: string) => {
-      const params = new URLSearchParams(searchParams.toString());
-      if (next === "/") params.delete("path");
-      else params.set("path", next);
+  /*
+   * Directory changes are history entries and filter tweaks are not.
+   * Navigating with replace meant the browser's Back button left the file
+   * manager altogether instead of going up to the folder the operator was
+   * just in; pushing every filter click would bury that folder under
+   * entries that differ only by a checkbox. So a new path pushes, and a
+   * filter rewrites the current entry in place.
+   */
+  const navigate = React.useCallback(
+    (updates: Record<string, string | null>, mode: "push" | "replace") => {
+      // The live URL, not the render's snapshot: two filter changes in one
+      // tick would otherwise each start from the same stale query and the
+      // second would drop the first.
+      const params = new URLSearchParams(
+        typeof window === "undefined" ? searchParams.toString() : window.location.search,
+      );
+      for (const [key, value] of Object.entries(updates)) {
+        if (value === null) params.delete(key);
+        else params.set(key, value);
+      }
       const query = params.toString();
-      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+      const href = query ? `${pathname}?${query}` : pathname;
+      if (mode === "push") router.push(href, { scroll: false });
+      else router.replace(href, { scroll: false });
     },
     [pathname, router, searchParams],
   );
 
+  const setPath = React.useCallback(
+    (next: string) => {
+      if (next === path) return;
+      navigate({ path: next === "/" ? null : next }, "push");
+    },
+    [navigate, path],
+  );
+  const setKindFilter = React.useCallback(
+    (next: KindFilter) => {
+      setKindState(next);
+      navigate({ kind: next || null }, "replace");
+    },
+    [navigate],
+  );
+  const setShowHidden = React.useCallback(
+    (next: boolean) => {
+      setHiddenState(next);
+      navigate({ hidden: next ? "1" : null }, "replace");
+    },
+    [navigate],
+  );
+
   const [search, setSearch] = React.useState("");
-  const [kindFilter, setKindFilter] = React.useState<KindFilter>("");
-  const [showHidden, setShowHidden] = React.useState(false);
   const [sort, setSort] = React.useState<SortState | null>({ id: "name", order: "asc" });
   const [page, setPage] = React.useState(1);
   const [selected, setSelected] = React.useState<string[]>([]);
@@ -439,7 +489,12 @@ export default function FileManagerPage() {
         },
       ];
 
-      if (entry.kind !== "directory") {
+      /* A file that neither previews nor edits already opens as a
+       * download, so a second "Download" entry would be the same action
+       * listed twice. Only files whose open action is something else get
+       * the explicit one. */
+      const opensAsDownload = entry.kind !== "directory" && !isImage(entry) && !entry.is_editable;
+      if (entry.kind !== "directory" && !opensAsDownload) {
         actions.push({
           id: "download",
           label: "Download",
@@ -915,7 +970,7 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
     open.path,
     open.mode === "preview" ? PREVIEW_MAX_BYTES : EDITOR_MAX_BYTES,
   );
-  const write = useWriteFile();
+  const write = useSaveFile();
 
   const [draft, setDraft] = React.useState<string | null>(null);
   const [baseline, setBaseline] = React.useState<string | null>(null);
@@ -933,19 +988,18 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
   const truncated = Boolean(content.data?.truncated);
   const readOnly = !canWrite || truncated;
 
+  /* Binary content is never written back from here: the editor only ever
+   * held a base64 rendering of it, and saving that as text would replace
+   * the file with its own encoding. */
+  const binary = content.data?.encoding === "base64";
+
   const save = React.useCallback(() => {
-    if (draft === null || readOnly) return;
+    if (draft === null || readOnly || binary) return;
     write.mutate(
-      {
-        server_id: serverId,
-        path: open.path,
-        content: draft,
-        encoding: "utf8",
-        create_parents: false,
-      },
+      { serverId, path: open.path, content: draft },
       { onSuccess: () => setBaseline(draft) },
     );
-  }, [draft, open.path, readOnly, serverId, write]);
+  }, [binary, draft, open.path, readOnly, serverId, write]);
 
   const close = () => {
     if (dirty) setConfirmDiscard(true);
@@ -985,9 +1039,18 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
             truncated
           </Badge>
         )}
-        {readOnly && !truncated && (
+        {readOnly && !truncated && !binary && (
           <Badge tone="neutral" size="xs">
             read-only
+          </Badge>
+        )}
+        {binary && !image && (
+          <Badge
+            tone="neutral"
+            size="xs"
+            title="Kaname read this file as binary, so it cannot be edited or saved here."
+          >
+            binary
           </Badge>
         )}
         {dirty && (
@@ -1017,7 +1080,9 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
           <Download size={12} aria-hidden />
           Download
         </a>
-        {open.mode === "edit" && !image && (
+        {/* No Save at all for binary content, rather than a disabled one
+            that never says why: the pane below explains it instead. */}
+        {open.mode === "edit" && !image && !binary && (
           <Button
             variant="primary"
             size="xs"
@@ -1031,6 +1096,16 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
         )}
         <IconButton icon={X} label="Close file" size="xs" onClick={close} />
       </div>
+
+      {/* The save is a direct streamed upload, not a job, so its failure has
+          no job pill to land on and is shown here, next to the draft that
+          is still unsaved. */}
+      {write.isError && (
+        <InlineError
+          className="border-b border-[var(--kn-border)] px-3 py-1.5"
+          message={`Not saved: ${write.error.message}`}
+        />
+      )}
 
       {content.isError && (
         <div className="p-4">
@@ -1067,7 +1142,7 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
         <EmptyState
           icon={Download}
           title="This file is not text"
-          description="Kaname read it as binary, so there is nothing to edit here. Download it to inspect it."
+          description="Kaname read it as binary despite its name, so there is nothing to edit or save here: writing text back would replace its bytes. Download it to inspect it."
           action={
             <a
               href={downloadUrl(serverId, open.path)}

@@ -72,6 +72,40 @@ const empty = z.object({});
 const unit = z.object({ unit: z.string().min(1).max(256) });
 
 /**
+ * A transfer credential: the panel's floor, and no line break or NUL,
+ * because chpasswd reads `user:password` lines from stdin and a newline
+ * would smuggle a second account's password in after the first.
+ */
+const ftpPassword = z
+  .string()
+  .min(16)
+  .max(256)
+  .regex(/^[^\r\n\0]*$/, "may not contain a line break or NUL");
+
+const ftpAccountParams = z.object({
+  username: identifier,
+  home_dir: absolutePath,
+  protocol: z.enum(["sftp", "ftps"]),
+  /** 0 clears any quota; above 0 needs a quota-enabled filesystem. */
+  quota_bytes: z.number().int().min(0).default(0),
+  /** SFTP key authentication; one OpenSSH public key line. */
+  ssh_public_key: z.string().max(4096).optional(),
+});
+
+const ftpAccountInfo = z.object({
+  username: identifier,
+  uid: z.number().int(),
+  home_dir: z.string(),
+  protocol: z.enum(["sftp", "ftps"]),
+  suspended: z.boolean(),
+  /** "applied": a block limit is set; "unlimited": none is. */
+  quota: z.enum(["applied", "unlimited"]),
+  /** The mount the limit was set on, when there is one. */
+  quota_mount: z.string().nullable(),
+  quota_bytes: z.number().int(),
+});
+
+/**
  * Identity function that PRESERVES each method's exact params and result
  * schemas. Typing it as `(spec: MethodSpec) => MethodSpec` looks
  * equivalent but widens both to ZodTypeAny, which silently degrades
@@ -646,6 +680,59 @@ export const AGENT_METHODS = {
     readOnly: false,
     summary: "Reload the web server.",
   }),
+  /*
+   * Releases. A deployment writes `<root>/releases/<release>` and then
+   * swaps `<root>/current` onto it in one rename, so a reader of the
+   * site never sees a half-written tree; a rollback is the same swap onto
+   * a release that is already there. Neither needs nginx: what serves
+   * `current` (a vhost root, an app process) is the site's business.
+   */
+  "site.release.create": m({
+    params: z.object({
+      name: z.string().max(128),
+      root: absolutePath,
+      release: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+      source: z.enum(["git", "upload"]),
+      repo_url: z.string().max(512).optional(),
+      branch: z.string().max(200).optional(),
+      commit_sha: z
+        .string()
+        .regex(/^[0-9a-f]{7,40}$/)
+        .optional(),
+      /** Where an upload deployment's files are staged; the site's webroot when absent. */
+      upload_path: absolutePath.optional(),
+      /** Releases kept on disk after this one, newest first; older ones are pruned. */
+      keep: z.number().int().min(1).max(50).default(5),
+    }),
+    result: z.object({
+      release_path: z.string(),
+      current_path: z.string(),
+      commit_sha: z.string().nullable(),
+      /** Release directories removed by retention, so the panel can forget them. */
+      pruned: z.array(z.string()),
+      log: z.array(z.string()),
+    }),
+    stream: "none",
+    requires: [],
+    readOnly: false,
+    summary: "Write a release directory for a site and switch its current symlink to it.",
+  }),
+  "site.release.activate": m({
+    params: z.object({
+      name: z.string().max(128),
+      root: absolutePath,
+      release_path: absolutePath,
+    }),
+    result: z.object({
+      current_path: z.string(),
+      release_path: z.string(),
+      previous: z.string().nullable(),
+    }),
+    stream: "none",
+    requires: [],
+    readOnly: false,
+    summary: "Point a site's current symlink at a release already on disk.",
+  }),
 
   /* ---------------------------- certificates -------------------------- */
   "cert.list": m({
@@ -736,6 +823,35 @@ export const AGENT_METHODS = {
     requires: [],
     readOnly: true,
     summary: "Resolve a record from the host's vantage point.",
+  }),
+  /*
+   * A simulated host has no internet to resolve against: its resolver
+   * stands in for public DNS. Without this it served a fixed zone, so a
+   * record Kaname told the operator to publish could never be seen and
+   * domain verification could only ever fail on the sim. The control
+   * plane hands it the zone Kaname manages — what the world would see
+   * once those records are published. Gated on `simulated`, so a real
+   * host never offers it and its resolver cannot be told what to answer.
+   */
+  "dns.publish": m({
+    params: z.object({
+      zone: z.string().max(253),
+      records: z
+        .array(
+          z.object({
+            name: z.string().max(253),
+            type: z.string().max(10),
+            content: z.string().max(4096),
+            ttl: z.number().int().min(0).max(604800).optional(),
+          }),
+        )
+        .max(1000),
+    }),
+    result: ok,
+    stream: "none",
+    requires: ["simulated"],
+    readOnly: false,
+    summary: "Simulated hosts only: serve the zone Kaname manages from this host's resolver.",
   }),
 
   /* -------------------------------- mail ------------------------------ */
@@ -1213,6 +1329,48 @@ export const AGENT_METHODS = {
     requires: [],
     readOnly: true,
     summary: "Active SSH sessions.",
+  }),
+
+  /* --------------------------------- ftp ------------------------------- */
+  /*
+   * Transfer accounts are real POSIX users: SFTP through sshd's
+   * internal-sftp in a chroot, FTPS through vsftpd. Each verb needs the
+   * daemon its protocol rides on, so a host with neither answers
+   * `unsupported` at the gate instead of failing half-way through
+   * useradd. The password travels in params only (the agent hands it to
+   * chpasswd on stdin) and no result ever echoes it.
+   */
+  "ftp.account.create": m({
+    params: ftpAccountParams.extend({ password: ftpPassword }),
+    result: ftpAccountInfo,
+    stream: "none",
+    requires: ["sftp", "vsftpd"],
+    readOnly: false,
+    summary: "Create a transfer account: POSIX user, chroot home, credential and quota.",
+  }),
+  "ftp.account.update": m({
+    params: ftpAccountParams.extend({ suspended: z.boolean().default(false) }),
+    result: ftpAccountInfo,
+    stream: "none",
+    requires: ["sftp", "vsftpd"],
+    readOnly: false,
+    summary: "Re-apply a transfer account's protocol, home, quota, key and suspension.",
+  }),
+  "ftp.account.passwd": m({
+    params: z.object({ username: identifier, password: ftpPassword }),
+    result: ok,
+    stream: "none",
+    requires: ["sftp", "vsftpd"],
+    readOnly: false,
+    summary: "Set a transfer account's password (chpasswd over stdin).",
+  }),
+  "ftp.account.delete": m({
+    params: z.object({ username: identifier }),
+    result: ok,
+    stream: "none",
+    requires: ["sftp", "vsftpd"],
+    readOnly: false,
+    summary: "Remove a transfer account's POSIX user, daemon config and quota; the home stays.",
   }),
 
   /* ------------------------------- backups ----------------------------- */

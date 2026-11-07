@@ -19,6 +19,7 @@ mod databases;
 mod dns;
 mod files;
 mod firewall;
+mod ftp;
 mod logs;
 mod mail;
 mod processes;
@@ -101,6 +102,7 @@ pub fn register_handlers(registry: &mut Registry, provider: ProviderRef, guarded
     databases::register(registry, &h);
     firewall::register(registry, &h);
     ssh::register(registry, &h);
+    ftp::register(registry, &h);
     backups::register(registry, &h);
     logs::register(registry, &h);
     pty::register(registry, &h);
@@ -1084,6 +1086,18 @@ mod tests {
                 json!({"id": "a;b"}),
                 ErrorCode::InvalidParams,
             ),
+            // Container exec is bounded like pty.open: it is the same
+            // interactive path, so a runtime never sees a 5000-column TTY.
+            (
+                "container.exec",
+                json!({"id": "abc123", "cols": 5000, "rows": 24}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "container.exec",
+                json!({"id": "a;b", "cols": 80, "rows": 24}),
+                ErrorCode::InvalidParams,
+            ),
             ("fs.list", json!({"path": "var/www"}), ErrorCode::InvalidParams),
             (
                 "fs.read",
@@ -1266,6 +1280,8 @@ mod tests {
             cap::FAIL2BAN,
             cap::CERTBOT,
             cap::RESTIC,
+            cap::SFTP,
+            cap::VSFTPD,
             cap::SIMULATED,
         ]
         .into_iter()

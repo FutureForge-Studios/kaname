@@ -304,7 +304,9 @@ export async function claimSetupToken(
 
   const row = rows[0];
   if (!row || row.usedAt) throw badSetupToken();
-  if (row.expiresAt && row.expiresAt.getTime() < Date.now()) throw expiredSetupToken();
+  // The auth clock rather than Date.now(), so the 24-hour expiry can be
+  // tested by moving the clock instead of waiting a day (expiry.test.ts).
+  if (row.expiresAt && row.expiresAt.getTime() <= ctx.auth.now()) throw expiredSetupToken();
 
   // Not burned here. The token stands in for "I am the person who ran
   // the installer" until an owner exists, and retiring it on the first

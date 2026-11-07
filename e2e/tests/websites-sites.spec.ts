@@ -202,9 +202,7 @@ test("the site form names the field that is wrong before anything is sent", asyn
    * does not count, so the control plane's message lands on the field. */
   await dialog.getByLabel("Site name").fill(`e2e-${"x".repeat(125)}`);
   await create.click();
-  await expect(
-    dialog.getByText("String must contain at most 128 character(s)", { exact: true }),
-  ).toBeVisible();
+  await expect(dialog.getByText("Must be 128 characters or fewer.", { exact: true })).toBeVisible();
   await expect(dialog).toBeVisible();
 
   /* Nothing above reached the host. */
@@ -489,4 +487,71 @@ test("the detail tab survives a refresh and Back returns to the list", async ({ 
   await page.goBack();
   await expect(page).toHaveURL(/\/websites\/sites$/);
   await expect(table).toBeVisible();
+});
+
+/* --------------------------- suspend / resume ------------------------ */
+
+/*
+ * `suspended` used to be a stored status nothing could set. Suspending
+ * disables the vhost on the host — the sites-enabled link goes — and
+ * the site stays listed, keeps its domain, survives an edit still
+ * suspended, and comes back with Resume.
+ */
+test("a suspended site stays listed with its vhost disabled until it is resumed", async ({
+  page,
+}) => {
+  const forge = await serverNamed(HOST);
+  const name = unique("e2e-suspend");
+  const created = await api<{ job: JobRow }>("POST", "/sites", {
+    server_id: forge.id,
+    name,
+    webroot: `/var/www/${name}`,
+    runtime: "static",
+    primary_domain: `${name}.e2e.test`,
+  });
+  expect((await settledJob(created.data.job.id)).status).toBe("succeeded");
+  const site = await siteNamed(name);
+  const link = `/etc/nginx/sites-enabled/${name}`;
+  const linked = async () =>
+    (await api("GET", `/files/stat?server_id=${forge.id}&path=${encodeURIComponent(link)}`)).status;
+  expect(await linked()).toBe(200);
+
+  await page.goto(`/websites/sites/${site.id}`);
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Suspend site" }).click();
+  const confirm = page.getByRole("dialog", { name: `Suspend ${name}?` });
+  await expect(confirm).toContainText("Resume brings it back as it was.");
+  await confirm.getByRole("button", { name: "Suspend site" }).click();
+  await expect(confirm).toBeHidden();
+  await expectJobStatus(drawerJob(page, "Suspend site", name), "Succeeded");
+  await page.keyboard.press("Escape");
+
+  await expect.poll(async () => (await siteNamed(name)).status).toBe("suspended");
+  await expect(page.getByText("Suspended").first()).toBeVisible();
+  /* The host no longer loads the vhost, and the config still tests clean. */
+  expect(await linked()).toBe(404);
+
+  /* Still listed, and found by the status filter it used to be the only use of. */
+  await page.goto(`/websites/sites?status=suspended&q=${name}`);
+  await expect(rowWith(page.getByRole("table", { name: "Sites" }), name)).toContainText(
+    "Suspended",
+  );
+
+  /* A second suspend is refused rather than queued. */
+  const again = await api("POST", `/sites/${site.id}/suspend`);
+  expect(again.status).toBe(409);
+  expect(again.error?.message).toBe(`${name} is already suspended.`);
+
+  /* An edit does not quietly bring it back online. */
+  const edit = await api<{ job: JobRow }>("PATCH", `/sites/${site.id}`, { force_https: false });
+  expect((await settledJob(edit.data.job.id)).status).toBe("succeeded");
+  expect((await siteNamed(name)).status).toBe("suspended");
+  expect(await linked()).toBe(404);
+
+  await page.goto(`/websites/sites/${site.id}`);
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Resume site" }).click();
+  await expectJobStatus(drawerJob(page, "Resume site", name), "Succeeded");
+  await expect.poll(async () => (await siteNamed(name)).status).toBe("active");
+  expect(await linked()).toBe(200);
 });

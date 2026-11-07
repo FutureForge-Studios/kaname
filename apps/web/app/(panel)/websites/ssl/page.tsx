@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Ban, Globe, Plus, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Ban, FileKey, Globe, Plus, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
 import {
   CERT_EXPIRY_SOON_DAYS,
   certificateUrgency,
@@ -33,6 +33,7 @@ import { PageError } from "@/components/PageError";
 import { formatCount } from "@/lib/format";
 import { useCan } from "@/lib/queries";
 import { CertificateDialog } from "../_components/CertificateDialog";
+import { InstallCertificateDialog } from "../_components/InstallCertificateDialog";
 import { JobPanel } from "../_components/JobPanel";
 import { FilterSelect } from "../_components/filters";
 import {
@@ -119,6 +120,7 @@ export default function SslPage() {
   const autoRenew = useSetAutoRenew();
 
   const [issuing, setIssuing] = React.useState(false);
+  const [installing, setInstalling] = React.useState(false);
   useOpenFromQuery("new", () => setIssuing(true), can("websites.ssl:write"));
   const noServer = serverPrerequisite(
     selection,
@@ -297,6 +299,18 @@ export default function SslPage() {
       Issue certificate
     </Button>
   );
+  /* For a certificate another authority issued; ACME is not involved. */
+  const installCertificate = (
+    <Button
+      variant="secondary"
+      size="sm"
+      icon={FileKey}
+      onClick={() => setInstalling(true)}
+      disabled={!can("websites.ssl:write")}
+    >
+      Install certificate
+    </Button>
+  );
 
   return (
     <>
@@ -304,6 +318,7 @@ export default function SslPage() {
         title="SSL / TLS"
         subtitle={selection.server ? selection.server.hostname : "Every host in scope"}
         primaryAction={issueCertificate}
+        headerActions={installCertificate}
         state={state}
         query={query}
         columns={columns}
@@ -378,6 +393,12 @@ export default function SslPage() {
         open={issuing}
         onOpenChange={setIssuing}
         defaultServerId={selection.serverId}
+      />
+      <InstallCertificateDialog
+        open={installing}
+        onOpenChange={setInstalling}
+        defaultServerId={selection.serverId}
+        onQueued={(job) => setWatchedJobId(job.id)}
       />
 
       <ConfirmDialog

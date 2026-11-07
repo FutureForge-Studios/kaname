@@ -10,7 +10,9 @@ import {
   LayoutDashboard,
   Link2,
   MoreHorizontal,
+  PauseCircle,
   Pencil,
+  PlayCircle,
   Plus,
   RefreshCw,
   Rocket,
@@ -80,7 +82,9 @@ import {
   useLogSearch,
   useLogSources,
   useReloadSites,
+  useResumeSite,
   useSite,
+  useSuspendSite,
 } from "../../_components/queries";
 import {
   CertificateStatusBadge,
@@ -128,6 +132,9 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
 
   const reload = useReloadSites();
   const remove = useDeleteSite();
+  const suspend = useSuspendSite();
+  const resume = useResumeSite();
+  const [confirmingSuspend, setConfirmingSuspend] = React.useState(false);
 
   const [editing, setEditing] = React.useState(false);
   const [deploying, setDeploying] = React.useState(false);
@@ -233,6 +240,23 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
                 Open in File Manager
               </MenuItem>
               <MenuSeparator />
+              {site.status === "suspended" ? (
+                <MenuItem
+                  icon={PlayCircle}
+                  disabled={!writable || resume.isPending}
+                  onSelect={() => resume.mutate({ id: site.id, name: site.name })}
+                >
+                  Resume site
+                </MenuItem>
+              ) : (
+                <MenuItem
+                  icon={PauseCircle}
+                  disabled={!writable || site.status === "provisioning"}
+                  onSelect={() => setConfirmingSuspend(true)}
+                >
+                  Suspend site
+                </MenuItem>
+              )}
               <MenuItem
                 icon={Trash2}
                 destructive
@@ -284,6 +308,22 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
         onOpenChange={setAttaching}
         defaultSiteId={site.id}
         defaultServerId={site.server_id}
+      />
+
+      <ConfirmDialog
+        open={confirmingSuspend}
+        onOpenChange={setConfirmingSuspend}
+        title={`Suspend ${site.name}?`}
+        description={`The vhost is disabled on ${site.server_name} and the web server reloaded, so ${site.primary_domain ?? "the site"} stops answering. Files, domains and certificates are kept, and Resume brings it back as it was.`}
+        confirmLabel="Suspend site"
+        destructive
+        loading={suspend.isPending}
+        onConfirm={() =>
+          suspend.mutate(
+            { id: site.id, name: site.name },
+            { onSuccess: () => setConfirmingSuspend(false) },
+          )
+        }
       />
 
       <ConfirmDialog

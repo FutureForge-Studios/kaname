@@ -58,7 +58,45 @@ pub struct DiskSpec {
     pub inodes_use: i64,
 }
 
-const HOSTNAME_POOL: &[&str] = &["web-01", "web-02", "app-01", "edge-01", "core-01", "node-01"];
+/// Where a simulated host's short name is placed. The short name itself
+/// is the agent's own identity (KD-022): it used to be drawn from a pool by
+/// seed, so db-01 could report itself as `edge-01.kaname.internal` — two
+/// hosts under one name, and a hostname that contradicted the server it
+/// was attached to.
+const SIM_DOMAIN: &str = "kaname.internal";
+
+/// The hostname a simulated host reports, derived from its identity: the
+/// identity folded into one DNS label (lowercase letters, digits and
+/// inner hyphens, at most 63 octets) under [`SIM_DOMAIN`]. An identity
+/// that is already a dotted name — the machine hostname fallback — is
+/// kept as the host's own name rather than nested under ours.
+pub fn sim_hostname(identity: &str) -> String {
+    let lowered = identity.trim().to_ascii_lowercase();
+    let dotted = lowered.contains('.');
+    let cleaned: String = lowered
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || (dotted && c == '.') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let labels: Vec<String> = cleaned
+        .split('.')
+        .map(|label| {
+            let label = label.trim_matches('-');
+            label[..label.len().min(63)].trim_end_matches('-').to_string()
+        })
+        .filter(|label| !label.is_empty())
+        .collect();
+    match labels.as_slice() {
+        [] => format!("kaname-sim.{SIM_DOMAIN}"),
+        [only] => format!("{only}.{SIM_DOMAIN}"),
+        many => many.join("."),
+    }
+}
 
 const CPU_POOL: &[&str] = &[
     "AMD EPYC 7763 64-Core Processor",
@@ -67,12 +105,12 @@ const CPU_POOL: &[&str] = &[
     "Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz",
 ];
 
-pub fn build_identity(seed: u64) -> Identity {
+pub fn build_identity(identity: &str, seed: u64) -> Identity {
     let cores = [4i64, 8, 8, 16][(mix(seed ^ 0x21) % 4) as usize];
     let memory = [8i64, 16, 16, 32][(mix(seed ^ 0x22) % 4) as usize] * GIB;
 
     Identity {
-        hostname: format!("{}.kaname.internal", pick(seed, 0x01, HOSTNAME_POOL)),
+        hostname: sim_hostname(identity),
         machine_id: format!("{:016x}{:016x}", mix(seed ^ 0xa1), mix(seed ^ 0xa2)),
         os: "Debian GNU/Linux".into(),
         os_version: "12 (bookworm)".into(),
@@ -539,5 +577,43 @@ impl System for SimSystem {
         Err(ProviderError::unsupported_because(
             "this is a simulated host with no agent binary to replace",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::sim::state::seed_for;
+
+    /// Each simulated host names itself after its own identity, so db-01
+    /// can no longer report edge-01's hostname.
+    #[test]
+    fn hostname_is_derived_from_the_hosts_own_identity() {
+        assert_eq!(sim_hostname("db-01"), "db-01.kaname.internal");
+        assert_eq!(sim_hostname("edge-01"), "edge-01.kaname.internal");
+        let fleet = ["forge-01", "mail-01", "db-01", "edge-01"];
+        let names: std::collections::BTreeSet<String> = fleet
+            .iter()
+            .map(|id| build_identity(id, seed_for(id)).hostname)
+            .collect();
+        assert_eq!(names.len(), fleet.len(), "two hosts share a hostname: {names:?}");
+        for id in fleet {
+            let host = build_identity(id, seed_for(id)).hostname;
+            assert!(host.starts_with(&format!("{id}.")), "{id} reported {host}");
+        }
+    }
+
+    #[test]
+    fn hostname_is_always_a_valid_dns_name() {
+        assert_eq!(
+            sim_hostname("Web_01 (staging)"),
+            "web-01--staging.kaname.internal"
+        );
+        assert_eq!(sim_hostname("--"), "kaname-sim.kaname.internal");
+        assert_eq!(sim_hostname(""), "kaname-sim.kaname.internal");
+        // A machine hostname fallback is already a name; it is not nested.
+        assert_eq!(sim_hostname("devbox.lan"), "devbox.lan");
+        let long = sim_hostname(&"a".repeat(100));
+        assert_eq!(long.split('.').next().unwrap().len(), 63);
     }
 }

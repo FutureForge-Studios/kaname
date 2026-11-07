@@ -4,7 +4,7 @@ import pino from "pino";
 import { createDb, eq, type DbHandle } from "@kaname/db";
 import { migrateHandle } from "@kaname/db/migrate";
 import { seedDemo } from "@kaname/db/seed";
-import { roleGrants, roles, userRoles, users } from "@kaname/db/schema";
+import { roleGrants, roles, services, userRoles, users } from "@kaname/db/schema";
 import type { Permission } from "@kaname/contract";
 import { loadConfig, resetConfigForTests } from "./config.js";
 import { createContext, type AppContext } from "./context.js";
@@ -259,5 +259,48 @@ describe("system role integrity", () => {
       .limit(1);
     expect(owner[0]).toBeTruthy();
     expect((await as(ownerCookie).get("/api/v1/servers")).statusCode).toBe(200);
+  });
+});
+
+/* KD-037: who may cancel a job, and what revoking needs. */
+describe("cancelling and revoking", () => {
+  /** The cached unit a restart is aimed at; no agent runs here, so it is inserted. */
+  async function cronOn(serverId: string): Promise<string> {
+    const [row] = await handle.db
+      .insert(services)
+      .values({ serverId, unit: `cron-${Math.random().toString(36).slice(2)}.service` })
+      .returning({ id: services.id });
+    return row!.id;
+  }
+
+  it("lets the creator cancel their own job without infra.servers:write", async () => {
+    const started = await as(scopedCookie).post(
+      `/api/v1/services/${await cronOn(scopedServerId)}/restart`,
+    );
+    expect(started.statusCode, started.body).toBe(202);
+    const job = JSON.parse(started.body).data.job as { id: string };
+
+    const res = await as(scopedCookie).post(`/api/v1/jobs/${job.id}/cancel`);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(JSON.parse(res.body).data.status).toBe("cancelled");
+  });
+
+  it("still refuses someone else's job to a role without infra.servers:write", async () => {
+    const started = await as(ownerCookie).post(
+      `/api/v1/services/${await cronOn(scopedServerId)}/restart`,
+    );
+    const job = JSON.parse(started.body).data.job as { id: string };
+
+    const res = await as(scopedCookie).post(`/api/v1/jobs/${job.id}/cancel`);
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body).error.message).toContain("infra.servers:write");
+    // The owner can, and the job is left for them to settle.
+    expect((await as(ownerCookie).post(`/api/v1/jobs/${job.id}/cancel`)).statusCode).toBe(200);
+  });
+
+  it("revokes with infra.servers:delete, the permission whose description says so", async () => {
+    const res = await as(scopedCookie).post(`/api/v1/servers/${scopedServerId}/revoke`);
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body).error.message).toContain("infra.servers:delete");
   });
 });

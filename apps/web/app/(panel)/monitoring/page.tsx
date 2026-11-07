@@ -23,6 +23,7 @@ import {
 import type {
   Alert,
   AlertRule,
+  AlertRuleChannel,
   MetricName,
   MetricSeries,
   MonitoringOverview,
@@ -937,6 +938,11 @@ function RulesTab({ tabs }: { tabs: React.ReactNode }) {
   const query = useList<AlertRule>("alert-rules", state.params, {
     path: "/monitoring/alert-rules",
   });
+  const channels = useAlertChannels();
+  const channelNames = React.useMemo(
+    () => new Map((channels.data?.data ?? []).map((channel) => [channel.id, channel.name])),
+    [channels.data],
+  );
 
   const [creating, setCreating] = React.useState(false);
   const [editing, setEditing] = React.useState<AlertRule | null>(null);
@@ -1019,14 +1025,19 @@ function RulesTab({ tabs }: { tabs: React.ReactNode }) {
         width: 104,
         align: "right",
         hideBelow: "lg",
-        cell: (rule) => (
-          <span className="kn-num text-[var(--kn-text-2)]">
-            {rule.channels.length === 0 ? "—" : formatCount(rule.channels.length)}
-          </span>
-        ),
+        // Names, not a count: "2" said nothing about who gets paged. An
+        // empty list means every channel subscribed to alerts, not nobody.
+        cell: (rule) =>
+          rule.channels.length === 0 ? (
+            <span className="text-[var(--kn-text-3)]">all alert channels</span>
+          ) : (
+            <span className="truncate text-[var(--kn-text-2)]">
+              {rule.channels.map((id) => channelNames.get(id) ?? "deleted channel").join(", ")}
+            </span>
+          ),
       },
     ],
-    [],
+    [channelNames],
   );
 
   return (
@@ -1179,7 +1190,19 @@ interface RuleDraft {
   severity: AlertRule["severity"];
   fleet: boolean;
   serverIds: string[];
+  channelIds: string[];
   enabled: boolean;
+}
+
+/**
+ * The channels a rule may route to. Read from the monitoring API rather
+ * than Settings, so a role that may write rules but not read settings
+ * can still choose where its alerts go.
+ */
+function useAlertChannels() {
+  return useList<AlertRuleChannel>("alert-channels", undefined, {
+    path: "/monitoring/alert-channels",
+  });
 }
 
 function ruleDraft(rule: AlertRule | null): RuleDraft {
@@ -1192,6 +1215,7 @@ function ruleDraft(rule: AlertRule | null): RuleDraft {
     severity: rule?.severity ?? "warning",
     fleet: rule ? rule.scope.kind === "fleet" : true,
     serverIds: rule && rule.scope.kind === "servers" ? [...rule.scope.server_ids] : [],
+    channelIds: rule ? [...rule.channels] : [],
     enabled: rule?.enabled ?? true,
   };
 }
@@ -1205,6 +1229,7 @@ interface AlertRuleDialogProps {
 function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogProps) {
   const editing = rule !== null;
   const servers = useServers();
+  const channels = useAlertChannels();
   const [draft, setDraft] = React.useState<RuleDraft>(() => ruleDraft(rule));
   const [error, setError] = React.useState<ApiError | null>(null);
 
@@ -1231,6 +1256,8 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
         scope: draft.fleet
           ? { kind: "fleet" as const }
           : { kind: "servers" as const, server_ids: draft.serverIds },
+        // Always sent, so clearing the list on an edit really clears it.
+        channels: draft.channelIds,
         enabled: draft.enabled,
       };
       return editing
@@ -1253,7 +1280,7 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
     severity: draft.severity,
     scope: draft.fleet ? { kind: "fleet" } : { kind: "servers", server_ids: draft.serverIds },
     enabled: draft.enabled,
-    channels: rule?.channels ?? [],
+    channels: draft.channelIds,
     created_at: rule?.created_at ?? new Date().toISOString(),
     updated_at: rule?.updated_at ?? new Date().toISOString(),
   };
@@ -1378,6 +1405,40 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
               </FormField>
             )}
 
+            <FormField
+              label="Notify"
+              description="Leave empty to tell every channel subscribed to alerts. Choosing channels narrows it to just those."
+              error={error?.fields.channels}
+            >
+              <Combobox
+                multiple
+                options={
+                  channels.data?.data.map((channel) => ({
+                    value: channel.id,
+                    label: channel.name,
+                    // A rule only narrows the channels that take alerts at
+                    // all, so one that does not would silently receive
+                    // nothing; say so instead of offering it.
+                    disabled: !channel.receives_alerts && !draft.channelIds.includes(channel.id),
+                    description: !channel.receives_alerts
+                      ? `${channel.kind} · not subscribed to alerts in Settings`
+                      : channel.enabled
+                        ? channel.kind
+                        : `${channel.kind} · switched off in Settings`,
+                  })) ?? []
+                }
+                value={draft.channelIds}
+                onValueChange={(next) => patch({ channelIds: next })}
+                loading={channels.isLoading}
+                placeholder={
+                  channels.data && channels.data.data.length === 0
+                    ? "No notification channels yet"
+                    : "All alert channels"
+                }
+                emptyMessage="No channel matches that name."
+              />
+            </FormField>
+
             <Switch
               checked={draft.enabled}
               onChange={(event) => patch({ enabled: event.target.checked })}
@@ -1393,7 +1454,17 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
                 {draft.fleet
                   ? "every server"
                   : `${formatCount(draft.serverIds.length)} selected server${draft.serverIds.length === 1 ? "" : "s"}`}
-                , raising a {draft.severity} alert.
+                , raising a {draft.severity} alert
+                {draft.channelIds.length === 0
+                  ? " to every alert channel"
+                  : ` to ${draft.channelIds
+                      .map(
+                        (id) =>
+                          channels.data?.data.find((channel) => channel.id === id)?.name ??
+                          "a deleted channel",
+                      )
+                      .join(", ")}`}
+                .
               </p>
             </div>
           </div>

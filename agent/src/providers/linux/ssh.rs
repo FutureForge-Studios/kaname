@@ -88,17 +88,10 @@ impl Ssh for SshOps {
     }
 
     async fn apply_keys(&self, _ctx: &Ctx, p: SshKeysApplyParams) -> PResult<i64> {
+        // The account is resolved first, so a key for a user this host does
+        // not have fails the job by name rather than creating a home
+        // directory for nobody.
         let account = lookup_account(&p.user)?;
-
-        let ssh_dir = account.home.join(".ssh");
-        std::fs::create_dir_all(&ssh_dir).map_err(|e| wrap_fs_error(&ssh_dir, e))?;
-        std::os::unix::fs::chown(&ssh_dir, Some(account.uid), Some(account.gid))
-            .map_err(|e| wrap_fs_error(&ssh_dir, e))?;
-        std::fs::set_permissions(
-            &ssh_dir,
-            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o700),
-        )
-        .map_err(|e| wrap_fs_error(&ssh_dir, e))?;
 
         let mut b = String::from("# Managed by Kaname. Edits are overwritten on the next key apply.\n");
         let mut applied = 0i64;
@@ -109,13 +102,7 @@ impl Ssh for SshOps {
             applied += 1;
         }
 
-        let target = account.home.join(AUTHORIZED_KEYS);
-        exec::write_atomic(&target, b.as_bytes(), 0o600).map_err(|e| wrap_fs_error(&target, e))?;
-        // sshd refuses a key file it does not trust the ownership of, so this
-        // is not cosmetic.
-        std::os::unix::fs::chown(&target, Some(account.uid), Some(account.gid))
-            .map_err(|e| wrap_fs_error(&target, e))?;
-
+        install_authorized_keys(&account.home, account.uid, account.gid, b.as_bytes())?;
         Ok(applied)
     }
 
@@ -307,21 +294,38 @@ impl SshOps {
         // Locking out the account that is currently connected is the failure
         // mode this whole method exists to prevent, so it is refused outright.
         self.check_not_self_locking(ctx, p).await?;
+        if use_drop_in {
+            // sshd adds up AllowUsers lines from every file, so leaving one out
+            // of the drop-in cannot clear a list the operator's own file sets.
+            // Say so rather than report a clear that did not happen.
+            let main = std::fs::read(SSH_CONFIG_PATH)
+                .map(|raw| String::from_utf8_lossy(&raw).into_owned())
+                .unwrap_or_default();
+            for (key, value) in &directives {
+                if value.is_empty() && sets_directive(&main, key) {
+                    return Err(precondition(format!(
+                        "{key} is set in {SSH_CONFIG_PATH} itself; Kaname only manages its drop-in, so it cannot clear it"
+                    )));
+                }
+            }
+        }
         Ok(render_ssh_config(&directives, previous, use_drop_in))
     }
 
     /// Refuses a change that would exclude every account with an active
     /// session.
     async fn check_not_self_locking(&self, ctx: &Ctx, p: &SshConfigApplyParams) -> PResult<()> {
-        if p.allow_users.is_empty() {
+        // Omitted leaves AllowUsers as it is, and an empty list clears it so
+        // every account may log in: neither can exclude a session.
+        let Some(allow_users) = p.allow_users.as_ref().filter(|users| !users.is_empty()) else {
             return Ok(());
-        }
+        };
         let sessions = match self.sessions(ctx).await {
             Ok(sessions) if !sessions.is_empty() => sessions,
             _ => return Ok(()),
         };
 
-        if sessions.iter().any(|s| p.allow_users.contains(&s.user)) {
+        if sessions.iter().any(|s| allow_users.contains(&s.user)) {
             return Ok(());
         }
         Err(precondition(
@@ -387,13 +391,104 @@ fn lookup_account(name: &str) -> PResult<Account> {
     let user = nix::unistd::User::from_name(name)
         .ok()
         .flatten()
-        .ok_or_else(|| not_found(format!("user {name}")))?;
+        .ok_or_else(|| not_found(format!("no POSIX account named {name} on this host")))?;
     Ok(Account {
         name: user.name,
         uid: user.uid.as_raw(),
         gid: user.gid.as_raw(),
         home: user.dir,
     })
+}
+
+/// Writes `~user/.ssh/authorized_keys`: the directory 0700 and the file
+/// 0600, both owned by the account, because sshd's StrictModes ignores a
+/// key file it does not trust.
+///
+/// The account owns `~/.ssh`, so it can replace it — or the key file — with
+/// a symlink to somewhere only root may write. Following one would let any
+/// user with a shell have Kaname write and chown a root-owned file. So the
+/// directory is refused if it is a symlink, then opened with O_NOFOLLOW,
+/// and every later step goes through that descriptor (openat, fchown,
+/// fchmod, renameat) rather than through a path that could be swapped
+/// between the check and the write. No binary is run at all.
+fn install_authorized_keys(home: &Path, uid: u32, gid: u32, content: &[u8]) -> PResult<()> {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+
+    use nix::fcntl::{OFlag, openat, renameat};
+    use nix::sys::stat::Mode;
+    use nix::unistd::{UnlinkatFlags, unlinkat};
+
+    match std::fs::metadata(home) {
+        Ok(meta) if meta.is_dir() => {}
+        _ => {
+            return Err(precondition(format!(
+                "{} is not a directory on this host, so there is nowhere to put authorized_keys",
+                home.display()
+            )));
+        }
+    }
+
+    let ssh_dir = home.join(".ssh");
+    match std::fs::symlink_metadata(&ssh_dir) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(precondition(format!(
+                "{} is a symbolic link; Kaname will not follow it",
+                ssh_dir.display()
+            )));
+        }
+        Ok(meta) if !meta.is_dir() => {
+            return Err(precondition(format!("{} is not a directory", ssh_dir.display())));
+        }
+        Ok(_) => {}
+        Err(e) if is_not_exist(&e) => std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&ssh_dir)
+            .map_err(|e| wrap_fs_error(&ssh_dir, e))?,
+        Err(e) => return Err(wrap_fs_error(&ssh_dir, e)),
+    }
+
+    let dir = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&ssh_dir)
+        .map_err(|e| wrap_fs_error(&ssh_dir, e))?;
+    std::os::unix::fs::fchown(&dir, Some(uid), Some(gid)).map_err(|e| wrap_fs_error(&ssh_dir, e))?;
+    dir.set_permissions(std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| wrap_fs_error(&ssh_dir, e))?;
+
+    let dirfd = dir.as_raw_fd();
+    let target = ssh_dir.join("authorized_keys");
+    let temp = format!(".authorized_keys.{}", uuid::Uuid::new_v4().simple());
+    let fd = openat(
+        Some(dirfd),
+        temp.as_str(),
+        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(|e| wrap_fs_error(&target, e.into()))?;
+    // SAFETY: openat has just returned this descriptor and nothing else
+    // holds it, so the File becomes its only owner.
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+
+    let result = (|| -> std::io::Result<()> {
+        file.write_all(content)?;
+        std::os::unix::fs::fchown(&file, Some(uid), Some(gid))?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.sync_all()?;
+        // Rename over whatever is there, a planted symlink included: the
+        // link itself is replaced, never written through.
+        renameat(Some(dirfd), temp.as_str(), Some(dirfd), "authorized_keys")?;
+        match dir.sync_all() {
+            Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+            other => other,
+        }
+    })();
+    if result.is_err() {
+        let _ = unlinkat(Some(dirfd), temp.as_str(), UnlinkatFlags::NoRemoveDir);
+    }
+    result.map_err(|e| wrap_fs_error(&target, e))
 }
 
 /// Lists the accounts worth inspecting: root plus the regular users, read
@@ -504,13 +599,14 @@ pub mod render {
         SSH_KEY_TYPES.contains(&field)
     }
 
-    /// One directive: canonical keyword and its value.
+    /// One directive: canonical keyword and its value. An empty value means
+    /// "remove this directive", which only the list directives can ask for.
     pub type Directive = (String, String);
 
-    /// The partial config as the renderer sees it. The wire shape carries
-    /// `allow_users`/`allow_groups` as plain lists, where an empty list means
-    /// "leave the directive alone"; this struct keeps the Go distinction
-    /// between "omitted" and "empty" so the renderer can refuse the latter.
+    /// The partial config as the renderer sees it. `None` leaves a directive
+    /// alone; for `allow_users`/`allow_groups`, `Some(vec![])` clears it,
+    /// which sshd reads as "no restriction" (it has no spelling for "allow
+    /// nobody": a bare `AllowUsers` is a syntax error).
     #[derive(Clone, Debug, Default)]
     pub struct SshConfigChange {
         pub port: Option<i64>,
@@ -531,8 +627,8 @@ pub mod render {
                 password_authentication: p.password_authentication,
                 pubkey_authentication: p.pubkey_authentication,
                 max_auth_tries: p.max_auth_tries,
-                allow_users: (!p.allow_users.is_empty()).then(|| p.allow_users.clone()),
-                allow_groups: (!p.allow_groups.is_empty()).then(|| p.allow_groups.clone()),
+                allow_users: p.allow_users.clone(),
+                allow_groups: p.allow_groups.clone(),
                 x11_forwarding: p.x11_forwarding,
             }
         }
@@ -563,20 +659,12 @@ pub mod render {
             }
             add("MaxAuthTries", tries.to_string());
         }
+        // An empty list is a clear: rendered as the directive's removal,
+        // never as a bare `AllowUsers` line, which sshd -t would reject.
         if let Some(users) = &p.allow_users {
-            if users.is_empty() {
-                return Err(invalid(
-                    "allow_users may not be empty; omit it to leave the directive alone",
-                ));
-            }
             add("AllowUsers", users.join(" "));
         }
         if let Some(groups) = &p.allow_groups {
-            if groups.is_empty() {
-                return Err(invalid(
-                    "allow_groups may not be empty; omit it to leave the directive alone",
-                ));
-            }
             add("AllowGroups", groups.join(" "));
         }
         if let Some(v) = p.x11_forwarding {
@@ -596,11 +684,23 @@ pub mod render {
             let mut b =
                 String::from("# Managed by Kaname. Edits are overwritten on the next ssh config apply.\n");
             for (key, value) in directives {
+                if value.is_empty() {
+                    continue;
+                }
                 b.push_str(&format!("{key} {value}\n"));
             }
             return b;
         }
         merge_directives(previous, directives)
+    }
+
+    /// Whether a config file sets `key` on an uncommented line.
+    pub fn sets_directive(text: &str, key: &str) -> bool {
+        text.lines().any(|line| {
+            line.split_whitespace()
+                .next()
+                .is_some_and(|first| first.eq_ignore_ascii_case(key))
+        })
     }
 
     /// Replaces the directives Kaname manages and leaves every other line of
@@ -620,6 +720,13 @@ pub mod render {
             }
             let key = fields[0].to_lowercase();
             let Some(value) = managed.get(&key) else { continue };
+            if value.is_empty() {
+                // Cleared: the operator's line is kept, commented out, so the
+                // file still shows what used to be there.
+                *line = format!("# {line}");
+                applied.insert(key);
+                continue;
+            }
             if applied.contains(&key) {
                 // A directive OpenSSH would ignore anyway (first one wins) is
                 // commented out rather than left to confuse the next reader.
@@ -635,7 +742,7 @@ pub mod render {
             b.push('\n');
         }
         for (key, value) in directives {
-            if applied.contains(&key.to_lowercase()) {
+            if value.is_empty() || applied.contains(&key.to_lowercase()) {
                 continue;
             }
             b.push_str(&format!("{key} {value}\n"));
@@ -843,22 +950,6 @@ mod tests {
                     ..Default::default()
                 },
             ),
-            // An empty AllowUsers is the difference between "leave it alone"
-            // and "allow nobody", and sshd reads the second one literally.
-            (
-                "empty allow_users",
-                SshConfigChange {
-                    allow_users: Some(vec![]),
-                    ..Default::default()
-                },
-            ),
-            (
-                "empty allow_groups",
-                SshConfigChange {
-                    allow_groups: Some(vec![]),
-                    ..Default::default()
-                },
-            ),
         ];
         for (name, params) in cases {
             assert!(
@@ -869,16 +960,65 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_wire_list_means_leave_the_directive_alone() {
-        // The wire shape has no "omitted vs empty" distinction for the lists,
-        // so an empty list from the panel reads as omitted rather than as
-        // "allow nobody".
-        let change = SshConfigChange::from_params(&crate::providers::SshConfigApplyParams {
+    fn an_omitted_list_is_left_alone_and_an_empty_one_clears_it() {
+        // Omitted: no AllowUsers directive is touched at all.
+        let omitted = SshConfigChange::from_params(&crate::providers::SshConfigApplyParams {
             port: Some(2222),
             ..Default::default()
         });
-        assert!(change.allow_users.is_none());
-        assert!(change.allow_groups.is_none());
+        assert!(omitted.allow_users.is_none());
+        assert!(omitted.allow_groups.is_none());
+        let directives = ssh_directives(&omitted).unwrap();
+        assert!(
+            !directives
+                .iter()
+                .any(|(k, _)| k == "AllowUsers" || k == "AllowGroups")
+        );
+
+        // Empty: a removal, which is a directive in its own right (so a clear
+        // alone is not "no directive was supplied").
+        let cleared = SshConfigChange::from_params(&crate::providers::SshConfigApplyParams {
+            allow_users: Some(vec![]),
+            ..Default::default()
+        });
+        assert_eq!(cleared.allow_users, Some(vec![]));
+        let directives = ssh_directives(&cleared).unwrap();
+        assert_eq!(directives, d(&[("AllowUsers", "")]));
+    }
+
+    #[test]
+    fn a_cleared_list_is_removed_from_the_file_never_written_bare() {
+        let directives = d(&[("AllowUsers", ""), ("Port", "2222")]);
+
+        // In the operator's own file: commented out, kept for the record.
+        let previous = "Port 22\nAllowUsers root deploy\nPasswordAuthentication no\nallowusers extra\n";
+        let merged = render_ssh_config(&directives, previous, false);
+        assert!(merged.contains("# AllowUsers root deploy\n"), "{merged}");
+        assert!(merged.contains("# allowusers extra\n"), "{merged}");
+        assert!(merged.contains("Port 2222\n"), "{merged}");
+        assert!(merged.contains("PasswordAuthentication no\n"), "{merged}");
+        // A bare `AllowUsers` is a syntax error to sshd -t.
+        for line in merged.lines() {
+            assert_ne!(line.trim(), "AllowUsers", "{merged}");
+        }
+        assert!(!sets_directive(&merged, "AllowUsers"), "{merged}");
+
+        // Nothing to clear is not an error: no line is invented either.
+        let untouched = render_ssh_config(&directives, "Port 22\n", false);
+        assert!(!sets_directive(&untouched, "AllowUsers"), "{untouched}");
+
+        // In Kaname's drop-in: simply absent.
+        let drop_in = render_ssh_config(&directives, "AllowUsers old\n", true);
+        assert!(!sets_directive(&drop_in, "AllowUsers"), "{drop_in}");
+        assert!(drop_in.contains("Port 2222\n"), "{drop_in}");
+    }
+
+    #[test]
+    fn sets_directive_ignores_comments_and_case() {
+        assert!(sets_directive("Port 22\nallowusers a b\n", "AllowUsers"));
+        assert!(sets_directive("  AllowUsers a\n", "AllowUsers"));
+        assert!(!sets_directive("# AllowUsers a\nPort 22\n", "AllowUsers"));
+        assert!(!sets_directive("AllowUsersX a\n", "AllowUsers"));
     }
 
     #[test]
@@ -1178,5 +1318,111 @@ mod tests {
         for (raw, want) in cases {
             assert_eq!(parse_idle(raw), want, "parse_idle({raw:?})");
         }
+    }
+}
+
+#[cfg(test)]
+mod authorized_keys_tests {
+    /* ------------------------------------------------------------------ *
+     * Writing ~user/.ssh/authorized_keys.
+     *
+     * The account owns ~/.ssh, so everything here is about what a hostile
+     * account could make the root agent do: follow a symlink out of the
+     * home directory, or leave a file sshd will not trust.
+     * ------------------------------------------------------------------ */
+
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    use super::{install_authorized_keys, lookup_account};
+    use crate::providers::ProviderError;
+
+    fn me() -> (u32, u32) {
+        (nix::unistd::getuid().as_raw(), nix::unistd::getgid().as_raw())
+    }
+
+    fn mode(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    #[test]
+    fn writes_the_file_0600_in_a_0700_directory_owned_by_the_account() {
+        let home = tempfile::tempdir().unwrap();
+        let (uid, gid) = me();
+        install_authorized_keys(home.path(), uid, gid, b"ssh-ed25519 AAAA one\n").unwrap();
+
+        let dir = home.path().join(".ssh");
+        let file = dir.join("authorized_keys");
+        assert_eq!(std::fs::read(&file).unwrap(), b"ssh-ed25519 AAAA one\n");
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&file), 0o600);
+        let meta = std::fs::metadata(&file).unwrap();
+        assert_eq!((meta.uid(), meta.gid()), (uid, gid));
+        // No temp file is left beside it.
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("authorized_keys")]);
+
+        // A second apply replaces the set rather than appending to it.
+        install_authorized_keys(home.path(), uid, gid, b"ssh-ed25519 BBBB two\n").unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"ssh-ed25519 BBBB two\n");
+    }
+
+    #[test]
+    fn tightens_a_directory_the_account_left_open() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".ssh");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let (uid, gid) = me();
+        install_authorized_keys(home.path(), uid, gid, b"").unwrap();
+        assert_eq!(mode(&dir), 0o700);
+    }
+
+    #[test]
+    fn refuses_a_symlinked_ssh_directory_and_writes_nothing_through_it() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(elsewhere.path(), home.path().join(".ssh")).unwrap();
+        let (uid, gid) = me();
+
+        let err = install_authorized_keys(home.path(), uid, gid, b"x\n").unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err:?}");
+        assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn replaces_a_planted_authorized_keys_symlink_instead_of_writing_through_it() {
+        let home = tempfile::tempdir().unwrap();
+        let victim = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(victim.path(), b"precious\n").unwrap();
+        let dir = home.path().join(".ssh");
+        std::fs::create_dir(&dir).unwrap();
+        std::os::unix::fs::symlink(victim.path(), dir.join("authorized_keys")).unwrap();
+        let (uid, gid) = me();
+
+        install_authorized_keys(home.path(), uid, gid, b"ssh-ed25519 AAAA k\n").unwrap();
+        assert_eq!(std::fs::read(victim.path()).unwrap(), b"precious\n");
+        let meta = std::fs::symlink_metadata(dir.join("authorized_keys")).unwrap();
+        assert!(meta.file_type().is_file());
+    }
+
+    #[test]
+    fn refuses_an_account_without_a_home_directory() {
+        let missing = std::path::Path::new("/nonexistent/kaname-test-home");
+        let (uid, gid) = me();
+        let err = install_authorized_keys(missing, uid, gid, b"").unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err:?}");
+    }
+
+    #[test]
+    fn an_unknown_account_is_not_found_by_name() {
+        let err = lookup_account("kaname-no-such-user-e2e").err().unwrap();
+        match err {
+            ProviderError::NotFound(message) => assert!(message.contains("kaname-no-such-user-e2e")),
+            other => panic!("expected not_found, got {other:?}"),
+        }
+        assert_eq!(lookup_account("root").ok().unwrap().uid, 0);
     }
 }

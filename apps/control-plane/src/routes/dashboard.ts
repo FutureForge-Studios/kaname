@@ -585,10 +585,15 @@ export async function onboardingSteps(
   // Infrastructure. The fleet rows are already scoped to infra.servers:read.
   const enrolled = fleetRows.filter((s) => s.enrolledAt && s.connection !== "revoked");
   steps.push({ id: "server_paired", done: enrolled.length > 0 });
-  steps.push({
-    id: "agents_connected",
-    done: enrolled.length > 0 && enrolled.every((s) => s.connection === "connected"),
-  });
+  // "Every agent connected" says nothing until there is an agent: on a
+  // brand-new instance it read To do right under "Pair a server", which
+  // is the same task twice. So it is absent, not undone, until one is.
+  if (enrolled.length > 0) {
+    steps.push({
+      id: "agents_connected",
+      done: enrolled.every((s) => s.connection === "connected"),
+    });
+  }
 
   // Websites.
   if (holds(req, "websites.domains:read")) {

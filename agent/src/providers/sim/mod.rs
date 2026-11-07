@@ -18,6 +18,7 @@ pub mod databases;
 pub mod dns;
 pub mod files;
 pub mod firewall;
+pub mod ftp;
 pub mod logs;
 pub mod mail;
 pub mod processes;
@@ -57,6 +58,7 @@ pub struct SimProvider {
     ssh: ssh::SimSsh,
     backups: backups::SimBackups,
     pty: pty::SimPty,
+    ftp: ftp::SimFtp,
 }
 
 impl SimProvider {
@@ -78,6 +80,7 @@ impl SimProvider {
             ssh: ssh::SimSsh(sim.clone()),
             backups: backups::SimBackups(sim.clone()),
             pty: pty::SimPty(sim.clone()),
+            ftp: ftp::SimFtp::new(sim.clone()),
             sim,
         }
     }
@@ -113,6 +116,9 @@ impl Provider for SimProvider {
         ]
         .iter()
         .filter(|c| **c != cap::YUNORI || mail)
+        // Which transfer daemons this host runs depends on its role, so the
+        // fleet always has a host where FTP fails at the gate (ftp.rs).
+        .chain(ftp::transfer_capabilities(&self.sim.identity))
         .map(|c| c.to_string())
         .collect()
     }
@@ -179,6 +185,9 @@ impl Provider for SimProvider {
     }
     fn pty(&self) -> &dyn Pty {
         &self.pty
+    }
+    fn ftp(&self) -> &dyn super::ftp::Ftp {
+        &self.ftp
     }
 
     async fn close(&self) {

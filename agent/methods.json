@@ -2855,6 +2855,76 @@
       }
     },
     {
+      "name": "dns.publish",
+      "stream": "none",
+      "requires": [
+        "simulated"
+      ],
+      "read_only": false,
+      "summary": "Simulated hosts only: serve the zone Kaname manages from this host's resolver.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "zone": {
+            "type": "string",
+            "maxLength": 253
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "maxLength": 253
+                },
+                "type": {
+                  "type": "string",
+                  "maxLength": 10
+                },
+                "content": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "ttl": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 604800
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "content"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          }
+        },
+        "required": [
+          "zone",
+          "records"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
       "name": "dns.resolve",
       "stream": "none",
       "requires": [],
@@ -4339,6 +4409,314 @@
           "child_count",
           "mime",
           "is_editable"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ftp.account.create",
+      "stream": "none",
+      "requires": [
+        "sftp",
+        "vsftpd"
+      ],
+      "read_only": false,
+      "summary": "Create a transfer account: POSIX user, chroot home, credential and quota.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+          },
+          "home_dir": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^\\/"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "sftp",
+              "ftps"
+            ]
+          },
+          "quota_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "ssh_public_key": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "password": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256,
+            "pattern": "^[^\\r\\n\\0]*$"
+          }
+        },
+        "required": [
+          "username",
+          "home_dir",
+          "protocol",
+          "password"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+          },
+          "uid": {
+            "type": "integer"
+          },
+          "home_dir": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "sftp",
+              "ftps"
+            ]
+          },
+          "suspended": {
+            "type": "boolean"
+          },
+          "quota": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "unlimited"
+            ]
+          },
+          "quota_mount": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quota_bytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "username",
+          "uid",
+          "home_dir",
+          "protocol",
+          "suspended",
+          "quota",
+          "quota_mount",
+          "quota_bytes"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ftp.account.delete",
+      "stream": "none",
+      "requires": [
+        "sftp",
+        "vsftpd"
+      ],
+      "read_only": false,
+      "summary": "Remove a transfer account's POSIX user, daemon config and quota; the home stays.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+          }
+        },
+        "required": [
+          "username"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ftp.account.passwd",
+      "stream": "none",
+      "requires": [
+        "sftp",
+        "vsftpd"
+      ],
+      "read_only": false,
+      "summary": "Set a transfer account's password (chpasswd over stdin).",
+      "params": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256,
+            "pattern": "^[^\\r\\n\\0]*$"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "ftp.account.update",
+      "stream": "none",
+      "requires": [
+        "sftp",
+        "vsftpd"
+      ],
+      "read_only": false,
+      "summary": "Re-apply a transfer account's protocol, home, quota, key and suspension.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+          },
+          "home_dir": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^\\/"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "sftp",
+              "ftps"
+            ]
+          },
+          "quota_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "ssh_public_key": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "suspended": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "username",
+          "home_dir",
+          "protocol"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+          },
+          "uid": {
+            "type": "integer"
+          },
+          "home_dir": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "sftp",
+              "ftps"
+            ]
+          },
+          "suspended": {
+            "type": "boolean"
+          },
+          "quota": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "unlimited"
+            ]
+          },
+          "quota_mount": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "quota_bytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "username",
+          "uid",
+          "home_dir",
+          "protocol",
+          "suspended",
+          "quota",
+          "quota_mount",
+          "quota_bytes"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
@@ -7881,6 +8259,168 @@
         },
         "required": [
           "sites"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "site.release.activate",
+      "stream": "none",
+      "requires": [],
+      "read_only": false,
+      "summary": "Point a site's current symlink at a release already on disk.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^\\/"
+          },
+          "release_path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^\\/"
+          }
+        },
+        "required": [
+          "name",
+          "root",
+          "release_path"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "current_path": {
+            "type": "string"
+          },
+          "release_path": {
+            "type": "string"
+          },
+          "previous": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "current_path",
+          "release_path",
+          "previous"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "site.release.create",
+      "stream": "none",
+      "requires": [],
+      "read_only": false,
+      "summary": "Write a release directory for a site and switch its current symlink to it.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "root": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^\\/"
+          },
+          "release": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "git",
+              "upload"
+            ]
+          },
+          "repo_url": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "branch": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "commit_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{7,40}$"
+          },
+          "upload_path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "pattern": "^\\/"
+          },
+          "keep": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 5
+          }
+        },
+        "required": [
+          "name",
+          "root",
+          "release",
+          "source"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "release_path": {
+            "type": "string"
+          },
+          "current_path": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pruned": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "release_path",
+          "current_path",
+          "commit_sha",
+          "pruned",
+          "log"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"

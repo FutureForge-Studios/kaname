@@ -86,9 +86,12 @@ export const threatEvents = pgTable(
     attempts: integer("attempts").notNull().default(1),
     firstSeen: ts("first_seen").notNull().defaultNow(),
     lastSeen: ts("last_seen").notNull().defaultNow(),
-    disposition: text("disposition", { enum: ["observed", "banned", "ignored"] })
+    /** "pending" while a ban or unban job is queued or running on the host. */
+    disposition: text("disposition", { enum: ["observed", "pending", "banned", "ignored"] })
       .notNull()
       .default("observed"),
+    /** The host's refusal when the last ban/unban job failed; cleared on success. */
+    dispositionError: text("disposition_error"),
     sample: text("sample"),
     ...timestamps,
   },

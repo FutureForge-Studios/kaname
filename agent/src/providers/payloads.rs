@@ -1054,6 +1054,49 @@ pub struct SiteTestConfigResult {
     pub output: String,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SiteReleaseParams {
+    pub name: String,
+    /// The deploy root: `releases/` and the `current` symlink live under it.
+    pub root: String,
+    pub release: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_sha: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_path: Option<String>,
+    pub keep: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SiteReleaseResult {
+    pub release_path: String,
+    pub current_path: String,
+    pub commit_sha: Option<String>,
+    pub pruned: Vec<String>,
+    pub log: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SiteActivateParams {
+    pub name: String,
+    pub root: String,
+    pub release_path: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SiteActivateResult {
+    pub current_path: String,
+    pub release_path: String,
+    pub previous: Option<String>,
+}
+
 /* ---------------------------- certificates --------------------------- */
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1100,7 +1143,7 @@ pub struct CertRevokeParams {
     pub reason: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CertInstallParams {
     pub subject: String,
@@ -1108,6 +1151,22 @@ pub struct CertInstallParams {
     pub key_pem: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain_pem: Option<String>,
+}
+
+/// Hand-written so the private key can never reach a log line through a
+/// `{:?}` of the params; the derived impl would print it verbatim.
+impl std::fmt::Debug for CertInstallParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CertInstallParams")
+            .field("subject", &self.subject)
+            .field(
+                "certificate_pem",
+                &format_args!("<{} bytes>", self.certificate_pem.len()),
+            )
+            .field("key_pem", &format_args!("<redacted>"))
+            .field("chain_pem", &self.chain_pem.as_ref().map(|c| c.len()))
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1130,6 +1189,24 @@ pub struct DnsResolveParams {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DnsResolveResult {
     pub records: Vec<ResolvedRecord>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsPublishedRecord {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsPublishParams {
+    pub zone: String,
+    pub records: Vec<DnsPublishedRecord>,
 }
 
 /* -------------------------------- mail ------------------------------- */
@@ -1552,10 +1629,14 @@ pub struct SshConfigApplyParams {
     pub pubkey_authentication: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_auth_tries: Option<i64>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub allow_users: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub allow_groups: Vec<String>,
+    /// `None` leaves AllowUsers alone; `Some(vec![])` clears the directive
+    /// (every account may log in). A plain `Vec` could not tell the two
+    /// apart, so clearing the list in the panel silently changed nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_users: Option<Vec<String>>,
+    /// As `allow_users`, for AllowGroups.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_groups: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x11_forwarding: Option<bool>,
     pub rollback_seconds: i64,
@@ -1858,6 +1939,17 @@ mod tests {
         assert_eq!(p.port, Some(2222));
         let v = serde_json::to_value(&p).unwrap();
         assert_eq!(keys(&v), vec!["port", "rollback_seconds"]);
+        // Omitted and empty are different requests: leave AllowUsers alone,
+        // or clear it. Both must survive the wire.
+        assert_eq!(p.allow_users, None);
+        let cleared: SshConfigApplyParams =
+            serde_json::from_value(json!({"allow_users": [], "rollback_seconds": 30})).unwrap();
+        assert_eq!(cleared.allow_users, Some(vec![]));
+        assert_eq!(cleared.allow_groups, None);
+        assert_eq!(
+            keys(&serde_json::to_value(&cleared).unwrap()),
+            vec!["allow_users", "rollback_seconds"]
+        );
 
         let p: ServiceListParams = serde_json::from_value(json!({})).unwrap();
         assert_eq!(serde_json::to_string(&p).unwrap(), "{}");

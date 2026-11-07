@@ -21,7 +21,13 @@ import {
 } from "@kaname/ui";
 import { api, type ApiError } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
-import { useJobDrawer, useJobLogs, useList, useResourceMutation } from "@/lib/queries";
+import {
+  useJobDrawer,
+  useJobLogs,
+  useList,
+  useResourceMutation,
+  useSession,
+} from "@/lib/queries";
 import { PageError } from "./PageError";
 
 /* ------------------------------------------------------------------ *
@@ -143,6 +149,12 @@ function JobRow({ job, expanded, onToggle, onNavigate }: JobRowProps) {
   });
 
   const running = !TERMINAL.has(job.status);
+  // The control plane's rule (KD-037): the job's own creator, or
+  // infra.servers:write on its host. Offered only to someone it would accept.
+  const { session, can } = useSession();
+  const mayCancel =
+    (session?.user != null && job.created_by === session.user.id) ||
+    can("infra.servers:write", job.server_id);
 
   return (
     <li>
@@ -226,6 +238,7 @@ function JobRow({ job, expanded, onToggle, onNavigate }: JobRowProps) {
               size="xs"
               icon={Ban}
               loading={cancel.isPending}
+              disabled={!mayCancel}
               onClick={() => cancel.mutate()}
             >
               Cancel

@@ -14,6 +14,7 @@ import {
   Zap,
 } from "lucide-react";
 import {
+  identifier,
   openSshPublicKey,
   type Job,
   type SshConfig,
@@ -60,6 +61,7 @@ import { ViewTabs } from "@/components/ViewTabs";
 import {
   LockoutNotice,
   RollbackBanner,
+  windowFromStatus,
   type LockoutAssessment,
   type RollbackWindow,
 } from "@/components/RollbackBanner";
@@ -83,9 +85,9 @@ import { formatCount, formatDateTime, pluralize } from "@/lib/format";
  *
  * Applying an sshd configuration gets the firewall's rollback treatment
  * for the same reason: it is the other way to lock yourself out of a
- * machine you are administering. The difference is that the host proves
- * the new configuration itself, so there is nothing to confirm — the
- * banner counts down and says exactly that.
+ * machine you are administering. The host reverts unless the change is
+ * confirmed inside the window, and the window comes back with the config
+ * read, so a reload still shows the countdown and its Confirm.
  * ------------------------------------------------------------------ */
 
 type View = "keys" | "config" | "sessions";
@@ -174,14 +176,33 @@ export default function SshPage() {
   const [configError, setConfigError] = React.useState<ApiError | null>(null);
   const [lockout, setLockout] = React.useState<LockoutAssessment | null>(null);
 
+  /* As on the firewall page: the window is in the config read, so a
+   * reload does not lose the banner and with it the only Confirm. */
+  const pendingWindow = config.data?.pending_rollback ?? null;
+  const dismissedWindow = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!pendingWindow || !serverId) return;
+    if (dismissedWindow.current === pendingWindow.expires_at) return;
+    setRollback((current) => ({
+      ...windowFromStatus(pendingWindow, { id: serverId, name: serverName }, "sshd configuration"),
+      lockout: current?.serverId === serverId ? current.lockout : null,
+    }));
+  }, [pendingWindow, serverId, serverName]);
+
   const mayWriteKeys = can("security.ssh:write");
   const mayWriteConfig = can("security.ssh:write", serverId);
 
-  const addKey = useMutationWithJob<{ name: string; publicKey: string; serverIds: string[] }>({
-    mutationFn: async ({ name, publicKey, serverIds }) => {
+  const addKey = useMutationWithJob<{
+    name: string;
+    publicKey: string;
+    posixUser: string;
+    serverIds: string[];
+  }>({
+    mutationFn: async ({ name, publicKey, posixUser, serverIds }) => {
       const response = await api.post<KeyResponse>("/ssh/keys", {
         name,
         public_key: publicKey,
+        posix_user: posixUser,
         server_ids: serverIds,
         user_id: null,
       });
@@ -360,6 +381,13 @@ export default function SshPage() {
         accessor: (row) => row.type,
       },
       {
+        id: "posix_user",
+        header: "Account",
+        mono: true,
+        width: 112,
+        accessor: (row) => row.posix_user,
+      },
+      {
         id: "servers",
         header: "Servers",
         minWidth: 180,
@@ -402,7 +430,9 @@ export default function SshPage() {
         open={addingKey}
         pending={addKey.isPending}
         onClose={() => setAddingKey(false)}
-        onSubmit={(name, publicKey, serverIds) => addKey.mutate({ name, publicKey, serverIds })}
+        onSubmit={(name, publicKey, posixUser, serverIds) =>
+          addKey.mutate({ name, publicKey, posixUser, serverIds })
+        }
       />
 
       <ConfirmDialog
@@ -527,12 +557,15 @@ export default function SshPage() {
       />
 
       <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
-        {rollback && (
+        {rollback && rollback.serverId === serverId && (
           <RollbackBanner
             window={rollback}
             confirming={confirmConfig.isPending}
             onConfirm={() => confirmConfig.mutate()}
-            onDismiss={() => setRollback(null)}
+            onDismiss={() => {
+              dismissedWindow.current = pendingWindow?.expires_at ?? null;
+              setRollback(null);
+            }}
           />
         )}
 
@@ -595,19 +628,21 @@ interface AddKeyDialogProps {
   open: boolean;
   pending: boolean;
   onClose: () => void;
-  onSubmit: (name: string, publicKey: string, serverIds: string[]) => void;
+  onSubmit: (name: string, publicKey: string, posixUser: string, serverIds: string[]) => void;
 }
 
 function AddKeyDialog({ open, pending, onClose, onSubmit }: AddKeyDialogProps) {
   const servers = useServers();
   const [name, setName] = React.useState("");
   const [publicKey, setPublicKey] = React.useState("");
+  const [posixUser, setPosixUser] = React.useState("root");
   const [serverIds, setServerIds] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     if (open) return;
     setName("");
     setPublicKey("");
+    setPosixUser("root");
     setServerIds([]);
   }, [open]);
 
@@ -615,7 +650,16 @@ function AddKeyDialog({ open, pending, onClose, onSubmit }: AddKeyDialogProps) {
     publicKey.trim().length > 0 && !openSshPublicKey.safeParse(publicKey.trim()).success
       ? 'must be an OpenSSH public key, e.g. "ssh-ed25519 AAAAC3Nza... you@laptop"'
       : undefined;
-  const valid = name.trim().length > 0 && !keyError && publicKey.trim().length > 0;
+  // The same rule the contract and the agent apply. Whether the account
+  // exists is the host's to say, per server, when the key job runs.
+  const userCheck = identifier.max(32).safeParse(posixUser.trim());
+  const userError = userCheck.success
+    ? undefined
+    : posixUser.trim().length === 0
+      ? "an account name is required"
+      : (userCheck.error.issues[0]?.message ?? "not a valid account name");
+  const valid =
+    name.trim().length > 0 && !keyError && publicKey.trim().length > 0 && !userError;
 
   return (
     <Dialog
@@ -629,7 +673,7 @@ function AddKeyDialog({ open, pending, onClose, onSubmit }: AddKeyDialogProps) {
         onSubmit={(event) => {
           event.preventDefault();
           if (!valid || pending) return;
-          onSubmit(name.trim(), publicKey.trim(), serverIds);
+          onSubmit(name.trim(), publicKey.trim(), posixUser.trim(), serverIds);
         }}
       >
         <DialogHeader
@@ -656,6 +700,23 @@ function AddKeyDialog({ open, pending, onClose, onSubmit }: AddKeyDialogProps) {
                 value={publicKey}
                 onChange={(event) => setPublicKey(event.target.value)}
                 placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... you@laptop"
+                spellCheck={false}
+              />
+            </FormField>
+
+            <FormField
+              label="Account on the host"
+              description="Whose ~/.ssh/authorized_keys gets this key. Each server checks the account exists before writing."
+              error={userError}
+              required
+            >
+              <Input
+                mono
+                value={posixUser}
+                onChange={(event) => setPosixUser(event.target.value)}
+                placeholder="root"
+                maxLength={32}
+                autoComplete="off"
                 spellCheck={false}
               />
             </FormField>

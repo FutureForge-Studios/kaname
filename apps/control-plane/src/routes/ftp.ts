@@ -29,6 +29,7 @@ import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
 import {
   ApiException,
   agentOffline,
+  agentUnsupported,
   badRequest,
   conflict,
   fromAgentError,
@@ -130,6 +131,7 @@ export async function ftpRoutes(app: FastifyInstance): Promise<void> {
   app.post("/ftp-accounts", async (req, reply) => {
     const body = parseBody(req, createFtpAccountInput);
     const server = await loadServer(req, body.server_id, "files.ftp:write");
+    requireTransferDaemon(req, server, body.protocol);
 
     const existing = await req.ctx.db
       .select({ id: ftpAccounts.id })
@@ -206,6 +208,7 @@ export async function ftpRoutes(app: FastifyInstance): Promise<void> {
     const { id } = parseParams(req, idParam);
     const before = await loadAccount(req, id, "files.ftp:write");
     const h = helpers(req);
+    requireTransferDaemon(req, before.server, body.protocol ?? before.account.protocol);
 
     let sshKeyId = before.account.sshKeyId;
     if (body.ssh_public_key) {
@@ -261,6 +264,15 @@ export async function ftpRoutes(app: FastifyInstance): Promise<void> {
         quota_bytes: account!.quotaBytes,
         status: account!.status,
         ...(body.ssh_public_key ? { ssh_public_key: body.ssh_public_key } : {}),
+        // The row already says the new values; if the host refuses them the
+        // handler puts these back, so the list never shows a quota or a
+        // protocol the host did not apply.
+        previous: {
+          protocol: before.account.protocol,
+          home_dir: before.account.homeDir,
+          quota_bytes: before.account.quotaBytes,
+          status: before.account.status,
+        },
       },
     });
     return accepted(reply, job);
@@ -365,7 +377,7 @@ export async function ftpRoutes(app: FastifyInstance): Promise<void> {
         },
       );
     } catch (err) {
-      if (err instanceof AgentOfflineError) throw agentOffline(server.name, server.lastSeenAt);
+      if (err instanceof AgentOfflineError) throw agentOffline(server);
       if (err instanceof AgentRpcError) throw fromAgentError(server.name, err.agentError);
       throw err;
     }
@@ -396,6 +408,25 @@ export async function ftpRoutes(app: FastifyInstance): Promise<void> {
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
+
+/**
+ * Fails fast, before any row exists, on a connected host that cannot
+ * serve the protocol: the agent advertises `sftp` when sshd is present
+ * and `vsftpd` when vsftpd is. An offline host is not refused — the job
+ * waits for it like every other (KD-008), and the agent's own gate
+ * answers `unsupported` when it reconnects.
+ */
+function requireTransferDaemon(
+  req: FastifyRequest,
+  server: ServerRow,
+  protocol: FtpAccount["protocol"],
+): void {
+  if (!req.ctx.hub.isConnected(server.id)) return;
+  const needed = protocol === "ftps" ? "vsftpd" : "sftp";
+  if (!req.ctx.hub.capabilities(server.id).includes(needed)) {
+    throw agentUnsupported(server.name, protocol === "ftps" ? "vsftpd (FTPS)" : "sshd (SFTP)");
+  }
+}
 
 interface AccountRow {
   account: typeof ftpAccounts.$inferSelect;

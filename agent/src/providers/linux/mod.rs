@@ -18,6 +18,7 @@ pub mod dns;
 pub mod exec;
 pub mod files;
 pub mod firewall;
+pub mod ftp;
 pub mod logs;
 pub mod mail;
 pub mod paths;
@@ -110,6 +111,7 @@ pub struct LinuxProvider {
     ssh: ssh::SshOps,
     backups: backups::BackupOps,
     pty: pty::PtyOps,
+    ftp: ftp::FtpOps,
 }
 
 pub async fn open(opts: Options) -> anyhow::Result<ProviderRef> {
@@ -155,6 +157,7 @@ pub async fn open(opts: Options) -> anyhow::Result<ProviderRef> {
         ssh: ssh::SshOps(shared.clone()),
         backups: backups::BackupOps(shared.clone()),
         pty: pty::PtyOps(shared.clone()),
+        ftp: ftp::FtpOps(shared.clone()),
         shared,
         events: Arc::new(tokio::sync::Mutex::new(rx)),
         watcher,
@@ -242,6 +245,9 @@ impl Provider for LinuxProvider {
     }
     fn pty(&self) -> &dyn Pty {
         &self.pty
+    }
+    fn ftp(&self) -> &dyn super::ftp::Ftp {
+        &self.ftp
     }
 
     async fn close(&self) {

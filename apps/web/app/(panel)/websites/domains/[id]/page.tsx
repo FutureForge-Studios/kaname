@@ -184,7 +184,7 @@ export default function DomainDetailPage({ params }: { params: Promise<{ id: str
               <MenuItem
                 icon={RefreshCw}
                 disabled={manual || !can("websites.dns:read", domain.server_id)}
-                onSelect={() => sync.mutate({ domainId: domain.id })}
+                onSelect={() => sync.mutate({ domainId: domain.id, domainName: domain.name })}
               >
                 {manual ? "Sync zone (needs an API provider)" : "Sync zone from provider"}
               </MenuItem>
@@ -298,7 +298,7 @@ export default function DomainDetailPage({ params }: { params: Promise<{ id: str
               domain={domain}
               onAdd={() => setAddingRecord(true)}
               onEdit={setEditingRecord}
-              onSync={() => sync.mutate({ domainId: domain.id })}
+              onSync={() => sync.mutate({ domainId: domain.id, domainName: domain.name })}
               syncing={sync.isPending}
             />
             <DomainCertificates domain={domain} onIssue={() => setIssuing(true)} />

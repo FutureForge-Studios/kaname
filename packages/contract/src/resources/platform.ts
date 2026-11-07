@@ -40,7 +40,8 @@ export const logQuery = z.object({
   since: isoDate.optional(),
   until: isoDate.optional(),
   limit: z.coerce.number().int().min(1).max(5000).default(500),
-  follow: z.coerce.boolean().default(false),
+  /** queryBoolean, not z.coerce.boolean(): `follow=false` used to start a live tail. */
+  follow: queryBoolean.default(false),
   /** Resumes a tail from the last record the viewer rendered. */
   cursor: z.string().max(256).optional(),
 });
@@ -65,6 +66,12 @@ export const terminalSessionRequest = z.object({
   rows: z.number().int().min(1).max(1000),
   /** POSIX user to run as. Defaults to root and is audited either way. */
   user: identifier.optional(),
+  /**
+   * A container on `server_id` to exec into instead of a host shell. It
+   * rides the same ticket, permission and recording as the host terminal
+   * (KD-013); `user` does not apply, since the image decides who it runs as.
+   */
+  container_id: uuid.optional(),
 });
 export type TerminalSessionRequest = z.infer<typeof terminalSessionRequest>;
 
@@ -76,6 +83,8 @@ export const terminalSessionTicket = z.object({
   server_id: uuid,
   server_name: z.string(),
   recorded: z.boolean(),
+  /** Set when the ticket opens `container.exec` rather than a host shell. */
+  container_name: z.string().nullable().default(null),
 });
 export type TerminalSessionTicket = z.infer<typeof terminalSessionTicket>;
 
@@ -92,6 +101,8 @@ export const terminalSessionRecord = z.object({
   bytes_out: bytes,
   command_count: z.number().int().nonnegative(),
   recording_available: z.boolean(),
+  /** The container a `container.exec` session ran in; null for a host shell. */
+  container_name: z.string().nullable().default(null),
 });
 export type TerminalSessionRecord = z.infer<typeof terminalSessionRecord>;
 
@@ -122,10 +133,32 @@ export const user = z.object({
   roles: z.array(roleRef),
   last_login_at: isoDate.nullable(),
   last_login_ip: ipAddress.nullable(),
+  /**
+   * Set while too many failed sign-ins keep the account out. Status
+   * stays `active` throughout, so without this the users page could not
+   * tell a locked account from a working one, or offer to unlock it.
+   */
+  locked_until: isoDate.nullable(),
   created_at: isoDate,
   updated_at: isoDate,
 });
 export type User = z.infer<typeof user>;
+
+/**
+ * What POST /users hands back once, beside the account. `email` is null
+ * when the inviter switched "Email the invitation" off; otherwise it says
+ * whether the message left, and if not, why — the invitation itself
+ * still stands, and the link is the fallback.
+ */
+export const userInvitation = z.object({
+  url: z.string().url(),
+  expires_at: isoDate,
+  email: z.object({ sent: z.boolean(), error: z.string().nullable() }).nullable(),
+});
+export type UserInvitation = z.infer<typeof userInvitation>;
+
+export const invitedUser = user.extend({ invite: userInvitation });
+export type InvitedUser = z.infer<typeof invitedUser>;
 
 /** Users are invited, never created with a password the inviter has seen. */
 export const createUserInput = z.object({
@@ -159,7 +192,7 @@ export type ChangePasswordInput = z.infer<typeof changePasswordInput>;
 export const userListQuery = listQuery.extend({
   status: userStatus.optional(),
   role: slug.optional(),
-  totp_enabled: z.coerce.boolean().optional(),
+  totp_enabled: queryBoolean.optional(),
 });
 export type UserListQuery = z.infer<typeof userListQuery>;
 
@@ -193,7 +226,7 @@ export const updateRoleInput = createRoleInput.omit({ slug: true }).partial();
 export type UpdateRoleInput = z.infer<typeof updateRoleInput>;
 
 export const roleListQuery = listQuery.extend({
-  is_system: z.coerce.boolean().optional(),
+  is_system: queryBoolean.optional(),
 });
 export type RoleListQuery = z.infer<typeof roleListQuery>;
 
@@ -248,7 +281,7 @@ export type ApiKeyCreated = z.infer<typeof apiKeyCreated>;
 
 export const apiKeyListQuery = listQuery.extend({
   created_by: uuid.optional(),
-  revoked: z.coerce.boolean().optional(),
+  revoked: queryBoolean.optional(),
 });
 export type ApiKeyListQuery = z.infer<typeof apiKeyListQuery>;
 
