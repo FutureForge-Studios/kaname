@@ -668,7 +668,11 @@ export interface PendingSetup {
 
 export interface FinishSetupPanelProps {
   pending: PendingSetup;
-  onDismiss: () => void;
+  /**
+   * Omitted where something around the panel owns moving on (the setup
+   * wizard), so the card does not offer a second way out.
+   */
+  onDismiss?: () => void;
 }
 
 /**
@@ -699,9 +703,11 @@ export function FinishSetupPanel({ pending, onDismiss }: FinishSetupPanelProps) 
             : "Yunori is being installed. This panel fills in when the job finishes."
       }
       actions={
-        <Button variant="ghost" size="xs" onClick={onDismiss}>
-          {succeeded && reveal.data ? "Done" : "Dismiss"}
-        </Button>
+        onDismiss && (
+          <Button variant="ghost" size="xs" onClick={onDismiss}>
+            {succeeded && reveal.data ? "Done" : "Dismiss"}
+          </Button>
+        )
       }
     >
       <div className="flex flex-col gap-3">

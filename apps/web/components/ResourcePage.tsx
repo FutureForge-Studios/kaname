@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { FilterX, RefreshCw } from "lucide-react";
+import { FilterX, RefreshCw, Server as ServerIcon } from "lucide-react";
 import {
   Button,
   DataTable,
@@ -180,6 +180,90 @@ function toPositiveInt(value: string | null, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/* ------------------------------------------------------------------ *
+ * First-run plumbing.
+ *
+ * An empty list on a fresh install is the page's best chance to say
+ * what it is for and what to do next. Two shared pieces make that one
+ * pattern rather than thirty: a prerequisite (what has to exist before
+ * this list can have rows, e.g. a paired server) and a URL that opens
+ * the page's create dialog, so the Getting Started checklist and an
+ * empty state elsewhere can link straight to the form.
+ * ------------------------------------------------------------------ */
+
+/** Shown instead of the empty state while something this list needs is missing. */
+export interface ResourcePrerequisite {
+  icon?: IconComponent;
+  title: string;
+  description: string;
+  action?: React.ReactNode;
+  secondaryAction?: React.ReactNode;
+}
+
+/** A primary or secondary button that navigates, for empty-state actions. */
+export function LinkButton({
+  href,
+  icon,
+  variant = "primary",
+  children,
+}: {
+  href: string;
+  icon?: IconComponent;
+  variant?: "primary" | "secondary" | "ghost";
+  children: React.ReactNode;
+}) {
+  const router = useRouter();
+  return (
+    <Button variant={variant} size="sm" icon={icon} onClick={() => router.push(href)}>
+      {children}
+    </Button>
+  );
+}
+
+/**
+ * Most lists live on a host. With none paired, the useful next step is
+ * pairing one — not a create button whose form has no server to offer.
+ * Returns null once any eligible server exists, or while loading.
+ */
+export function serverPrerequisite(
+  selection: { servers: readonly unknown[]; isLoading: boolean },
+  what: string,
+): ResourcePrerequisite | null {
+  if (selection.isLoading || selection.servers.length > 0) return null;
+  return {
+    icon: ServerIcon,
+    title: "Pair a server first",
+    description: `${what} on a managed host. Pairing installs an agent that dials out to Kaname; nothing listens inbound.`,
+    action: (
+      <LinkButton href="/infrastructure/servers?new=1" icon={ServerIcon}>
+        Add server
+      </LinkButton>
+    ),
+  };
+}
+
+/**
+ * Opens a dialog when the page is reached with `?<key>=1`, then drops
+ * the parameter so a reload or a copied link does not reopen it.
+ */
+export function useOpenFromQuery(key: string, open: () => void, enabled = true): void {
+  const router = useRouter();
+  const pathname = usePathname() ?? "/";
+  const searchParams = useSearchParams();
+  const requested = searchParams.get(key) === "1";
+  const openRef = React.useRef(open);
+  openRef.current = open;
+
+  React.useEffect(() => {
+    if (!requested || !enabled) return;
+    openRef.current();
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete(key);
+    const query = next.toString();
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [enabled, key, pathname, requested, router, searchParams]);
+}
+
 /* ------------------------------------------------------------------ */
 
 export interface ResourcePageProps<T> {
@@ -216,6 +300,10 @@ export interface ResourcePageProps<T> {
   emptyDescription?: string;
   /** Same button as `primaryAction`; an empty table is where it matters most. */
   emptyAction?: React.ReactNode;
+  /** A second way in, e.g. "Adopt one installed by hand". */
+  emptySecondaryAction?: React.ReactNode;
+  /** When set, replaces the unfiltered empty state: this list cannot have rows yet. */
+  prerequisite?: ResourcePrerequisite | null;
 
   /** Prefix for the error message, e.g. "Mailboxes". */
   errorContext?: string;
@@ -248,6 +336,8 @@ export function ResourcePage<T>({
   emptyTitle = "Nothing here yet",
   emptyDescription,
   emptyAction,
+  emptySecondaryAction,
+  prerequisite,
   errorContext,
   children,
   className,
@@ -343,31 +433,44 @@ export function ResourcePage<T>({
             ) : undefined
           }
           empty={
-            <EmptyState
-              icon={emptyIcon}
-              title={filtered ? "No matches" : emptyTitle}
-              description={
-                filtered
-                  ? "Nothing in this list matches the current search and filters."
-                  : emptyDescription
-              }
-              action={filtered ? undefined : emptyAction}
-              secondaryAction={
-                filtered ? (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => {
-                      state.setSearch("");
-                      state.clearFilters();
-                    }}
-                  >
-                    Clear search and filters
-                  </Button>
-                ) : undefined
-              }
-              size="md"
-            />
+            !filtered && prerequisite ? (
+              <EmptyState
+                icon={prerequisite.icon ?? emptyIcon}
+                title={prerequisite.title}
+                description={prerequisite.description}
+                action={prerequisite.action}
+                secondaryAction={prerequisite.secondaryAction}
+                size="md"
+              />
+            ) : (
+              <EmptyState
+                icon={emptyIcon}
+                title={filtered ? "No matches" : emptyTitle}
+                description={
+                  filtered
+                    ? "Nothing in this list matches the current search and filters."
+                    : emptyDescription
+                }
+                action={filtered ? undefined : emptyAction}
+                secondaryAction={
+                  filtered ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        state.setSearch("");
+                        state.clearFilters();
+                      }}
+                    >
+                      Clear search and filters
+                    </Button>
+                  ) : (
+                    emptySecondaryAction
+                  )
+                }
+                size="md"
+              />
+            )
           }
           className="min-h-0 flex-1"
         />

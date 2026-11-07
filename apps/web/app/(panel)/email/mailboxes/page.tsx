@@ -14,7 +14,7 @@ import {
   type DataTableColumn,
   type DataTableRowAction,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { formatCount } from "@/lib/format";
 import { useCan } from "@/lib/queries";
 import { Blank, HostCell } from "../../_components/cells";
@@ -22,6 +22,7 @@ import { FormDialog, fieldErrors } from "../../_components/FormDialog";
 import { JobActivityBar } from "../../_components/JobActivity";
 import { FilterSelect } from "../../websites/_components/filters";
 import { CredentialDialog, type Credential } from "../_components/CredentialDialog";
+import { useMailPrerequisite } from "../_components/prerequisites";
 import {
   useCreateMailbox,
   useDeleteMailbox,
@@ -62,6 +63,8 @@ export default function MailboxesPage() {
   const remove = useDeleteMailbox();
 
   const [creating, setCreating] = React.useState(false);
+  useOpenFromQuery("new", () => setCreating(true), can("email.mailboxes:write"));
+  const prerequisite = useMailPrerequisite("domain");
   const [credential, setCredential] = React.useState<Credential | null>(null);
   const [resetting, setResetting] = React.useState<Mailbox | null>(null);
   const [deleting, setDeleting] = React.useState<Mailbox | null>(null);
@@ -212,6 +215,7 @@ export default function MailboxesPage() {
         emptyTitle="No mailboxes yet"
         emptyDescription="A mailbox is an account people sign in to. Its password is generated on the host and shown once."
         emptyAction={createButton}
+        prerequisite={prerequisite}
         rowActions={rowActions}
         filters={
           <FilterSelect

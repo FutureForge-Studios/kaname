@@ -12,24 +12,75 @@ import { setAddressInput, smtpSettingsInput } from "./platform.js";
  * install, which is the worst possible moment to be wrong about it.
  * ------------------------------------------------------------------ */
 
-export const setupStep = z.enum(["welcome", "owner", "instance", "server", "preferences", "done"]);
-export type SetupStep = z.infer<typeof setupStep>;
-
-export const SETUP_STEPS: readonly SetupStep[] = [
+export const setupStep = z.enum([
   "welcome",
   "owner",
   "instance",
   "server",
-  "preferences",
+  "address",
+  "website",
+  "email",
+  "backups",
+  "notifications",
+  "team",
   "done",
-];
+]);
+export type SetupStep = z.infer<typeof setupStep>;
+
+export const SETUP_STEPS: readonly SetupStep[] = setupStep.options;
+
+/*
+ * After the server is paired, the wizard walks the core of the panel in
+ * the order an operator tends to need it: reach the panel safely, put
+ * something on the server, give it mail, protect it, hear when it
+ * breaks, and only then bring other people in. Every one of these is
+ * optional and each records an outcome, so skipping is an answer too
+ * and a reload resumes on the first step without one.
+ */
+export const optionalSetupStep = z.enum([
+  "address",
+  "website",
+  "email",
+  "backups",
+  "notifications",
+  "team",
+]);
+export type OptionalSetupStep = z.infer<typeof optionalSetupStep>;
+export const OPTIONAL_SETUP_STEPS: readonly OptionalSetupStep[] = optionalSetupStep.options;
+
+export function isOptionalSetupStep(step: SetupStep): step is OptionalSetupStep {
+  return (OPTIONAL_SETUP_STEPS as readonly string[]).includes(step);
+}
+
+export const setupStepOutcome = z.enum(["done", "skipped"]);
+export type SetupStepOutcome = z.infer<typeof setupStepOutcome>;
 
 export const SETUP_STEP_LABELS: Record<SetupStep, string> = {
   welcome: "Check the install",
   owner: "Create your account",
   instance: "Name this instance",
   server: "Confirm your first server",
-  preferences: "Preferences",
+  address: "Panel address",
+  website: "First website",
+  email: "Email",
+  backups: "Backups",
+  notifications: "Notifications",
+  team: "Invite a teammate",
+  done: "Done",
+};
+
+/** Shorter forms for the step indicator, where eleven labels share one line. */
+export const SETUP_STEP_SHORT_LABELS: Record<SetupStep, string> = {
+  welcome: "Install",
+  owner: "Account",
+  instance: "Name",
+  server: "Server",
+  address: "Address",
+  website: "Website",
+  email: "Email",
+  backups: "Backups",
+  notifications: "Alerts",
+  team: "Team",
   done: "Done",
 };
 
@@ -82,8 +133,22 @@ export const setupState = z.object({
    * a restart of the control plane mints a fresh one.
    */
   token_live: z.boolean(),
-  /** A domain chosen on the preferences step, applied by the last one. */
+  /** A domain chosen on the address step, applied by the last one. */
   pending_domain: z.string().nullable(),
+  /** What each optional step was answered with; null while it is unanswered. */
+  outcomes: z.object({
+    address: setupStepOutcome.nullable(),
+    website: setupStepOutcome.nullable(),
+    email: setupStepOutcome.nullable(),
+    backups: setupStepOutcome.nullable(),
+    notifications: setupStepOutcome.nullable(),
+    team: setupStepOutcome.nullable(),
+  }),
+  /**
+   * A Yunori deploy started from the email step, so a reload can pick
+   * its progress back up instead of offering to deploy a second time.
+   */
+  email_deploy: z.object({ job_id: uuid, server_id: uuid }).nullable(),
 });
 export type SetupState = z.infer<typeof setupState>;
 
@@ -130,6 +195,30 @@ export const setupPreferencesInput = z.object({
   panel_domain: setAddressInput.shape.domain.optional(),
 });
 export type SetupPreferencesInput = z.infer<typeof setupPreferencesInput>;
+
+/** Panel address and HTTPS: validated now, the domain applied by the last step. */
+export const setupAddressInput = z.object({
+  panel_domain: setAddressInput.shape.domain.optional(),
+  acme_email: emailAddress.optional(),
+});
+export type SetupAddressInput = z.infer<typeof setupAddressInput>;
+
+/**
+ * Records the outcome of an optional step whose work was done through
+ * the module's own route (a site, a mail server, a backup schedule, an
+ * invitation). "done" is checked against what exists, not taken on trust.
+ */
+export const setupStepInput = z.object({
+  outcome: setupStepOutcome,
+});
+export type SetupStepInput = z.infer<typeof setupStepInput>;
+
+/** The deploy job POST /mail-servers queued from the email step. */
+export const setupEmailDeployInput = z.object({
+  job_id: uuid,
+  server_id: uuid,
+});
+export type SetupEmailDeployInput = z.infer<typeof setupEmailDeployInput>;
 
 /**
  * What a password must not contain, derived once for both tiers so the

@@ -429,6 +429,24 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
   const mayWrite = can(meta.write, serverId);
   const mayDelete = can(meta.delete, serverId);
 
+  useOpenFromQuery("new", () => setCreateDatabaseOpen(true), mayWrite && Boolean(instance));
+
+  /* The list is empty for a different reason on a fresh install: no host
+   * yet, or a host with no engine on it. Say which, once, in the table. */
+  const prerequisite: ResourcePrerequisite | null =
+    serverPrerequisite(selection, `${meta.title} databases are created`) ??
+    (!instances.isLoading && !instances.isError && !instance
+      ? {
+          icon: DatabaseIcon,
+          title: selection.server
+            ? `No ${meta.title} instance on ${selection.server.name}`
+            : `No ${meta.title} instance`,
+          description: selection.server
+            ? `The agent reports no ${meta.engines.join(" or ")} listening on this host. Install the engine there, then re-sync the server so it re-advertises its capabilities.`
+            : "Pick a server that runs this engine.",
+        }
+      : null);
+
   const newDatabase = (
     <Button
       variant="primary"
@@ -757,21 +775,6 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
 
       {instances.isLoading && <InstanceSkeleton />}
 
-      {!instances.isLoading && !instances.isError && !instance && (
-        <SectionCard>
-          <EmptyState
-            icon={DatabaseIcon}
-            title={`No ${meta.title} instance on this server`}
-            description={
-              selection.server
-                ? `The agent on ${selection.server.name} reports no ${meta.engines.join(" or ")} listening. Install the engine on the host, then re-sync the server so it re-advertises its capabilities.`
-                : "Pick a server that runs this engine."
-            }
-            size="sm"
-          />
-        </SectionCard>
-      )}
-
       {instance && (
         <InstanceHeader
           instance={instance}
@@ -847,6 +850,7 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
           emptyTitle="No databases on this instance"
           emptyDescription="A database is created with its own user and password, never on a shared superuser connection."
           emptyAction={newDatabase}
+          prerequisite={prerequisite}
           errorContext="Databases"
         />
       ) : (
@@ -897,6 +901,7 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
           emptyTitle="No users on this instance"
           emptyDescription="Every database should have a dedicated user, granted only the databases it needs."
           emptyAction={newUser}
+          prerequisite={prerequisite}
           errorContext="Database users"
         />
       )}

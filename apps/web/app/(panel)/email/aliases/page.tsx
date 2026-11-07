@@ -15,7 +15,7 @@ import {
   type DataTableColumn,
   type DataTableRowAction,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { useCan } from "@/lib/queries";
 import { HostCell } from "../../_components/cells";
 import { FormDialog, fieldErrors } from "../../_components/FormDialog";
@@ -27,6 +27,7 @@ import {
   useMailDomains,
   useMailboxes,
 } from "../_components/queries";
+import { useMailPrerequisite } from "../_components/prerequisites";
 import { DomainPicker, MailServerPicker, RowStatusBadge } from "../_components/status";
 
 /* ------------------------------------------------------------------ *
@@ -52,6 +53,8 @@ export default function AliasesPage() {
   const remove = useDeleteMailAlias();
 
   const [creating, setCreating] = React.useState(false);
+  useOpenFromQuery("new", () => setCreating(true), can("email.routing:write"));
+  const prerequisite = useMailPrerequisite("mailbox");
   const [deleting, setDeleting] = React.useState<MailAlias | null>(null);
 
   const columns = React.useMemo<DataTableColumn<MailAlias>[]>(
@@ -158,6 +161,7 @@ export default function AliasesPage() {
         emptyTitle="No aliases yet"
         emptyDescription="An alias is a second address for a mailbox on the same domain: sales@ delivering to alice@."
         emptyAction={createButton}
+        prerequisite={prerequisite}
         rowActions={rowActions}
       >
         <div className="flex flex-wrap items-center gap-3">

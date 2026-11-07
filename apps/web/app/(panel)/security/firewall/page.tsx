@@ -42,7 +42,12 @@ import {
   type DataTableRowAction,
   type Tone,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import {
+  ResourcePage,
+  serverPrerequisite,
+  useOpenFromQuery,
+  useResourceListState,
+} from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { PageError } from "@/components/PageError";
 import {
@@ -148,6 +153,8 @@ export default function FirewallPage() {
 
   const [editing, setEditing] = React.useState<FirewallRule | null>(null);
   const [creating, setCreating] = React.useState(false);
+  useOpenFromQuery("new", () => setCreating(true), can("security.firewall:write"));
+  const noServer = serverPrerequisite(selection, "Firewall rules are applied");
   const [deleting, setDeleting] = React.useState<FirewallRule[] | null>(null);
   const [applyOpen, setApplyOpen] = React.useState(false);
   const [lockout, setLockout] = React.useState<LockoutAssessment | null>(null);
@@ -575,6 +582,7 @@ export default function FirewallPage() {
         emptyTitle="No rules staged"
         emptyDescription="With no rules, the chain default policy decides everything. Add the rules you need, then apply them to the host."
         emptyAction={newRule}
+        prerequisite={noServer}
         errorContext="Firewall rules"
       >
         {/* Above the host picker on purpose: while the window is open it

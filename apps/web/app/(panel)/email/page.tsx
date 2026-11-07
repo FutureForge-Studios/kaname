@@ -35,8 +35,9 @@ import {
   cn,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
+import { serverPrerequisite, useOpenFromQuery } from "@/components/ResourcePage";
 import { formatCount, pluralize } from "@/lib/format";
-import { useCan } from "@/lib/queries";
+import { useCan, useServers } from "@/lib/queries";
 import { HostCell } from "../_components/cells";
 import { JobActivityBar } from "../_components/JobActivity";
 import {
@@ -104,6 +105,18 @@ export default function MailServersPage() {
 
   const forget = useForgetMailServer();
   const servers = query.data?.data ?? [];
+  const canWrite = can("email.servers:write");
+
+  // Deep links from Getting Started and the other Email pages.
+  useOpenFromQuery("deploy", () => setDeploying(true), canWrite);
+  useOpenFromQuery("adopt", () => setAdopting(true), canWrite);
+
+  // Yunori runs on a managed host; with none paired there is nothing to deploy to.
+  const fleet = useServers();
+  const noHost = serverPrerequisite(
+    { servers: fleet.data?.data ?? [], isLoading: fleet.isLoading },
+    "Yunori Mail Server is installed",
+  );
 
   const deployButton = (
     <Button
@@ -181,27 +194,36 @@ export default function MailServersPage() {
           </div>
         ) : servers.length === 0 ? (
           <SectionCard>
-            <EmptyState
-              icon={MailCheck}
-              title={health ? "No mail server matches" : "No mail server yet"}
-              description={
-                health
-                  ? "No host's last check came out that way."
-                  : "Kaname installs Yunori Mail Server on a host you own: Stalwart for mail, with DNS and certificates checked for you."
-              }
-              action={health ? undefined : deployButton}
-              secondaryAction={
-                health ? (
-                  <Button variant="secondary" size="sm" onClick={() => setHealth("")}>
-                    Clear filter
-                  </Button>
-                ) : (
-                  <Button variant="secondary" size="sm" onClick={() => setAdopting(true)}>
-                    Adopt one installed by hand
-                  </Button>
-                )
-              }
-            />
+            {!health && noHost ? (
+              <EmptyState
+                icon={noHost.icon}
+                title={noHost.title}
+                description={noHost.description}
+                action={noHost.action}
+              />
+            ) : (
+              <EmptyState
+                icon={MailCheck}
+                title={health ? "No mail server matches" : "No mail server yet"}
+                description={
+                  health
+                    ? "No host's last check came out that way."
+                    : "Kaname installs Yunori Mail Server on a host you own: Stalwart for mail, with DNS and certificates checked for you. Domains, mailboxes and aliases all live on one."
+                }
+                action={health || !canWrite ? undefined : deployButton}
+                secondaryAction={
+                  health ? (
+                    <Button variant="secondary" size="sm" onClick={() => setHealth("")}>
+                      Clear filter
+                    </Button>
+                  ) : canWrite ? (
+                    <Button variant="secondary" size="sm" onClick={() => setAdopting(true)}>
+                      Adopt one installed by hand
+                    </Button>
+                  ) : undefined
+                }
+              />
+            )}
           </SectionCard>
         ) : (
           <ul className="flex flex-col gap-4">

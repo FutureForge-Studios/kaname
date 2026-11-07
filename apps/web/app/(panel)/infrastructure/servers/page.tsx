@@ -16,7 +16,7 @@ import {
   cn,
   type DataTableColumn,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { useCan, useList } from "@/lib/queries";
 import { formatCount, formatPercent, formatUptime, humanize, percentOf } from "@/lib/format";
 import { AddServerDialog } from "../_components/AddServerDialog";
@@ -95,6 +95,7 @@ export default function ServersPage() {
   const router = useRouter();
   const can = useCan();
   const [adding, setAdding] = React.useState(false);
+  useOpenFromQuery("new", () => setAdding(true), can("infra.servers:write"));
 
   const state = useResourceListState({
     defaultSort: { id: "name", order: "asc" },

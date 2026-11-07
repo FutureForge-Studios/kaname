@@ -7,6 +7,7 @@ import {
   Archive,
   BadgeCheck,
   CircleSlash,
+  HardDrive,
   HardDriveDownload,
   History,
   Pencil,
@@ -52,7 +53,14 @@ import {
   describeRetention,
   describeScope,
 } from "@/components/BackupForms";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import {
+  LinkButton,
+  ResourcePage,
+  serverPrerequisite,
+  useOpenFromQuery,
+  useResourceListState,
+  type ResourcePrerequisite,
+} from "@/components/ResourcePage";
 import { describeCron } from "@/lib/cron";
 import { formatCount } from "@/lib/format";
 import { api } from "@/lib/api";
@@ -154,6 +162,28 @@ function SchedulesTab({ tabs }: { tabs: React.ReactNode }) {
 
   const [creating, setCreating] = React.useState(false);
   const [editing, setEditing] = React.useState<BackupSchedule | null>(null);
+  useOpenFromQuery("new", () => setCreating(true), can("backups.schedules:write"));
+
+  /* A schedule needs a host to read from and a destination to write to;
+   * point at whichever is missing before offering the schedule form. */
+  const prerequisite: ResourcePrerequisite | null =
+    serverPrerequisite(
+      { servers: servers.data?.data ?? [], isLoading: servers.isLoading },
+      "A backup reads from",
+    ) ??
+    (!destinations.isLoading && !destinations.isError && (destinations.data?.data.length ?? 0) === 0
+      ? {
+          icon: HardDrive,
+          title: "Add a destination first",
+          description:
+            "A schedule writes encrypted snapshots to a destination: an object store, an SFTP host or a directory on a managed server. Add one, then schedule what to protect.",
+          action: can("backups.schedules:write") ? (
+            <LinkButton href="/backups?tab=destinations&new=1" icon={Plus}>
+              Add destination
+            </LinkButton>
+          ) : undefined,
+        }
+      : null);
   const [deleting, setDeleting] = React.useState<BackupSchedule | null>(null);
 
   const runNow = useMutationWithJob<string[]>({
@@ -328,6 +358,7 @@ function SchedulesTab({ tabs }: { tabs: React.ReactNode }) {
         emptyIcon={Archive}
         emptyTitle="No backup schedules"
         emptyDescription="A schedule names what to protect on one host, how often, and where the snapshots go."
+        prerequisite={prerequisite}
         primaryAction={
           can("backups.schedules:write") && (
             <Button variant="primary" size="sm" icon={Plus} onClick={() => setCreating(true)}>
@@ -479,6 +510,7 @@ function DestinationsTab({ tabs }: { tabs: React.ReactNode }) {
 
   const [creating, setCreating] = React.useState(false);
   const [editing, setEditing] = React.useState<BackupDestination | null>(null);
+  useOpenFromQuery("new", () => setCreating(true), can("backups.schedules:write"));
   const [deleting, setDeleting] = React.useState<BackupDestination | null>(null);
 
   const test = useResourceMutation<string[], unknown>({

@@ -22,7 +22,12 @@ import {
   type DataTableColumn,
   type DataTableRowAction,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import {
+  ResourcePage,
+  serverPrerequisite,
+  useOpenFromQuery,
+  useResourceListState,
+} from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { PageError } from "@/components/PageError";
 import { formatCount } from "@/lib/format";
@@ -101,6 +106,8 @@ export default function SslPage() {
   const autoRenew = useSetAutoRenew();
 
   const [issuing, setIssuing] = React.useState(false);
+  useOpenFromQuery("new", () => setIssuing(true), can("websites.ssl:write"));
+  const noServer = serverPrerequisite(selection, "A certificate is ordered and installed");
   const [pendingRevoke, setPendingRevoke] = React.useState<Certificate | null>(null);
   const [watchedJobId, setWatchedJobId] = React.useState<string | null>(null);
 
@@ -292,6 +299,7 @@ export default function SslPage() {
         emptyTitle="No certificates yet"
         emptyDescription="Kaname runs the ACME order on the host and installs the result. Issue one to serve a domain over HTTPS."
         emptyAction={issueCertificate}
+        prerequisite={noServer}
         selectable
         isRowSelectable={(certificate) => certificate.status !== "revoked"}
         onRowClick={(certificate) => router.push(`/websites/ssl/${certificate.id}`)}

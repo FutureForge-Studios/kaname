@@ -16,7 +16,7 @@ import {
   type DataTableColumn,
   type DataTableRowAction,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { formatCount } from "@/lib/format";
 import { useCan, useList } from "@/lib/queries";
 import { HostCell } from "../../_components/cells";
@@ -24,6 +24,7 @@ import { FormDialog, fieldErrors } from "../../_components/FormDialog";
 import { JobActivityBar } from "../../_components/JobActivity";
 import { FilterSelect } from "../../websites/_components/filters";
 import { DnsDrawer } from "../_components/DnsDrawer";
+import { useMailPrerequisite } from "../_components/prerequisites";
 import {
   useAddMailDomain,
   useCheckMailDns,
@@ -75,6 +76,11 @@ export default function MailDomainsPage() {
   const [adding, setAdding] = React.useState(false);
   const [dnsFor, setDnsFor] = React.useState<MailDomain | null>(null);
   const [removing, setRemoving] = React.useState<MailDomain | null>(null);
+
+  useOpenFromQuery("new", () => setAdding(true), can("email.mailboxes:write"));
+
+  // A mail domain is created on a mail server; with none, point at deploying one.
+  const prerequisite = useMailPrerequisite("server");
 
   /* The filter accepts either the mail server id or its host id, because
    * the server card links here with the former and the fleet with the latter. */
@@ -224,6 +230,7 @@ export default function MailDomainsPage() {
         emptyTitle="No domain hosts mail yet"
         emptyDescription="Add a Kaname domain to a mail server and Yunori tells you the DNS records to publish."
         emptyAction={addButton}
+        prerequisite={prerequisite}
         onRowClick={(domain) => setDnsFor(domain)}
         rowActions={rowActions}
         filters={

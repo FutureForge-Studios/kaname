@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import pino from "pino";
 import { createDb, type DbHandle } from "@kaname/db";
-import { users } from "@kaname/db/schema";
+import { jobs, servers, users } from "@kaname/db/schema";
 import { migrateHandle } from "@kaname/db/migrate";
 import type { PairingInstructions, SetupState } from "@kaname/contract";
 import { loadConfig, resetConfigForTests } from "./config.js";
@@ -312,33 +312,145 @@ describe("first-run setup", () => {
     expect(res.statusCode).toBe(412);
   });
 
-  it("walks the rest of the flow and closes the door behind it", async () => {
+  it("lands on the first optional step once the server is confirmed", async () => {
     await post("/api/v1/setup/server", { name: "edge-01" });
-    expect((await post("/api/v1/setup/server/confirm")).statusCode).toBe(200);
+    const confirmed = await post("/api/v1/setup/server/confirm");
+    expect(confirmed.statusCode, confirmed.body).toBe(200);
 
-    const typo = await post("/api/v1/setup/preferences", {
-      update_tier: "notify",
-      notification: { kind: "none" },
-      panel_domain: "not a domain",
+    const state = body<SetupState>(confirmed);
+    expect(state.step).toBe("address");
+    expect(state.outcomes).toEqual({
+      address: null,
+      website: null,
+      email: null,
+      backups: null,
+      notifications: null,
+      team: null,
     });
+    expect(state.email_deploy).toBeNull();
+  });
+
+  it("validates the panel domain on the address step and holds it for the end", async () => {
+    const typo = await post("/api/v1/setup/address", { panel_domain: "not a domain" });
     // Refused now, on the field, rather than after the restart it costs.
     expect(typo.statusCode).toBe(422);
     expect(JSON.parse(typo.body).error.fields.panel_domain).toBeTruthy();
+
+    const saved = await post("/api/v1/setup/address", {
+      panel_domain: "Panel.Example.COM",
+      acme_email: "ops@example.com",
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    const state = body<SetupState>(saved);
+    expect(state.step).toBe("website");
+    expect(state.outcomes.address).toBe("done");
+    // Held server-side until the last screen applies it, so a reload in
+    // between does not quietly drop the domain the operator typed.
+    expect(state.pending_domain).toBe("panel.example.com");
+  });
+
+  it("will not mark an optional step done when nothing was set up", async () => {
+    const website = await post("/api/v1/setup/steps/website", { outcome: "done" });
+    expect(website.statusCode).toBe(412);
+
+    // The two steps with forms of their own are saved through them.
+    const address = await post("/api/v1/setup/steps/notifications", { outcome: "done" });
+    expect(address.statusCode).toBe(400);
+
+    const unknown = await post("/api/v1/setup/steps/owner", { outcome: "skipped" });
+    expect([400, 422]).toContain(unknown.statusCode);
+
+    const state = body<SetupState>(await get("/api/v1/setup/state"));
+    expect(state.step).toBe("website");
+  });
+
+  it("skips the website step and resumes on email", async () => {
+    const res = await post("/api/v1/setup/steps/website", { outcome: "skipped" });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(body<SetupState>(res).step).toBe("email");
+
+    // A reload asks the server, and the server remembers.
+    const state = body<SetupState>(await get("/api/v1/setup/state"));
+    expect(state.step).toBe("email");
+    expect(state.outcomes.website).toBe("skipped");
+  });
+
+  it("remembers a mail deploy started from the email step, and only a real one", async () => {
+    const [server] = await ctx.db.select({ id: servers.id }).from(servers).limit(1);
+    expect(server).toBeTruthy();
+
+    const bogus = await post("/api/v1/setup/email/deploy", {
+      job_id: "00000000-0000-4000-8000-000000000000",
+      server_id: server!.id,
+    });
+    expect(bogus.statusCode).toBe(404);
+
+    // Not a deploy: the right server, the wrong kind of job.
+    const [other] = await ctx.db
+      .insert(jobs)
+      .values({ type: "system.sync", serverId: server!.id })
+      .returning({ id: jobs.id });
+    const wrongType = await post("/api/v1/setup/email/deploy", {
+      job_id: other!.id,
+      server_id: server!.id,
+    });
+    expect(wrongType.statusCode).toBe(404);
+
+    const [deploy] = await ctx.db
+      .insert(jobs)
+      .values({ type: "mail.server.deploy", serverId: server!.id })
+      .returning({ id: jobs.id });
+    const tracked = await post("/api/v1/setup/email/deploy", {
+      job_id: deploy!.id,
+      server_id: server!.id,
+    });
+    expect(tracked.statusCode, tracked.body).toBe(200);
+    const state = body<SetupState>(tracked);
+    // Tracking is not answering: the step stays until the operator moves on.
+    expect(state.step).toBe("email");
+    expect(state.email_deploy).toEqual({ job_id: deploy!.id, server_id: server!.id });
+  });
+
+  it("walks the rest of the flow and closes the door behind it", async () => {
+    // No mail server row exists, so "done" would be a claim without evidence.
+    expect((await post("/api/v1/setup/steps/email", { outcome: "done" })).statusCode).toBe(412);
+    const email = await post("/api/v1/setup/steps/email", { outcome: "skipped" });
+    expect(body<SetupState>(email).step).toBe("backups");
+
+    const backups = await post("/api/v1/setup/steps/backups", { outcome: "skipped" });
+    expect(body<SetupState>(backups).step).toBe("notifications");
 
     const prefs = await post("/api/v1/setup/preferences", {
       update_tier: "notify",
       update_interval: "daily",
       notification: { kind: "none" },
-      panel_domain: "Panel.Example.COM",
     });
     expect(prefs.statusCode, prefs.body).toBe(200);
-    expect(body<SetupState>(prefs).step).toBe("done");
-    // Held server-side until the last screen applies it, so a reload in
-    // between does not quietly drop the domain the operator typed.
+    expect(body<SetupState>(prefs).step).toBe("team");
+    // The notifications step must not clear what the address step saved.
     expect(body<SetupState>(prefs).pending_domain).toBe("panel.example.com");
-    expect(body<SetupState>(await get("/api/v1/setup/state")).pending_domain).toBe(
-      "panel.example.com",
-    );
+
+    expect((await post("/api/v1/setup/steps/team", { outcome: "done" })).statusCode).toBe(412);
+    const roles = JSON.parse((await get("/api/v1/roles")).body).data as { id: string; slug: string }[];
+    const role = roles.find((r) => r.slug !== "owner") ?? roles[0]!;
+    const invited = await post("/api/v1/users", {
+      email: "grace@example.com",
+      name: "Grace",
+      role_ids: [role.id],
+      send_invite: false,
+    });
+    expect(invited.statusCode, invited.body).toBe(201);
+    const team = await post("/api/v1/setup/steps/team", { outcome: "done" });
+    expect(team.statusCode, team.body).toBe(200);
+    expect(body<SetupState>(team).step).toBe("done");
+    expect(body<SetupState>(team).outcomes).toEqual({
+      address: "done",
+      website: "skipped",
+      email: "skipped",
+      backups: "skipped",
+      notifications: "done",
+      team: "done",
+    });
 
     const done = await post("/api/v1/setup/complete");
     expect(done.statusCode, done.body).toBe(200);
@@ -352,9 +464,16 @@ describe("first-run setup", () => {
       "/api/v1/setup/instance",
       "/api/v1/setup/server",
       "/api/v1/setup/preferences",
+      "/api/v1/setup/address",
+      "/api/v1/setup/steps/team",
+      "/api/v1/setup/email/deploy",
       "/api/v1/setup/complete",
     ]) {
-      const res = await post(url, { instance_name: "Renamed", name: "another" });
+      const res = await post(url, {
+        instance_name: "Renamed",
+        name: "another",
+        outcome: "skipped",
+      });
       expect(res.statusCode, `${url} answered ${res.statusCode}`).toBe(409);
     }
   });

@@ -1,29 +1,40 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "@kaname/db";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "@kaname/db";
 import {
+  alertRules,
   alerts,
   auditEvents,
+  backupDestinations,
   backupRuns,
   backupSchedules,
   certificates,
+  dbDatabases,
   domains,
+  firewallState,
   jobs,
+  mailboxes,
   mailDomains,
   mailServers,
+  notificationChannels,
   restorePoints,
   servers,
   services,
+  sites,
+  sshKeys,
   threatEvents,
+  users,
 } from "@kaname/db/schema";
 import {
   CERT_EXPIRY_SOON_DAYS,
   certificateUrgency,
   type AuditEvent,
   type CommandCenterSummary,
+  type OnboardingStep,
   type Permission,
 } from "@kaname/contract";
 import { helpers, item } from "../http/plugin.js";
 import { combine, scopeFilter, visibleServerIds } from "./_shared.js";
+import { domainScope } from "./domains.js";
 import { latestSamples, rollup } from "./monitoring.js";
 
 /* ------------------------------------------------------------------ *
@@ -531,10 +542,257 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       certificates_expiring: certificatesExpiring,
       backups,
       threats_24h: threats,
+      onboarding: await onboardingSteps(req, fleetRows),
     };
 
     return item(reply, summary);
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Getting Started.
+ *
+ * Every step is answered from a row the control plane already holds:
+ * nothing here is a flag the browser set, so the checklist can only
+ * claim progress the fleet actually has. A step the caller may not read
+ * is omitted — absent, not "undone" — so a scoped Developer is never
+ * told to finish something they cannot see.
+ * ------------------------------------------------------------------ */
+
+type ServerRowLite = Pick<typeof servers.$inferSelect, "enrolledAt" | "connection">;
+
+export async function onboardingSteps(
+  req: FastifyRequest,
+  fleetRows: readonly ServerRowLite[],
+): Promise<OnboardingStep[]> {
+  const db = req.ctx.db;
+  const steps: OnboardingStep[] = [];
+  const principal = helpers(req).requirePrincipal();
+
+  /** One-row existence probe; never a count over a large table. */
+  const exists = async (query: Promise<unknown[]>): Promise<boolean> => (await query).length > 0;
+
+  // Infrastructure. The fleet rows are already scoped to infra.servers:read.
+  const enrolled = fleetRows.filter((s) => s.enrolledAt && s.connection !== "revoked");
+  steps.push({ id: "server_paired", done: enrolled.length > 0 });
+  steps.push({
+    id: "agents_connected",
+    done: enrolled.length > 0 && enrolled.every((s) => s.connection === "connected"),
+  });
+
+  // Websites.
+  if (holds(req, "websites.domains:read")) {
+    steps.push({
+      id: "domain_added",
+      done: await exists(
+        db
+          .select({ id: domains.id })
+          .from(domains)
+          .where(combine(domainScope(req, "websites.domains:read")))
+          .limit(1),
+      ),
+    });
+  }
+  if (holds(req, "websites.sites:read")) {
+    steps.push({
+      id: "site_created",
+      done: await exists(
+        db
+          .select({ id: sites.id })
+          .from(sites)
+          .where(combine(scopeFilter(req, "websites.sites:read", sites.serverId)))
+          .limit(1),
+      ),
+    });
+  }
+  if (holds(req, "websites.ssl:read")) {
+    steps.push({
+      id: "certificate_issued",
+      done: await exists(
+        db
+          .select({ id: certificates.id })
+          .from(certificates)
+          .where(
+            combine(
+              inArray(certificates.status, ["active", "expiring"]),
+              scopeFilter(req, "websites.ssl:read", certificates.serverId),
+            ),
+          )
+          .limit(1),
+      ),
+    });
+  }
+
+  // Email: a Yunori Mail Server that finished installing, then a mailbox on it.
+  if (holds(req, "email.servers:read")) {
+    steps.push({
+      id: "mail_server_installed",
+      done: await exists(
+        db
+          .select({ id: mailServers.id })
+          .from(mailServers)
+          .where(
+            combine(
+              eq(mailServers.status, "installed"),
+              scopeFilter(req, "email.servers:read", mailServers.serverId),
+            ),
+          )
+          .limit(1),
+      ),
+    });
+  }
+  if (holds(req, "email.mailboxes:read")) {
+    steps.push({
+      id: "mailbox_created",
+      done: await exists(
+        db
+          .select({ id: mailboxes.id })
+          .from(mailboxes)
+          .where(combine(scopeFilter(req, "email.mailboxes:read", mailboxes.serverId)))
+          .limit(1),
+      ),
+    });
+  }
+
+  // Databases: either engine family counts (MariaDB sits under MySQL).
+  const engineScopes = (
+    [
+      ["databases.mysql:read", ["mysql", "mariadb"]],
+      ["databases.postgres:read", ["postgres"]],
+    ] as const
+  )
+    .filter(([permission]) => holds(req, permission))
+    .map(([permission, engines]) =>
+      combine(
+        inArray(dbDatabases.engine, [...engines]),
+        scopeFilter(req, permission, dbDatabases.serverId),
+      ),
+    );
+  if (engineScopes.length > 0) {
+    steps.push({
+      id: "database_created",
+      done: await exists(
+        db
+          .select({ id: dbDatabases.id })
+          .from(dbDatabases)
+          .where(or(...engineScopes))
+          .limit(1),
+      ),
+    });
+  }
+
+  // Security: a rule set actually applied to a host, and a key Kaname writes.
+  if (holds(req, "security.firewall:read")) {
+    steps.push({
+      id: "firewall_applied",
+      done: await exists(
+        db
+          .select({ id: firewallState.serverId })
+          .from(firewallState)
+          .where(
+            combine(
+              eq(firewallState.enabled, true),
+              isNotNull(firewallState.lastAppliedAt),
+              scopeFilter(req, "security.firewall:read", firewallState.serverId),
+            ),
+          )
+          .limit(1),
+      ),
+    });
+  }
+  if (holds(req, "security.ssh:read")) {
+    const scope = visibleServerIds(req, "security.ssh:read");
+    steps.push({
+      id: "ssh_key_added",
+      done: await exists(
+        db
+          .select({ id: sshKeys.id })
+          .from(sshKeys)
+          .where(
+            scope === "global"
+              ? undefined
+              : scope.length === 0
+                ? sql`false`
+                : // A key is visible where it is trusted on a host the caller can see.
+                  sql`${sshKeys.serverIds} && ARRAY[${sql.join(
+                    scope.map((id) => sql`${id}`),
+                    sql`, `,
+                  )}]::uuid[]`,
+          )
+          .limit(1),
+      ),
+    });
+  }
+
+  // Backups: somewhere to write, then proof something was written.
+  if (holds(req, "backups.schedules:read")) {
+    steps.push({
+      id: "backup_destination_added",
+      done: await exists(db.select({ id: backupDestinations.id }).from(backupDestinations).limit(1)),
+    });
+    steps.push({
+      id: "backup_succeeded",
+      done: await exists(
+        db
+          .select({ id: backupRuns.id })
+          .from(backupRuns)
+          .where(
+            combine(
+              eq(backupRuns.status, "succeeded"),
+              scopeFilter(req, "backups.schedules:read", backupRuns.serverId),
+            ),
+          )
+          .limit(1),
+      ),
+    });
+  }
+
+  // Monitoring: a rule that can fire, and a channel it can reach someone on.
+  if (holds(req, "monitoring.alerts:read")) {
+    steps.push({
+      id: "alert_rule_created",
+      done: await exists(
+        db.select({ id: alertRules.id }).from(alertRules).where(eq(alertRules.enabled, true)).limit(1),
+      ),
+    });
+  }
+  if (holds(req, "admin.settings:read")) {
+    steps.push({
+      id: "notification_channel_added",
+      done: await exists(
+        db
+          .select({ id: notificationChannels.id })
+          .from(notificationChannels)
+          .where(eq(notificationChannels.enabled, true))
+          .limit(1),
+      ),
+    });
+  }
+
+  // Administration. An invited account counts: the invitation is the act.
+  if (holds(req, "admin.users:read") && principal.kind === "user") {
+    steps.push({
+      id: "teammate_invited",
+      done: await exists(
+        db
+          .select({ id: users.id })
+          .from(users)
+          .where(and(ne(users.id, principal.id), ne(users.status, "suspended")))
+          .limit(1),
+      ),
+    });
+  }
+  // Self-scoped: being signed in is the permission to secure your own account.
+  if (principal.kind === "user") {
+    const [me] = await db
+      .select({ totp: users.totpEnabled })
+      .from(users)
+      .where(eq(users.id, principal.id))
+      .limit(1);
+    steps.push({ id: "two_factor_enabled", done: me?.totp ?? false });
+  }
+
+  return steps;
 }
 
 /* ------------------------------------------------------------------ */

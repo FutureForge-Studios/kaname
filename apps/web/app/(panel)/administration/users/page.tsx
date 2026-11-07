@@ -34,7 +34,7 @@ import {
   type Tone,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { api, type ApiError } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { useCan, useList, useResourceMutation, useSession } from "@/lib/queries";
@@ -71,6 +71,7 @@ export default function UsersPage() {
   const roles = useList<Role>("roles", { per_page: 200, sort: "name", order: "asc" });
 
   const [inviting, setInviting] = React.useState(false);
+  useOpenFromQuery("invite", () => setInviting(true), can("admin.users:write"));
   const [invited, setInvited] = React.useState<InvitedUser | null>(null);
   const [editing, setEditing] = React.useState<User | null>(null);
   const [deleting, setDeleting] = React.useState<User | null>(null);
