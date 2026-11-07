@@ -161,7 +161,7 @@ test("creates a folder through the dialog, with its name validated first", async
   const table = await open(page, root);
   await page.getByRole("button", { name: "New folder" }).click();
   const dialog = page.getByRole("dialog", { name: "New folder" });
-  const name = dialog.getByLabel("Name");
+  const name = dialog.getByLabel(/^Name/);
   const create = dialog.getByRole("button", { name: "Create folder" });
 
   await name.fill("..");
@@ -192,7 +192,7 @@ test("creates a file, edits it in the editor and saves it byte for byte", async 
 
   await page.getByRole("button", { name: "New file" }).click();
   const dialog = page.getByRole("dialog", { name: "New file" });
-  await dialog.getByLabel("Name").fill("app.conf");
+  await dialog.getByLabel(/^Name/).fill("app.conf");
   await dialog.getByRole("button", { name: "Create file" }).click();
   await jobSucceeds(page, "Write file", `${dir}/app.conf`);
 

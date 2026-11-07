@@ -67,20 +67,20 @@ test.describe("users", () => {
     const dialog = dialogNamed(page, "Invite a user");
     /* Empty, the browser's own required-field check stops the submit. */
     await dialog.getByRole("button", { name: "Send invitation" }).click();
-    const emailField = dialog.getByLabel("Email");
+    const emailField = dialog.getByRole("textbox", { name: /^Email/ });
     expect(await emailField.evaluate((el: HTMLInputElement) => el.validity.valueMissing)).toBe(true);
     await expect(dialog).toBeVisible();
 
     /* Past the browser, the control plane names each field it refuses. */
     await emailField.fill("ines@localhost");
-    await dialog.getByLabel("Name").fill("Ines Invitee");
+    await dialog.getByRole("textbox", { name: /^Name/ }).fill("Ines Invitee");
     await dialog.getByRole("button", { name: "Send invitation" }).click();
     await expect(dialog.getByText("Invalid email")).toBeVisible();
     await expect(dialog.getByText("Array must contain at least 1 element(s)")).toBeVisible();
 
     const email = uniqueEmail("invitee");
-    await dialog.getByLabel("Email").fill(email);
-    await dialog.getByLabel("Name").fill("Ines Invitee");
+    await dialog.getByRole("textbox", { name: /^Email/ }).fill(email);
+    await dialog.getByRole("textbox", { name: /^Name/ }).fill("Ines Invitee");
     await chooseOption(page, dialog.getByRole("combobox", { name: /^Roles/ }), "Viewer");
     await dialog.getByRole("button", { name: "Send invitation" }).click();
 
@@ -99,8 +99,8 @@ test.describe("users", () => {
     /* The same address again is a conflict, with the way to the original. */
     await page.getByRole("button", { name: "Invite user" }).first().click();
     const again = dialogNamed(page, "Invite a user");
-    await again.getByLabel("Email").fill(email.toUpperCase());
-    await again.getByLabel("Name").fill("Ines Again");
+    await again.getByRole("textbox", { name: /^Email/ }).fill(email.toUpperCase());
+    await again.getByRole("textbox", { name: /^Name/ }).fill("Ines Again");
     await chooseOption(page, again.getByRole("combobox", { name: /^Roles/ }), "Viewer");
     await again.getByRole("button", { name: "Send invitation" }).click();
     await expect(again.getByText(`${email} already has an account.`)).toBeVisible();
@@ -291,7 +291,7 @@ test.describe("API keys", () => {
     const create = dialog.getByRole("button", { name: "Create key" });
     await expect(create).toBeDisabled();
     const name = `ci-read-${Date.now().toString(36)}`;
-    await dialog.getByLabel("Name").fill(name);
+    await dialog.getByRole("textbox", { name: /^Name/ }).fill(name);
     await expect(create).toBeDisabled();
     await dialog.getByLabel("Read Servers").check();
     await create.click();

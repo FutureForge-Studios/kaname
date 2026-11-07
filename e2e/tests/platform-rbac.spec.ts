@@ -334,7 +334,7 @@ test.describe("as the owner", () => {
     const create = page.getByRole("button", { name: "Create role" });
     await expect(create).toBeDisabled();
 
-    await page.getByLabel("Name").fill(roleName);
+    await page.getByRole("textbox", { name: /^Name/ }).fill(roleName);
     await page.getByLabel("Read Mailboxes").check();
     await page.getByLabel("Read Mail servers & DNS").check();
     await create.click();
@@ -374,7 +374,7 @@ test.describe("as the owner", () => {
   test("system roles are read-only and cannot be deleted or shadowed", async ({ page }) => {
     const viewer = await roleBySlug("viewer");
     await page.goto(`/administration/roles/${viewer.id}`);
-    await expect(page.getByText("system role")).toBeVisible();
+    await expect(page.getByText("system role", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Save changes" })).toHaveCount(0);
     await expect(page.getByLabel("Read Servers")).toBeDisabled();
 
