@@ -83,7 +83,7 @@ test.describe("ssh", () => {
     await dialog.getByLabel("Public key").fill(key.line);
     await expect(dialog.getByText(message)).toBeHidden();
     await dialog.getByRole("combobox").click();
-    await page.getByRole("option", { name: /forge-01/ }).click();
+    await page.getByRole("listbox").getByRole("option", { name: /forge-01/ }).click();
     await page.keyboard.press("Escape");
     await add.click();
 

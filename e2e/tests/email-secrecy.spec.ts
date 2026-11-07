@@ -92,7 +92,7 @@ test("no credential appears in any job, job log or audit event", async () => {
 
   /* Positive controls: the search sees the rows that are there. */
   expect(jobs.text).toContain("mail.server.deploy");
-  expect(jobs.text).toContain("password_ref");
+  expect(trail).toContain("password_ref");
   expect(logs).toContain("available once from the panel for 15 minutes");
   expect(trail).toContain(`${local}@futureforge.dev`);
   expect(trail).toContain("mailbox.password_reset");

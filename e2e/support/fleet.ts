@@ -359,3 +359,17 @@ export function drawerJob(page: Page, label: string | RegExp): Locator {
     .filter({ hasText: label })
     .first();
 }
+
+export interface TerminalSessionRow {
+  id: string;
+  server_id: string;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+export async function terminalSessionsFor(serverId: string): Promise<TerminalSessionRow[]> {
+  return ownerCall<TerminalSessionRow[]>(
+    "GET",
+    `/terminal/sessions?server_id=${serverId}&per_page=50&sort=started_at&order=desc`,
+  );
+}

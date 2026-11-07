@@ -288,29 +288,31 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * Chooses an option in one of the panel's comboboxes by typing part of
- * its label. The list re-filters after each keystroke, so the click
- * waits until every option left matches — clicking while the list was
- * still re-rendering once selected the neighbouring host.
+ * Chooses the combobox option whose label is exactly `text`. Matching
+ * on the label alone matters: the filter also searches descriptions,
+ * and a simulated host reports a hostname from a small pool — db-01's
+ * can read "edge-01.kaname.internal" — so "the first option mentioning
+ * edge-01" was sometimes db-01.
  */
 export async function choose(page: Page, field: Locator, text: string): Promise<void> {
-  const name = new RegExp(escapeRegExp(text));
   await field.click();
   await field.fill(text);
-  const listbox = page.getByRole("listbox");
-  await expect
-    .poll(async () => {
-      const labels = await listbox.getByRole("option").allInnerTexts();
-      return labels.length > 0 && labels.every((label) => name.test(label));
-    })
-    .toBe(true);
-  await listbox.getByRole("option", { name }).first().click();
-  await expect(field).toHaveValue(name);
+  const option = page
+    .getByRole("listbox")
+    .getByRole("option")
+    .filter({ has: page.getByText(text, { exact: true }) })
+    .first();
+  await expect(option).toBeVisible();
+  await option.click();
+  await expect(field).toHaveValue(text);
 }
 
-/** A form control by its exact label (FormField appends "(required)" for required ones). */
+/**
+ * A form control by its exact label. A required FormField's label text
+ * also carries a decorative "*" and a screen-reader " (required)".
+ */
 export function field(scope: Locator, label: string): Locator {
-  return scope.getByLabel(new RegExp(`^${escapeRegExp(label)}( \\(required\\))?$`));
+  return scope.getByLabel(new RegExp(`^${escapeRegExp(label)}\\*?\\s*(\\(required\\))?$`));
 }
 
 export async function serverNamed(name: string): Promise<{ id: string; name: string }> {
@@ -318,4 +320,17 @@ export async function serverNamed(name: string): Promise<{ id: string; name: str
   const found = servers.find((s) => s.name === name);
   if (!found) throw new Error(`no server named ${name}`);
   return found;
+}
+
+/**
+ * Dismisses every toast on screen. The toast stack sits above dialogs,
+ * bottom right, and can cover a dialog's footer buttons; an operator
+ * closes it before clicking through, and so does a journey.
+ */
+export async function dismissToasts(page: Page): Promise<void> {
+  const toasts = page.getByRole("list", { name: "Notifications" });
+  for (const button of await toasts.getByRole("button", { name: "Dismiss" }).all()) {
+    await button.click().catch(() => undefined);
+  }
+  await expect(toasts.getByRole("button", { name: "Dismiss" })).toHaveCount(0);
 }

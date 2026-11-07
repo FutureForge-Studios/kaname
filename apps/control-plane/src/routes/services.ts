@@ -4,6 +4,7 @@ import { servers, services } from "@kaname/db/schema";
 import {
   idParam,
   isoDate,
+  queryBoolean,
   serverIdQuery,
   serviceAction,
   serviceListQuery,
@@ -76,7 +77,8 @@ const KEEPALIVE_MS = 20_000;
 
 const logsQuery = z.object({
   lines: z.coerce.number().int().min(1).max(10000).default(200),
-  follow: z.coerce.boolean().default(false),
+  // queryBoolean, not z.coerce.boolean(): the latter reads "false" as true.
+  follow: queryBoolean.default(false),
   since: isoDate.optional(),
 });
 

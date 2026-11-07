@@ -1,6 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { serverNamed } from "../support/api.js";
-import { binaryBytes, data, jobSucceeds, qs, settle, unique } from "../support/data.js";
+import {
+  binaryBytes,
+  data,
+  jobSucceeds,
+  qs,
+  settle,
+  unique,
+  uploadBytes,
+} from "../support/data.js";
 import { sectionNamed } from "../support/ui.js";
 
 /* ------------------------------------------------------------------ *
@@ -69,35 +77,43 @@ test("taking a sample replaces the breakdown with what the host reports now", as
   /* The cached sample moved: newer than the one we started with, and
    * shaped like forge-01's simulated disks rather than the seed's. */
   await expect
-    .poll(async () => (await data<Breakdown>("GET", `/storage?${qs({ server_id: serverId })}`)).sampled_at, {
-      message: "a finished sample never replaced the cached breakdown",
-      timeout: 20_000,
-    })
+    .poll(
+      async () =>
+        (await data<Breakdown>("GET", `/storage?${qs({ server_id: serverId })}`)).sampled_at,
+      {
+        message: "a finished sample never replaced the cached breakdown",
+        timeout: 20_000,
+      },
+    )
     .not.toBe(before.sampled_at);
 
   const after = await data<Breakdown>("GET", `/storage?${qs({ server_id: serverId })}`);
   expect(Date.now() - Date.parse(after.sampled_at)).toBeLessThan(5 * 60_000);
-  const live = await data<{ latest: { disks: { mount: string }[] } | null }>("GET", `/servers/${serverId}`);
+  const live = await data<{ latest: { disks: { mount: string }[] } | null }>(
+    "GET",
+    `/servers/${serverId}`,
+  );
   expect(after.largest.length).toBeGreaterThan(0);
   expect(after.mounts.map((m) => m.mount).sort()).toEqual(
     (live.latest?.disks ?? []).map((m) => m.mount).sort(),
   );
 
   await page.reload();
-  await expect(page.getByText(/^sampled (just now|\d+s ago|\d+ seconds? ago|a few seconds ago)/)).toBeVisible();
+  await expect(
+    page.getByText(/^sampled (just now|\d+s ago|\d+ seconds? ago|a few seconds ago)/),
+  ).toBeVisible();
 });
 
 test("a subtree sample sees a file written just before it", async ({ page }) => {
   const dir = `/srv/${unique("e2e-storage-")}`;
   const size = 3 * 1024 * 1024;
-  const { job } = await data<{ job: { id: string } }>("POST", "/files/write", {
+  /* Real bytes, uploaded: the sample must account for them. */
+  const mk = await data<{ job: { id: string } }>("POST", "/files/mkdir", {
     server_id: serverId,
-    path: `${dir}/payload.bin`,
-    content: binaryBytes(size).toString("base64"),
-    encoding: "base64",
-    create_parents: true,
+    path: dir,
   });
-  expect((await settle(job.id)).status).toBe("succeeded");
+  expect((await settle(mk.job.id)).status).toBe("succeeded");
+  expect(await uploadBytes(serverId, dir, "payload.bin", binaryBytes(size))).toBe(201);
 
   await openStorage(page);
   await page.getByRole("button", { name: "Options" }).click();

@@ -250,7 +250,8 @@ test("pairing hands over a one-liner, and the step resolves when the agent dials
   const command = page.locator("code").filter({ hasText: "install.sh" }).first();
   await expect(command).toBeVisible();
   const text = (await command.textContent()) ?? "";
-  expect(text).toContain(`--control-plane=${webUrl}`);
+  /* In development agents dial the control plane directly (config.ts). */
+  expect(text).toMatch(/^curl -fsSL \S+\/install\.sh \| sudo sh -s -- --agent-only --token=kn_enroll_\S+ --control-plane=\S+$/);
   const token = /--token=(\S+)/.exec(text)?.[1];
   expect(token).toBeTruthy();
 
@@ -413,23 +414,32 @@ test("the Getting Started checklist reflects real progress", async () => {
   const before = await checklist();
   expect(before["two_factor_enabled"]).toBe(false);
   expect(before["teammate_invited"]).toBe(false);
+  expect(before["notification_channel_added"]).toBe(false);
 
   await page.goto("/");
-  const card = page.locator("section, aside").filter({ hasText: "Getting started" }).first();
+  const card = page.locator('section[aria-labelledby="getting-started-heading"]');
   await expect(card).toBeVisible();
+  const item = (label: string) => card.getByRole("link").filter({ hasText: label });
+  await expect(item("Add a teammate")).toContainText("To do");
+  await expect(item("Turn on two-factor")).toContainText("To do");
+  await expect(item("Configure notifications")).toContainText("To do");
 
-  /* Invite somebody: the teammate item turns done. */
-  const viewer = (await call<{ data: { id: string; slug: string }[] }>("GET", "/roles", {
-    cookie: await cookieOf(),
-  })).body.data.find((role) => role.slug === "viewer")!;
-  const invited = await call("POST", "/users", {
-    cookie: await cookieOf(),
-    body: { email: "crew@fresh.example.com", name: "Crew", role_ids: [viewer.id], send_invite: false },
-  });
-  expect(invited.status).toBe(201);
-  await expect.poll(async () => (await checklist())["teammate_invited"]).toBe(true);
+  /* An item is a way in: it opens the place the work is done. */
+  await item("Add a teammate").click();
+  await expect(page).toHaveURL(/\/administration\/users\?invite=1$/);
+  const dialog = page.getByRole("dialog", { name: "Invite a user" });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("textbox", { name: /^Email/ }).fill("crew@fresh.example.com");
+  await dialog.getByRole("textbox", { name: /^Name/ }).fill("Crew");
+  const roles = dialog.getByRole("combobox", { name: /^Roles/ });
+  await roles.click();
+  await roles.fill("Viewer");
+  await page.locator('div[role="option"]').filter({ hasText: /^Viewer/ }).click();
+  await page.keyboard.press("Escape");
+  await dialog.getByRole("button", { name: "Send invitation" }).click();
+  await page.getByRole("dialog", { name: "crew@fresh.example.com is invited" }).getByRole("button", { name: "Done" }).click();
 
-  /* A notification channel: that item turns done. */
+  /* A notification channel, through the API this time. */
   const patch = await call("PATCH", "/settings", {
     cookie: await cookieOf(),
     body: {
@@ -448,10 +458,25 @@ test("the Getting Started checklist reflects real progress", async () => {
     },
   });
   expect(patch.status, JSON.stringify(patch.body)).toBe(200);
-  await expect.poll(async () => (await checklist())["notification_channel_added"]).toBe(true);
 
+  await page.goto("/");
+  await expect(item("Add a teammate")).toContainText("Done");
+  await expect(item("Configure notifications")).toContainText("Done");
+  await expect(item("Turn on two-factor")).toContainText("To do");
+  const after = await checklist();
+  expect(after["teammate_invited"]).toBe(true);
+  expect(after["notification_channel_added"]).toBe(true);
+  expect(after["two_factor_enabled"]).toBe(false);
+
+  /* A suspended teammate does not count as having one. */
+  const users = (await call<{ data: { id: string; email: string }[] }>("GET", "/users", {
+    cookie: await cookieOf(),
+  })).body.data;
+  const crew = users.find((user) => user.email === "crew@fresh.example.com")!;
+  expect((await call("POST", `/users/${crew.id}/suspend`, { cookie: await cookieOf() })).status).toBe(200);
+  expect((await checklist())["teammate_invited"]).toBe(false);
   await page.reload();
-  await expect(card).toBeVisible();
+  await expect(item("Add a teammate")).toContainText("To do");
 });
 
 async function checklist(): Promise<Record<string, boolean>> {

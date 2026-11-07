@@ -79,7 +79,10 @@ export const agentOffline = (serverName: string, lastSeen: Date | null) =>
     detail: { last_seen_at: lastSeen?.toISOString() ?? null },
     remediation: {
       summary: lastSeen
-        ? `Last seen ${lastSeen.toISOString()}. The job will run automatically when the agent reconnects.`
+        ? // Thrown only by live reads and the terminal, which queue nothing,
+          // so promising that "the job will run" told the operator to wait
+          // for something that was never going to happen.
+          `Last seen ${lastSeen.toISOString()}. This reads the host live, so retry once the agent reconnects; jobs already queued for it run on their own then.`
         : "This server has never connected. Finish enrollment on the host.",
       actions: [
         { label: "Server details", href: "/infrastructure/servers" },

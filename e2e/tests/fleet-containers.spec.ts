@@ -69,6 +69,10 @@ test("start, restart and stop each run as a job and the row follows the host", a
   const before = (await container(HOST, "n8n")).restart_count;
   menu = await openRowActions(page, row);
   await menu.getByRole("menuitem", { name: "Restart", exact: true }).click();
+  await expect(jobStatusPill(drawerJob(page, "Restart container"))).toContainText("Succeeded", {
+    timeout: 60_000,
+  });
+  await page.keyboard.press("Escape");
   await expect
     .poll(async () => (await container(HOST, "n8n")).restart_count, { timeout: 60_000 })
     .toBe(before + 1);
