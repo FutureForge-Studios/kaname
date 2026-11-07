@@ -40,6 +40,31 @@ test("restarting a unit runs as a job and lands on succeeded", async ({ page }) 
     /just now|^\d+s ago$/,
   );
 
+  /* A simulated restart finishes in tens of milliseconds, faster than
+   * any poll can sample, so every state the drawer renders for this job
+   * is recorded from the DOM as it happens instead. Sampling at 100ms
+   * made this fail whenever the host was quicker than the poll. */
+  await page.evaluate((unit) => {
+    const seen: string[] = [];
+    (window as unknown as { __pills: string[] }).__pills = seen;
+    const record = () => {
+      for (const item of document.querySelectorAll("li")) {
+        const text = item.textContent ?? "";
+        if (!text.includes("Restart service") || !text.includes(unit)) continue;
+        const pill = item.querySelector("span[title]");
+        const title = pill?.getAttribute("title");
+        if (title && seen.at(-1) !== title) seen.push(title);
+      }
+    };
+    new MutationObserver(record).observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ["title"],
+    });
+  }, UNIT);
+
   await row.getByRole("button", { name: "Row actions" }).click();
   await page.getByRole("menuitem", { name: "Restart", exact: true }).click();
 
@@ -72,6 +97,11 @@ test("restarting a unit runs as a job and lands on succeeded", async ({ page }) 
       },
     )
     .toContain("Succeeded");
+
+  const rendered = await page.evaluate(() => (window as unknown as { __pills: string[] }).__pills);
+  for (const title of rendered) {
+    for (const status of OBSERVED) if (title.startsWith(`${status}.`)) seen.add(status);
+  }
 
   expect(
     PRE_TERMINAL.some((status) => seen.has(status)),

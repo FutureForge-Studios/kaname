@@ -176,10 +176,24 @@ for (const meta of ENGINES) {
       await expect(submit).toBeEnabled();
       await submit.click();
 
-      /* Database, user and grant: three jobs, one operator action. The
-       * drawer that tracks them opens over the credentials, so it is
-       * read and dismissed first. */
+      /* The drawer tracking the jobs opens over the credentials; once
+       * the database job has landed it is dismissed and the credential
+       * read. */
       await jobSucceeds(page, "Create database", name);
+      const credentials = page.getByRole("dialog", { name: "Credentials — shown once" });
+      await expect(credentials).toBeVisible();
+      const password = ((await codeBlock(credentials, "Password").textContent()) ?? "").trim();
+      expect(password.length).toBeGreaterThanOrEqual(16);
+      const connection = (
+        (await codeBlock(credentials, "Connection string").textContent()) ?? ""
+      ).trim();
+      expect(connection).toBe(
+        `${meta.scheme}://${username}:${password}@127.0.0.1:${meta.port}/${name}`,
+      );
+      await credentials.getByRole("button", { name: "I have copied it" }).click();
+      await expect(credentials).toBeHidden();
+
+      /* Database, user and grant: three jobs, one operator action. */
       const drawer = page.getByRole("dialog", { name: "Job activity" });
       await page
         .getByRole("button", { name: /^Job activity/ })
@@ -195,19 +209,6 @@ for (const meta of ENGINES) {
       }
       await page.keyboard.press("Escape");
       await expect(drawer).toBeHidden();
-
-      const credentials = page.getByRole("dialog", { name: "Credentials — shown once" });
-      await expect(credentials).toBeVisible();
-      const password = ((await codeBlock(credentials, "Password").textContent()) ?? "").trim();
-      expect(password.length).toBeGreaterThanOrEqual(16);
-      const connection = (
-        (await codeBlock(credentials, "Connection string").textContent()) ?? ""
-      ).trim();
-      expect(connection).toBe(
-        `${meta.scheme}://${username}:${password}@127.0.0.1:${meta.port}/${name}`,
-      );
-      await credentials.getByRole("button", { name: "I have copied it" }).click();
-      await expect(credentials).toBeHidden();
 
       await page.getByPlaceholder("Search databases").fill(name);
       const row = table.locator("tbody tr").filter({ hasText: name });
@@ -333,7 +334,7 @@ for (const meta of ENGINES) {
 
       /* Removing every grant revokes on the host, and the dialog says so first. */
       await rowAction(page, row, "Edit grants");
-      await grants.getByRole("button", { name: "Remove" }).click();
+      await grants.getByRole("button", { name: "Remove", exact: true }).click();
       await expect(grants.getByText(`Revoking access to ${dbName}.`)).toBeVisible();
       await grants.getByRole("button", { name: "Apply grants" }).click();
       await jobSucceeds(page, "Apply database grants", `revoke ${username} on ${dbName}`);
