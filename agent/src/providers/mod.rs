@@ -563,6 +563,24 @@ pub fn registered() -> Vec<&'static str> {
     names
 }
 
+/* ------------------------- capability changes ------------------------ */
+
+/// Raised when what this host can serve has changed under the running
+/// agent: a deploy just installed Yunori Mail Server. Capabilities travel
+/// in the hello frame and gate methods on both ends, so the only honest
+/// way to publish new ones is a fresh hello; `run_agent` reconnects when
+/// this fires. `notify_one` keeps a permit, so a change raised between
+/// sessions is not lost.
+static CAPABILITIES_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+pub fn announce_capabilities_changed() {
+    CAPABILITIES_CHANGED.notify_one();
+}
+
+pub async fn capabilities_changed() {
+    CAPABILITIES_CHANGED.notified().await;
+}
+
 /// An event sender that drops rather than waits, so a watcher can never
 /// stall the provider because nobody is connected.
 pub fn emit(tx: &mpsc::Sender<Event>, topic: &'static str, data: impl serde::Serialize) {

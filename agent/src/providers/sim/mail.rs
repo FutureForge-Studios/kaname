@@ -36,6 +36,11 @@ pub const VERSION: &str = "0.1.0";
 pub const DKIM_SELECTOR: &str = "ym1";
 pub const PTR_DETAIL: &str = "Set the PTR for 198.51.100.42 to mail.futureforge.dev at your provider.";
 
+/// The reverse-DNS instruction for a given mail hostname.
+pub fn ptr_detail(hostname: &str) -> String {
+    format!("Set the PTR for {MAIL_IP} to {hostname} at your provider.")
+}
+
 /// Inert filler shaped like a 2048-bit RSA SPKI. Nothing here is a key; it
 /// exists so the expected DKIM record has the length a real one has.
 pub const DKIM_PUBLIC_KEY: &str = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsimulatedKAName0AgentKeyMaterialFor\
@@ -120,11 +125,15 @@ impl MailWorld {
 /// The checklist of a finished install that still waits on the operator's
 /// reverse-DNS entry.
 pub fn steps_paused_at_ptr(skip_ptr: bool) -> Vec<MailInstallStep> {
+    steps_paused_at_ptr_for(&format!("mail.{PRIMARY_DOMAIN}"), skip_ptr)
+}
+
+pub fn steps_paused_at_ptr_for(hostname: &str, skip_ptr: bool) -> Vec<MailInstallStep> {
     INSTALL_STEPS
         .iter()
         .map(|(id, title)| {
             let (status, detail) = match (*id, skip_ptr) {
-                ("ptr", false) => (MailInstallStepStatus::Waiting, Some(PTR_DETAIL.to_string())),
+                ("ptr", false) => (MailInstallStepStatus::Waiting, Some(ptr_detail(hostname))),
                 ("ptr", true) => (
                     MailInstallStepStatus::Skipped,
                     Some("Skipped at the operator's request.".into()),
@@ -140,7 +149,20 @@ pub fn steps_paused_at_ptr(skip_ptr: bool) -> Vec<MailInstallStep> {
         .collect()
 }
 
+/// Whether this simulated host plays a mail server. A development fleet
+/// runs one agent per seeded server, and only the mail host should arrive
+/// with Yunori installed: every host advertising it made the control plane
+/// adopt four mail servers that all claimed the same hostname. The others
+/// start empty and gain it the honest way, through `mail.deploy`.
+pub fn plays_mail_host(identity: &str) -> bool {
+    identity.to_ascii_lowercase().contains("mail")
+}
+
 pub fn build_mail(sim: &Sim) {
+    if !plays_mail_host(&sim.identity) {
+        sim.world.lock().mail = MailWorld::default();
+        return;
+    }
     let hostname = format!("mail.{PRIMARY_DOMAIN}");
     let mailbox = |local: &str, domain: &str, name: &str| Mailbox {
         address: format!("{local}@{domain}"),
@@ -676,7 +698,7 @@ impl Mail for SimMail {
                 ctx,
                 &*s,
                 Duration::from_millis(120),
-                format!("Set reverse DNS: waiting — {PTR_DETAIL}"),
+                format!("Set reverse DNS: waiting — {}", ptr_detail(&hostname)),
             )
             .await?;
         }
@@ -693,7 +715,7 @@ impl Mail for SimMail {
             "sim-{:016x}",
             mix(self.0.seed ^ Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64)
         );
-        let steps = steps_paused_at_ptr(p.skip_ptr);
+        let steps = steps_paused_at_ptr_for(&hostname, p.skip_ptr);
 
         {
             let mut w = self.0.world.lock();
@@ -742,6 +764,9 @@ impl Mail for SimMail {
         )
         .await;
 
+        // Same as a real host: Yunori is now installed here, so the next
+        // hello has to advertise it.
+        crate::providers::announce_capabilities_changed();
         Ok(MailDeployResult {
             outcome,
             version,

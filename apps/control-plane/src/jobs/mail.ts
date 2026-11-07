@@ -683,12 +683,21 @@ const deploy: JobHandler = async (ctx) => {
     serverId,
   );
 
-  // The host now advertises `yunori` only after its next hello, so this
-  // read may be refused; the reconciler syncs again on reconnect.
+  // The agent re-announces itself right after a deploy so its new `yunori`
+  // capability reaches the hub, and the reconciler syncs on that hello. A
+  // read that lands before the reconnect is refused as unsupported, which
+  // is expected rather than a problem worth a warning.
   try {
     await syncMailServer(ctx, row.id);
   } catch (err) {
-    await ctx.log_("warn", `first sync after install failed: ${describe(err)}`);
+    if (agentSaid(err, "unsupported")) {
+      await ctx.log_(
+        "info",
+        "the host reconnects to announce Yunori Mail Server; the first check follows on its own",
+      );
+    } else {
+      await ctx.log_("warn", `first sync after install failed: ${describe(err)}`);
+    }
   }
 
   return {
