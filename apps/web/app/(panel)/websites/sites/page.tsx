@@ -93,7 +93,7 @@ export default function SitesPage() {
 
   const [creating, setCreating] = React.useState(false);
   useOpenFromQuery("new", () => setCreating(true), can("websites.sites:write"));
-  const noServer = serverPrerequisite(selection, "A site is served");
+  const noServer = serverPrerequisite(selection, "A site is served from a host Kaname manages.");
   const [editing, setEditing] = React.useState<Site | null>(null);
   const [deploying, setDeploying] = React.useState<Site | null>(null);
   const [issuing, setIssuing] = React.useState<Site | null>(null);

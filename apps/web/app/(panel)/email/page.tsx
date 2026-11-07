@@ -100,7 +100,7 @@ export default function MailServersPage() {
 
   const [deploying, setDeploying] = React.useState(false);
   const [adopting, setAdopting] = React.useState(false);
-  const [pending, setPending] = React.useState<PendingSetup | null>(null);
+  const [pending, setPending] = usePendingSetup();
   const [forgetting, setForgetting] = React.useState<MailServer | null>(null);
 
   const forget = useForgetMailServer();
@@ -115,7 +115,7 @@ export default function MailServersPage() {
   const fleet = useServers();
   const noHost = serverPrerequisite(
     { servers: fleet.data?.data ?? [], isLoading: fleet.isLoading },
-    "Yunori Mail Server is installed",
+    "Yunori Mail Server runs on a host Kaname manages.",
   );
 
   const deployButton = (
@@ -261,6 +261,37 @@ export default function MailServersPage() {
       />
     </div>
   );
+}
+
+/*
+ * The deploy's once-only secrets wait in the control plane for fifteen
+ * minutes, but the panel that offers them lived only in component state:
+ * a reload, or a click to another page and back, lost the only way to
+ * reveal them. The job and host ids (never the secrets) are kept for the
+ * tab's lifetime so the panel comes back until it is dismissed.
+ */
+const PENDING_SETUP_KEY = "kaname.email.pending-setup";
+
+function usePendingSetup(): [PendingSetup | null, (next: PendingSetup | null) => void] {
+  const [pending, setPendingState] = React.useState<PendingSetup | null>(null);
+  React.useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(PENDING_SETUP_KEY);
+      if (raw) setPendingState(JSON.parse(raw) as PendingSetup);
+    } catch {
+      /* storage unavailable: the panel simply does not survive a reload */
+    }
+  }, []);
+  const setPending = React.useCallback((next: PendingSetup | null) => {
+    setPendingState(next);
+    try {
+      if (next) window.sessionStorage.setItem(PENDING_SETUP_KEY, JSON.stringify(next));
+      else window.sessionStorage.removeItem(PENDING_SETUP_KEY);
+    } catch {
+      /* as above */
+    }
+  }, []);
+  return [pending, setPending];
 }
 
 /* ------------------------------------------------------------------ *

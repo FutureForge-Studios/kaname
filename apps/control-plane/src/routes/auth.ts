@@ -2,8 +2,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { eq, sql } from "@kaname/db";
 import { sessions, users } from "@kaname/db/schema";
 import {
+  assessPassword,
   changePasswordInput,
   loginInput,
+  passwordContext,
+  password as newPassword,
   totpVerifyInput,
   updateUserPreferencesInput,
   userPreferences,
@@ -19,7 +22,7 @@ import {
   sessionCookieName,
 } from "../http/plugin.js";
 import { ApiException } from "../lib/errors.js";
-import { constantTimeEquals, generateToken, hmac } from "../lib/crypto.js";
+import { constantTimeEquals, generateToken, hashToken, hmac } from "../lib/crypto.js";
 import type { AuthService } from "../services/auth.js";
 import { loadSettings, serializeUser } from "./admin.js";
 
@@ -53,6 +56,11 @@ const totpChallengeInput = z.object({
 
 const totpDisableInput = z.object({ password: z.string().min(1).max(256) });
 
+const acceptInviteInput = z.object({
+  token: z.string().min(1).max(256),
+  password: newPassword,
+});
+
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   /* ------------------------------ login ----------------------------- */
 
@@ -75,7 +83,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     if (!user || !user.passwordHash || !correct) {
       await recordFailure(req, email, user?.id ?? null, user ? "bad_password" : "unknown_email");
-      if (user && lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold);
+      if (user && lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold, lockout.lockout_minutes);
       throw invalidCredentials();
     }
 
@@ -106,7 +114,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (user.totpEnabled && body.totp_code) {
       if (!(await req.ctx.auth.verifyTotp(user.id, body.totp_code))) {
         await recordFailure(req, email, user.id, "bad_totp");
-        if (lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold);
+        if (lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold, lockout.lockout_minutes);
         throw invalidTotp();
       }
     }
@@ -131,7 +139,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const lockout = (await loadSettings(req.ctx)).security.failed_login_lockout;
     if (!(await req.ctx.auth.verifyTotp(user.id, body.code))) {
       await recordFailure(req, user.email, user.id, "bad_totp");
-      if (lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold);
+      if (lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold, lockout.lockout_minutes);
       throw invalidTotp();
     }
 
@@ -162,7 +170,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       !user.inviteExpiresAt ||
       user.inviteExpiresAt.getTime() < Date.now()
     ) {
-      throw new ApiException("unauthorized", "This invitation is not valid any more.", {
+      throw new ApiException("unauthenticated", "This invitation is not valid any more.", {
         remediation: {
           summary:
             "Invitations are single-use and expire. Ask an administrator to invite you again.",
@@ -170,6 +178,9 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         },
       });
     }
+
+    // Chosen by the invitee, so held to the same bar as the owner's.
+    assertStrongPassword(body.password, user, "password");
 
     const now = new Date();
     await req.ctx.db
@@ -297,6 +308,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       await recordFailure(req, user.email, user.id, "bad_password_on_change");
       throw wrongCurrentPassword();
     }
+    // The same server-side strength check onboarding applies to the
+    // owner. Without it a strong first password could be "changed" to
+    // twelve of the same letter, and the README's promise that strength
+    // is enforced on the control plane held only until the first change.
+    assertStrongPassword(body.new_password, user, "new_password");
 
     await req.ctx.db
       .update(users)
@@ -534,6 +550,20 @@ function readChallenge(
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
+
+/** Throws the onboarding wizard's strength refusal, on `field`. */
+function assertStrongPassword(
+  password: string,
+  user: { name: string; email: string },
+  field: string,
+): void {
+  const assessment = assessPassword(password, passwordContext(user.name, user.email));
+  if (assessment.ok) return;
+  throw new ApiException("validation_failed", "That password is not strong enough.", {
+    fields: { [field]: assessment.problems.join(" ") },
+    detail: { score: assessment.score, problems: assessment.problems },
+  });
+}
 
 let decoy: Promise<string> | null = null;
 

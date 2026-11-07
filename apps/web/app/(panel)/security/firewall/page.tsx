@@ -154,7 +154,7 @@ export default function FirewallPage() {
   const [editing, setEditing] = React.useState<FirewallRule | null>(null);
   const [creating, setCreating] = React.useState(false);
   useOpenFromQuery("new", () => setCreating(true), can("security.firewall:write"));
-  const noServer = serverPrerequisite(selection, "Firewall rules are applied");
+  const noServer = serverPrerequisite(selection, "Firewall rules are applied on a host Kaname manages.");
   const [deleting, setDeleting] = React.useState<FirewallRule[] | null>(null);
   const [applyOpen, setApplyOpen] = React.useState(false);
   const [lockout, setLockout] = React.useState<LockoutAssessment | null>(null);

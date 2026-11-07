@@ -26,8 +26,9 @@ import {
   cn,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
+import { serverPrerequisite } from "@/components/ResourcePage";
 import { formatCount, formatDateTime, pluralize } from "@/lib/format";
-import { useCan } from "@/lib/queries";
+import { useCan, useServers } from "@/lib/queries";
 import { HostCell } from "../../_components/cells";
 import { JobActivityBar } from "../../_components/JobActivity";
 import {
@@ -66,17 +67,32 @@ export default function MailHealthPage() {
   const searchParams = useSearchParams();
   const fromUrl = searchParams.get("server_id");
   const can = useCan();
+  const fleet = useServers();
+  const noHost = serverPrerequisite(
+    { servers: fleet.data?.data ?? [], isLoading: fleet.isLoading },
+    "Yunori Mail Server runs on a host Kaname manages.",
+  );
 
   const query = useMailServers();
   const servers = query.data?.data ?? [];
+
+  /* A link naming a server that is not here (forgotten, out of scope,
+   * mistyped) used to fall through to the first server and rewrite the
+   * URL to it, so the page answered a question nobody asked. */
+  const unmatched =
+    fromUrl !== null &&
+    !query.isLoading &&
+    servers.length > 0 &&
+    !servers.some((row) => row.id === fromUrl || row.server_id === fromUrl);
 
   const selected = React.useMemo<MailServer | null>(() => {
     if (fromUrl) {
       const match = servers.find((row) => row.id === fromUrl || row.server_id === fromUrl);
       if (match) return match;
+      if (unmatched) return null;
     }
     return servers[0] ?? null;
-  }, [fromUrl, servers]);
+  }, [fromUrl, servers, unmatched]);
 
   const select = React.useCallback(
     (server: MailServer | null) => {
@@ -134,6 +150,19 @@ export default function MailHealthPage() {
             <Skeleton className="h-24 rounded-[var(--kn-r-md)]" label="Loading mail servers" />
             <Skeleton className="h-48 rounded-[var(--kn-r-md)]" />
           </div>
+        ) : unmatched ? (
+          <SectionCard>
+            <EmptyState
+              icon={BadgeCheck}
+              title="No mail server matches this link"
+              description={`The link names ${fromUrl}, which is not a mail server you can see here. It may have been forgotten, or it is outside your scope.`}
+              action={
+                <Button variant="secondary" size="sm" onClick={() => select(servers[0] ?? null)}>
+                  Show {servers[0]?.server_name}
+                </Button>
+              }
+            />
+          </SectionCard>
         ) : !selected ? (
           <SectionCard>
             <EmptyState
@@ -141,7 +170,9 @@ export default function MailHealthPage() {
               title="No mail server to check yet"
               description="Once a Yunori Mail Server runs on one of your hosts, this page shows its doctor verdict, every failing check with the fix beside it, its TLS certificate and an on-demand preflight of port 25, reverse DNS and blocklists."
               action={
-                can("email.servers:write") ? (
+                noHost ? (
+                  noHost.action
+                ) : can("email.servers:write") ? (
                   <Button
                     variant="primary"
                     size="sm"
@@ -153,7 +184,7 @@ export default function MailHealthPage() {
                 ) : undefined
               }
               secondaryAction={
-                can("email.servers:write") ? (
+                !noHost && can("email.servers:write") ? (
                   <Button variant="secondary" size="sm" onClick={() => router.push("/email?adopt=1")}>
                     Adopt one installed by hand
                   </Button>

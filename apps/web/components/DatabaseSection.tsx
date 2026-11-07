@@ -439,7 +439,7 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
   /* The list is empty for a different reason on a fresh install: no host
    * yet, or a host with no engine on it. Say which, once, in the table. */
   const prerequisite: ResourcePrerequisite | null =
-    serverPrerequisite(selection, `${meta.title} databases are created`) ??
+    serverPrerequisite(selection, `${meta.title} databases are created on a host Kaname manages.`) ??
     (!instances.isLoading && !instances.isError && !instance
       ? {
           icon: DatabaseIcon,
