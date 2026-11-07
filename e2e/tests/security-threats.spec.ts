@@ -108,8 +108,11 @@ test.describe("threat protection", () => {
     await expect(row).toContainText("banned");
 
     const api = await owner();
+    // The disposition flips when the ban is requested, so the job is what
+    // proves the host did it.
     const bans = await api.get<JobRow[]>(`/jobs?server_id=${forge.id}&type=fw.ban&per_page=1`);
-    expect(bans[0]?.status).toBe("succeeded");
+    const banned = await settled(bans[0]!.id);
+    expect(banned.status, JSON.stringify(banned.error)).toBe("succeeded");
 
     await rowAction(page, row, "Unban this address");
     await page.getByRole("dialog", { name: `Unban ${ip}` }).getByRole("button", { name: "Unban" }).click();

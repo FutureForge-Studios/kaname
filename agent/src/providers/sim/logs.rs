@@ -318,14 +318,29 @@ pub async fn send_record(stream: &dyn Stream, record: &LogRecord) -> PResult<()>
     stream.send(&payload, Encoding::Utf8).await
 }
 
+/// A requested level means "this severity or worse", as on a real host
+/// (journalctl -p) and as the panel labels it. Matching it exactly hid
+/// every error line from an operator who asked for warnings and above.
 fn matches_filter(record: &LogRecord, level: &str, query: &str) -> bool {
-    if !level.is_empty() && record.level != level {
+    if !level.is_empty() && severity(&record.level) > severity(level) {
         return false;
     }
     if !query.is_empty() && !record.message.to_lowercase().contains(&query.to_lowercase()) {
         return false;
     }
     true
+}
+
+fn severity(level: &str) -> i32 {
+    match level {
+        "fatal" => 0,
+        "error" => 1,
+        "warn" => 2,
+        "notice" => 3,
+        "info" => 4,
+        "debug" => 5,
+        _ => 6,
+    }
 }
 
 /* -------------------------------- logs ------------------------------- */
@@ -982,5 +997,26 @@ fn render_container(sim: &Sim, name: &str, image: &str, n: i64, at: DateTime<Utc
         message,
         fields: fields(&[("container", name.to_string()), ("image", image.to_string())]),
         cursor: Some(format!("container:{name}:{n}")),
+    }
+}
+
+#[cfg(test)]
+mod level_filter_tests {
+    use super::*;
+
+    fn record(level: &str) -> LogRecord {
+        LogRecord {
+            level: level.into(),
+            message: "m".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_level_keeps_itself_and_everything_worse() {
+        assert!(matches_filter(&record("error"), "warn", ""));
+        assert!(matches_filter(&record("warn"), "warn", ""));
+        assert!(!matches_filter(&record("info"), "warn", ""));
+        assert!(matches_filter(&record("debug"), "", ""));
     }
 }

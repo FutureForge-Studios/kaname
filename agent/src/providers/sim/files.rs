@@ -1029,19 +1029,33 @@ impl Files for SimFiles {
             return Err(ProviderError::conflict(format!("{target} already exists")));
         }
 
+        // The control plane never sends an end-of-input frame for an upload:
+        // the declared size is the end marker (routes/files.ts). Waiting for
+        // the stream to close instead deadlocked every upload — the agent
+        // waited for more bytes, the control plane waited for the result.
         let mut buffer = Vec::new();
-        while let Some(chunk) = s
-            .recv()
-            .await
-            .map_err(|e| ProviderError::internal(format!("receive upload for {target}: {e}")))?
-        {
+        while (buffer.len() as i64) < p.size {
+            let Some(chunk) = s
+                .recv()
+                .await
+                .map_err(|e| ProviderError::internal(format!("receive upload for {target}: {e}")))?
+            else {
+                break;
+            };
             buffer.extend_from_slice(&chunk);
-            if p.size > 0 && buffer.len() as i64 > p.size {
+            if buffer.len() as i64 > p.size {
                 return Err(ProviderError::invalid(format!(
                     "upload exceeded the declared {} bytes",
                     p.size
                 )));
             }
+        }
+        if (buffer.len() as i64) != p.size {
+            return Err(ProviderError::invalid(format!(
+                "upload ended after {} of the declared {} bytes",
+                buffer.len(),
+                p.size
+            )));
         }
 
         write_file(&self.0, &target, buffer, &default_mode(p.mode), true)
