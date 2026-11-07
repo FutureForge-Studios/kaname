@@ -243,6 +243,17 @@ export function StepFooter({
   laterPending?: boolean;
   aside?: React.ReactNode;
 }) {
+  const primaryRef = React.useRef<HTMLButtonElement>(null);
+  const blocked = disabled || laterPending;
+  // A disabled button cannot take focus on mount, so a screen whose
+  // primary action unlocks a moment later (health arriving, a list
+  // loading) focuses it then — unless the operator has already moved.
+  React.useEffect(() => {
+    if (!primaryAutoFocus || blocked) return;
+    const active = document.activeElement;
+    if (!active || active === document.body) primaryRef.current?.focus();
+  }, [primaryAutoFocus, blocked]);
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--kn-border)] pt-5">
       <div className="flex min-w-0 items-center gap-2">
@@ -266,8 +277,8 @@ export function StepFooter({
         size="md"
         iconRight={icon}
         loading={pending}
-        disabled={disabled || laterPending}
-        autoFocus={primaryAutoFocus}
+        ref={primaryRef}
+        disabled={blocked}
       >
         {primary}
       </Button>
