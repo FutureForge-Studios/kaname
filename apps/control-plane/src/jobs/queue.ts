@@ -28,6 +28,14 @@ export interface EnqueueInput {
   runAfterMs?: number;
   /** Give up entirely after this long, even if the agent never returns. */
   expiresInMs?: number;
+  /**
+   * Why the job cannot be claimed yet, known at enqueue time. A job for a
+   * host whose agent is offline is never claimed (see `claim`), so the
+   * worker never gets the chance to say so itself — without this the
+   * drawer said "waiting for a worker" about a job that was waiting for a
+   * host. `claim` clears it.
+   */
+  blockedReason?: string | null;
 }
 
 export class JobQueue {
@@ -57,6 +65,7 @@ export class JobQueue {
         runAfter: new Date(now + (input.runAfterMs ?? 0)),
         // Default: a job that cannot reach its host within 24h is dead.
         expiresAt: new Date(now + (input.expiresInMs ?? 24 * 60 * 60 * 1000)),
+        blockedReason: input.blockedReason ?? null,
       })
       .returning();
 

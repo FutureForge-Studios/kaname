@@ -210,8 +210,8 @@ docker compose -p kaname logs control-plane | grep setup_token
 It lasts 24 hours. Because the installer writes it into `<data-dir>/.env`, restarting the control
 plane re-arms and re-logs that same token.
 
-Then six steps, driven by the server rather than by the browser, so closing the tab resumes in
-place:
+Then four required steps and six optional ones, driven by the server rather than by the browser,
+so closing the tab resumes in place:
 
 1. **Check the install** — live control-plane and agent status. On an all-in-one install this
    screen will not advance while the local agent is not connected.
@@ -220,8 +220,30 @@ place:
 3. **Name this instance** — one field.
 4. **Confirm your first server** — the paired host with its real facts, or a copyable pairing
    one-liner and a waiting state that resolves itself when the agent dials in.
-5. **Preferences** — update cadence, one notification channel, an ACME address. Skippable.
-6. **Done** — into the Command Center.
+5. **Panel address** — a domain for the panel over HTTPS (applied when you finish) and the ACME
+   contact address.
+6. **First website** — a static, PHP or reverse-proxied site on the paired server, or just the
+   domain.
+7. **Email** — deploy Yunori Mail Server on the paired server.
+8. **Backups** — a destination (S3-compatible, Backblaze B2 or a folder on the server) and a
+   nightly encrypted schedule.
+9. **Notifications** — where alerts go (email or a webhook), the outgoing mail server, and the
+   update policy.
+10. **Invite a teammate** — an invitation link with a role.
+11. **Done** — what was set up, read back from each module, with a link to each area, then into
+    the Command Center.
+
+Steps 5–10 are each skippable ("later" records a skip, so the wizard moves on and does not ask
+again). Each does its work through the same route the module's own page uses, and "done" is only
+accepted when what it claims exists.
+
+The **Email** step offers to deploy Yunori Mail Server on the server you just paired, through the
+same `POST /mail-servers` call the Email module makes. Before it starts it says what it needs: an A
+record for `mail.<domain>` pointed at the server, and outbound port 25 open (or a relay such as
+Amazon SES or Postmark). It follows the deploy job live and, when it succeeds, shows the console
+setup link and the first mailbox's password once — exactly as the Email page does. On a simulated
+server it says nothing is really installed; if the server already runs a mail server, it shows that
+instead of offering a second one. "Set up email later" skips it.
 
 Creating the owner retires the setup token and closes the account step. Completing the wizard
 closes the rest: after that `/setup` refuses outright, and anyone who navigates there lands on the
@@ -251,7 +273,7 @@ A fresh install answers on its IP over plain HTTP. There is no certificate, and
 alternative would be an install nobody can sign in to.
 
 Point an A record at the server, then set the domain from **Administration → Settings → Address**,
-or on the last step of onboarding. Ports 80 and 443 both have to be reachable for the certificate
+or on the **Panel address** step of onboarding (applied when you finish). Ports 80 and 443 both have to be reachable for the certificate
 to be issued.
 
 Setting a domain **adds** a site rather than moving one. Caddy's configuration is regenerated with
@@ -275,7 +297,7 @@ a failed unit, a certificate inside its last two weeks, a failed backup, a threa
 address, an alert, a failed deployment, a release becoming available, and an update finishing,
 being rolled back, or the check for one failing.
 
-Email needs an outgoing mail server, set in the same place (or on the last step of onboarding):
+Email needs an outgoing mail server, set in the same place (or on the **Notifications** step of onboarding):
 host, port, STARTTLS/TLS, credentials and a sender. The password is stored encrypted like every
 other credential Kaname holds and is never shown again; the settings only say whether one is set.
 **Send test email** and each channel's **Send test** try the real thing and report exactly what

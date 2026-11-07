@@ -368,7 +368,7 @@ export async function seedDemo(db: Database): Promise<void> {
         expiresAt: new Date(now + 200 * 86_400_000),
         nameservers: ["ns1.cloudflare.com", "ns2.cloudflare.com"],
         verified: true,
-        verificationMethod: "dns",
+        verificationMethod: "dns_txt",
         verifiedAt: new Date(now - 30 * 86_400_000),
         hasMail: spec.domain === "futureforge.dev",
       })

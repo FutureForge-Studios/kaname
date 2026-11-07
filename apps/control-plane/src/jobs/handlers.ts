@@ -16,7 +16,13 @@ import {
   sshConfigs,
   updateRuns,
 } from "@kaname/db/schema";
-import type { AgentMethod, JobType, MethodParams, MethodResult } from "@kaname/contract";
+import type {
+  AgentMethod,
+  CertStatus,
+  JobType,
+  MethodParams,
+  MethodResult,
+} from "@kaname/contract";
 import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
 import { mailJobHandlers } from "./mail.js";
 import type { JobContext, JobHandler, JobWorker } from "./worker.js";
@@ -37,6 +43,32 @@ function requireServer(ctx: JobContext): string {
 
 function params<T>(ctx: JobContext): T {
   return ctx.job.params as T;
+}
+
+/**
+ * Runs the vhost write for a site job. A site row is written as
+ * "provisioning" (create) before the job is queued; if the host refuses
+ * the vhost, nothing else ever moves it, so it sat in "provisioning" for
+ * ever with the reason only in the job log. The row is marked "error"
+ * with the reason instead. An offline agent is not a failure — the job
+ * waits for it (KD-008) — so that one is left alone.
+ */
+async function siteWrite<T>(ctx: JobContext, siteId: string, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (err) {
+    if (!(err instanceof AgentOfflineError)) {
+      await ctx.db
+        .update(sites)
+        .set({
+          status: "error",
+          lastError: err instanceof Error ? err.message : String(err),
+          updatedAt: new Date(),
+        })
+        .where(eq(sites.id, siteId));
+    }
+    throw err;
+  }
 }
 
 /** The agent answered with this error code, as opposed to being unreachable. */
@@ -373,11 +405,14 @@ export function registerJobHandlers(worker: JobWorker): void {
       const serverId = requireServer(ctx);
       const p = params<{ site_id: string } & MethodParams<"site.create">>(ctx);
       const { site_id, ...rest } = p;
-      const result = await ctx.hub.call(serverId, "site.create", rest, {
-        timeoutMs: ctx.job.timeoutMs,
-        signal: ctx.signal,
+      const result = await siteWrite(ctx, site_id, async () => {
+        const written = await ctx.hub.call(serverId, "site.create", rest, {
+          timeoutMs: ctx.job.timeoutMs,
+          signal: ctx.signal,
+        });
+        await ctx.hub.call(serverId, "site.reload", {}, { signal: ctx.signal });
+        return written;
       });
-      await ctx.hub.call(serverId, "site.reload", {}, { signal: ctx.signal });
       await ctx.db
         .update(sites)
         .set({
@@ -393,14 +428,22 @@ export function registerJobHandlers(worker: JobWorker): void {
       const serverId = requireServer(ctx);
       const p = params<{ site_id: string } & MethodParams<"site.update">>(ctx);
       const { site_id, ...rest } = p;
-      const result = await ctx.hub.call(serverId, "site.update", rest, {
-        timeoutMs: ctx.job.timeoutMs,
-        signal: ctx.signal,
+      const result = await siteWrite(ctx, site_id, async () => {
+        const written = await ctx.hub.call(serverId, "site.update", rest, {
+          timeoutMs: ctx.job.timeoutMs,
+          signal: ctx.signal,
+        });
+        await ctx.hub.call(serverId, "site.reload", {}, { signal: ctx.signal });
+        return written;
       });
-      await ctx.hub.call(serverId, "site.reload", {}, { signal: ctx.signal });
       await ctx.db
         .update(sites)
-        .set({ configPath: result.config_path, updatedAt: new Date() })
+        .set({
+          status: "active",
+          configPath: result.config_path,
+          lastError: null,
+          updatedAt: new Date(),
+        })
         .where(eq(sites.id, site_id));
       return result;
     },
@@ -475,18 +518,45 @@ export function registerJobHandlers(worker: JobWorker): void {
     },
     "cert.renew": async (ctx) => {
       const serverId = requireServer(ctx);
-      const p = params<{ certificate_id: string; subject: string; force: boolean }>(ctx);
-      const handle = ctx.hub.stream(
-        serverId,
-        "cert.renew",
-        { subject: p.subject, force: p.force },
-        (d) => void ctx.log_("info", d.trim()),
-        {
-          timeoutMs: ctx.job.timeoutMs,
-          signal: ctx.signal,
-        },
-      );
-      const result = await handle.done;
+      const p = params<{
+        certificate_id: string;
+        subject: string;
+        force: boolean;
+        previous_status?: CertStatus;
+      }>(ctx);
+      let result: MethodResult<"cert.renew">;
+      try {
+        const handle = ctx.hub.stream(
+          serverId,
+          "cert.renew",
+          { subject: p.subject, force: p.force },
+          (d) => void ctx.log_("info", d.trim()),
+          {
+            timeoutMs: ctx.job.timeoutMs,
+            signal: ctx.signal,
+          },
+        );
+        result = await handle.done;
+      } catch (err) {
+        // The route marks the row "pending" when it queues the renewal.
+        // A renewal that failed leaves the old certificate on disk and
+        // still serving, so the row goes back to what it was and keeps
+        // the reason — otherwise it reads "pending" forever and the
+        // failure never reaches the SSL page or the Command Center. An
+        // offline agent is a wait, not a failure (KD-008): the job is
+        // re-queued and the row stays pending until it runs.
+        if (!(err instanceof AgentOfflineError)) {
+          await ctx.db
+            .update(certificates)
+            .set({
+              status: p.previous_status ?? "active",
+              lastError: err instanceof Error ? err.message : String(err),
+              updatedAt: new Date(),
+            })
+            .where(eq(certificates.id, p.certificate_id));
+        }
+        throw err;
+      }
       await ctx.db
         .update(certificates)
         .set({
@@ -532,13 +602,19 @@ export function registerJobHandlers(worker: JobWorker): void {
         .update(deployments)
         .set({ status: "building", startedAt: new Date(), updatedAt: new Date() })
         .where(eq(deployments.id, p.deployment_id));
+      const started = Date.now();
       await ctx.log_("info", "deployment started");
       await ctx.progress(10);
       // The actual build/copy steps run as fs.* and site.* RPCs driven by
       // the deployment service; this handler owns lifecycle and status.
       await ctx.db
         .update(deployments)
-        .set({ status: "succeeded", finishedAt: new Date(), updatedAt: new Date() })
+        .set({
+          status: "succeeded",
+          finishedAt: new Date(),
+          durationMs: Date.now() - started,
+          updatedAt: new Date(),
+        })
         .where(eq(deployments.id, p.deployment_id));
       ctx.events.publish(
         "deployments",
@@ -548,7 +624,47 @@ export function registerJobHandlers(worker: JobWorker): void {
       );
       return { deployment_id: p.deployment_id };
     },
-    "deployment.rollback": async (ctx) => params(ctx),
+    /*
+     * A rollback is itself a deployment row (the route inserts it as
+     * "queued"). This handler used to return its params and leave that
+     * row queued for ever — and a queued row counts as in flight, so
+     * every later deploy or rollback of the site was refused with
+     * "already in flight". It owns the row's lifecycle the same way
+     * deployment.run does.
+     */
+    "deployment.rollback": async (ctx) => {
+      const p = params<{
+        deployment_id: string;
+        rollback_to_deployment_id: string;
+        release_path: string;
+      }>(ctx);
+      const started = Date.now();
+      await ctx.db
+        .update(deployments)
+        .set({ status: "deploying", startedAt: new Date(), updatedAt: new Date() })
+        .where(eq(deployments.id, p.deployment_id));
+      await ctx.log_("info", `rolling back to release ${p.release_path}`);
+      await ctx.progress(50);
+      await ctx.db
+        .update(deployments)
+        .set({
+          status: "succeeded",
+          finishedAt: new Date(),
+          durationMs: Date.now() - started,
+          updatedAt: new Date(),
+        })
+        .where(eq(deployments.id, p.deployment_id));
+      ctx.events.publish(
+        "deployments",
+        "deployment.finished",
+        { deployment_id: p.deployment_id },
+        ctx.job.serverId,
+      );
+      return {
+        deployment_id: p.deployment_id,
+        rollback_to_deployment_id: p.rollback_to_deployment_id,
+      };
+    },
 
     /* mail (Yunori Mail Server): see ./mail.ts */
     ...mailJobHandlers(),
