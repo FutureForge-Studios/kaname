@@ -210,7 +210,8 @@ async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result
     let stop = CancellationToken::new();
     let signals = stop.clone();
     tokio::spawn(async move {
-        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("sigterm");
+        let mut term =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("sigterm");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = term.recv() => {}
@@ -220,7 +221,10 @@ async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result
 
     let mut attempt = Backoff::default();
     while !stop.is_cancelled() {
-        let host = provider.host(&Ctx::background()).await.context("read host identity")?;
+        let host = provider
+            .host(&Ctx::background())
+            .await
+            .context("read host identity")?;
         let opts = conn::Options {
             server_id: store.state.server_id.clone(),
             control_plane_url: store.state.control_plane_url.clone(),
@@ -255,7 +259,11 @@ async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result
 
 /// Holds one connection open until it fails or the process is asked to
 /// stop, and reports how long it lasted.
-async fn session(stop: &CancellationToken, provider: ProviderRef, opts: conn::Options) -> (Duration, anyhow::Error) {
+async fn session(
+    stop: &CancellationToken,
+    provider: ProviderRef,
+    opts: conn::Options,
+) -> (Duration, anyhow::Error) {
     let started = Instant::now();
     let url = opts.connect_url.clone();
     let conn = match conn::dial(opts).await {

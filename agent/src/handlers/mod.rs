@@ -134,7 +134,8 @@ where
 
 /// Serializes a handler's result for the response frame.
 pub(crate) fn reply<T: Serialize>(value: T) -> HResult {
-    serde_json::to_value(value).map_err(|e| WireError::new(ErrorCode::Internal, format!("encode result: {e}")))
+    serde_json::to_value(value)
+        .map_err(|e| WireError::new(ErrorCode::Internal, format!("encode result: {e}")))
 }
 
 /// Decodes the request's params. Absent or `null` params decode to the
@@ -212,7 +213,10 @@ pub(crate) fn check_identifier(field: &str, value: &str) -> Result<(), WireError
     if !(first == b'_' || first.is_ascii_alphabetic()) {
         return Err(invalid(format!("{field} must start with a letter or underscore")));
     }
-    if !bytes.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-') {
+    if !bytes
+        .iter()
+        .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-')
+    {
         return Err(invalid(format!("{field} contains an illegal character")));
     }
     Ok(())
@@ -233,7 +237,10 @@ pub(crate) fn check_unit(unit: &str) -> Result<(), WireError> {
     if unit.is_empty() || unit.len() > 256 {
         return Err(invalid("unit must be between 1 and 256 characters"));
     }
-    if unit.chars().any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '/' | '\0')) {
+    if unit
+        .chars()
+        .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '/' | '\0'))
+    {
         return Err(invalid("unit contains an illegal character"));
     }
     Ok(())
@@ -263,7 +270,10 @@ pub(crate) fn check_email(field: &str, address: &str) -> Result<(), WireError> {
         Some(at) if at > 0 && at < address.len() - 1 && address.len() <= 320 => {}
         _ => return Err(invalid(format!("{field} must be a valid email address"))),
     }
-    if address.chars().any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\0')) {
+    if address
+        .chars()
+        .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '\0'))
+    {
         return Err(invalid(format!("{field} contains an illegal character")));
     }
     Ok(())
@@ -399,7 +409,12 @@ mod tests {
         ) -> PResult<p::PackagesUpgradeResult> {
             unsupported()
         }
-        async fn self_update(&self, _: &Ctx, _: p::SelfUpdateParams, _: StreamRef) -> PResult<p::SelfUpdateResult> {
+        async fn self_update(
+            &self,
+            _: &Ctx,
+            _: p::SelfUpdateParams,
+            _: StreamRef,
+        ) -> PResult<p::SelfUpdateResult> {
             unsupported()
         }
     }
@@ -520,7 +535,12 @@ mod tests {
         async fn extract(&self, _: &Ctx, _: p::FsExtractParams, _: StreamRef) -> PResult<i64> {
             unsupported()
         }
-        async fn download(&self, _: &Ctx, _: p::FsDownloadParams, _: StreamRef) -> PResult<p::FsDownloadResult> {
+        async fn download(
+            &self,
+            _: &Ctx,
+            _: p::FsDownloadParams,
+            _: StreamRef,
+        ) -> PResult<p::FsDownloadResult> {
             unsupported()
         }
         async fn upload(&self, _: &Ctx, _: p::FsUploadParams, _: StreamRef) -> PResult<p::FileEntry> {
@@ -600,7 +620,12 @@ mod tests {
         async fn doctor(&self, _: &Ctx) -> PResult<Vec<p::MailCheck>> {
             unsupported()
         }
-        async fn deploy(&self, _: &Ctx, _: p::MailDeployParams, _: StreamRef) -> PResult<p::MailDeployResult> {
+        async fn deploy(
+            &self,
+            _: &Ctx,
+            _: p::MailDeployParams,
+            _: StreamRef,
+        ) -> PResult<p::MailDeployResult> {
             unsupported()
         }
         async fn update(&self, _: &Ctx, _: StreamRef) -> PResult<()> {
@@ -729,7 +754,11 @@ mod tests {
         async fn read_config(&self, _: &Ctx) -> PResult<p::SshConfigInfo> {
             unsupported()
         }
-        async fn apply_config(&self, _: &Ctx, _: p::SshConfigApplyParams) -> PResult<p::SshConfigApplyResult> {
+        async fn apply_config(
+            &self,
+            _: &Ctx,
+            _: p::SshConfigApplyParams,
+        ) -> PResult<p::SshConfigApplyResult> {
             unsupported()
         }
         async fn sessions(&self, _: &Ctx) -> PResult<Vec<p::SshSessionInfo>> {
@@ -745,20 +774,41 @@ mod tests {
         async fn list(&self, _: &Ctx, _: p::BackupListParams) -> PResult<Vec<p::BackupSnapshotInfo>> {
             unsupported()
         }
-        async fn restore(&self, _: &Ctx, _: p::BackupRestoreParams, _: StreamRef) -> PResult<p::BackupRestoreResult> {
+        async fn restore(
+            &self,
+            _: &Ctx,
+            _: p::BackupRestoreParams,
+            _: StreamRef,
+        ) -> PResult<p::BackupRestoreResult> {
             unsupported()
         }
-        async fn verify(&self, _: &Ctx, _: p::BackupVerifyParams, _: StreamRef) -> PResult<p::BackupVerifyResult> {
+        async fn verify(
+            &self,
+            _: &Ctx,
+            _: p::BackupVerifyParams,
+            _: StreamRef,
+        ) -> PResult<p::BackupVerifyResult> {
             unsupported()
         }
-        async fn prune(&self, _: &Ctx, _: p::BackupPruneParams, _: StreamRef) -> PResult<p::BackupPruneResult> {
+        async fn prune(
+            &self,
+            _: &Ctx,
+            _: p::BackupPruneParams,
+            _: StreamRef,
+        ) -> PResult<p::BackupPruneResult> {
             unsupported()
         }
     }
 
     #[async_trait]
     impl p::Pty for NullProvider {
-        async fn open(&self, _: &Ctx, _: &str, _: p::PtyOpenParams, _: StreamRef) -> PResult<p::PtyOpenResult> {
+        async fn open(
+            &self,
+            _: &Ctx,
+            _: &str,
+            _: p::PtyOpenParams,
+            _: StreamRef,
+        ) -> PResult<p::PtyOpenResult> {
             unsupported()
         }
         async fn resize(&self, _: &Ctx, _: &str, _: p::PtyResizeParams) -> PResult<()> {
@@ -832,7 +882,11 @@ mod tests {
     /// present so nothing is gated out of the comparison.
     fn registry_under_test() -> Registry {
         let m = load_manifest();
-        let caps: BTreeSet<String> = m.methods.iter().flat_map(|x| x.requires.iter().cloned()).collect();
+        let caps: BTreeSet<String> = m
+            .methods
+            .iter()
+            .flat_map(|x| x.requires.iter().cloned())
+            .collect();
         let mut r = Registry::new(CapabilityGate::new(caps));
         register_handlers(&mut r, Arc::new(NullProvider), &[Path::new("/var/lib/kaname")]);
         r
@@ -848,7 +902,9 @@ mod tests {
     }
 
     async fn call(r: &Registry, method: &str, params: Option<Value>) -> HResult {
-        let m = r.get(method).unwrap_or_else(|| panic!("{method} is not registered"));
+        let m = r
+            .get(method)
+            .unwrap_or_else(|| panic!("{method} is not registered"));
         (m.handler)(Ctx::background(), request(method, params)).await
     }
 
@@ -861,8 +917,16 @@ mod tests {
         assert_eq!(m.subprotocol, wire::SUBPROTOCOL, "subprotocol");
         assert_eq!(m.limits.stream_window, wire::STREAM_WINDOW, "stream window");
         assert_eq!(m.limits.max_chunk_bytes, wire::MAX_CHUNK_BYTES, "max chunk bytes");
-        assert_eq!(m.limits.ping_interval_ms, wire::PING_INTERVAL.as_millis() as u64, "ping interval");
-        assert_eq!(m.limits.ping_timeout_multiplier, wire::PING_TIMEOUT_MULTIPLIER, "ping multiplier");
+        assert_eq!(
+            m.limits.ping_interval_ms,
+            wire::PING_INTERVAL.as_millis() as u64,
+            "ping interval"
+        );
+        assert_eq!(
+            m.limits.ping_timeout_multiplier,
+            wire::PING_TIMEOUT_MULTIPLIER,
+            "ping multiplier"
+        );
     }
 
     #[test]
@@ -917,7 +981,11 @@ mod tests {
             want.sort();
             let mut got: Vec<String> = resolved.requires.iter().map(|s| s.to_string()).collect();
             got.sort();
-            assert_eq!(got, want, "{}: capability requirements differ from the contract", method.name);
+            assert_eq!(
+                got, want,
+                "{}: capability requirements differ from the contract",
+                method.name
+            );
         }
     }
 
@@ -964,9 +1032,18 @@ mod tests {
         register_handlers(&mut bare, Arc::new(NullProvider), &[]);
         let err = bare.resolve("service.list").unwrap_err();
         assert_eq!(err.code, ErrorCode::Unsupported);
-        assert!(bare.resolve("system.info").is_ok(), "system.info requires no capability");
-        assert_eq!(bare.resolve("mail.deploy").unwrap_err().code, ErrorCode::Unsupported);
-        assert_eq!(bare.resolve("mail.status").unwrap_err().code, ErrorCode::Unsupported);
+        assert!(
+            bare.resolve("system.info").is_ok(),
+            "system.info requires no capability"
+        );
+        assert_eq!(
+            bare.resolve("mail.deploy").unwrap_err().code,
+            ErrorCode::Unsupported
+        );
+        assert_eq!(
+            bare.resolve("mail.status").unwrap_err().code,
+            ErrorCode::Unsupported
+        );
     }
 
     #[test]
@@ -975,7 +1052,8 @@ mod tests {
         assert_eq!(d.first_mailbox, "hello");
         let d: p::MailDeployParams = decode(&request("mail.deploy", Some(Value::Null))).unwrap();
         assert_eq!(d.sending, "direct");
-        let err = decode::<p::SignalParams>(&request("process.signal", Some(json!({"pid": "x"})))).unwrap_err();
+        let err =
+            decode::<p::SignalParams>(&request("process.signal", Some(json!({"pid": "x"})))).unwrap_err();
         assert_eq!(err.code, ErrorCode::InvalidParams);
         assert!(err.message.starts_with("process.signal: "), "{}", err.message);
     }
@@ -984,42 +1062,138 @@ mod tests {
     async fn validation_fails_before_the_provider_is_reached() {
         let r = registry_under_test();
         let cases: Vec<(&str, Value, ErrorCode)> = vec![
-            ("system.reboot", json!({"delay_seconds": 4000}), ErrorCode::InvalidParams),
-            ("system.self_update", json!({"version": "1", "url": "u", "sha256": "ab"}), ErrorCode::InvalidParams),
+            (
+                "system.reboot",
+                json!({"delay_seconds": 4000}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "system.self_update",
+                json!({"version": "1", "url": "u", "sha256": "ab"}),
+                ErrorCode::InvalidParams,
+            ),
             ("service.status", json!({"unit": "a b"}), ErrorCode::InvalidParams),
             ("process.list", json!({"sort": "disk"}), ErrorCode::InvalidParams),
-            ("process.signal", json!({"pid": 1, "signal": "SIGFOO"}), ErrorCode::InvalidParams),
-            ("container.inspect", json!({"id": "a;b"}), ErrorCode::InvalidParams),
+            (
+                "process.signal",
+                json!({"pid": 1, "signal": "SIGFOO"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "container.inspect",
+                json!({"id": "a;b"}),
+                ErrorCode::InvalidParams,
+            ),
             ("fs.list", json!({"path": "var/www"}), ErrorCode::InvalidParams),
-            ("fs.read", json!({"path": "/var/www/../../etc/shadow"}), ErrorCode::InvalidParams),
-            ("fs.stat", json!({"path": "/var/lib/kaname/agent.key"}), ErrorCode::PermissionDenied),
-            ("fs.chmod", json!({"paths": ["/tmp/x"], "mode": "9"}), ErrorCode::InvalidParams),
+            (
+                "fs.read",
+                json!({"path": "/var/www/../../etc/shadow"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "fs.stat",
+                json!({"path": "/var/lib/kaname/agent.key"}),
+                ErrorCode::PermissionDenied,
+            ),
+            (
+                "fs.chmod",
+                json!({"paths": ["/tmp/x"], "mode": "9"}),
+                ErrorCode::InvalidParams,
+            ),
             ("fs.chown", json!({"paths": ["/tmp/x"]}), ErrorCode::InvalidParams),
-            ("site.create", json!({"name": "a", "server_names": ["a.b"], "webroot": "/srv", "runtime": "cgi"}), ErrorCode::InvalidParams),
-            ("cert.issue", json!({"domains": ["a.b"], "challenge": "tls-alpn"}), ErrorCode::InvalidParams),
+            (
+                "site.create",
+                json!({"name": "a", "server_names": ["a.b"], "webroot": "/srv", "runtime": "cgi"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "cert.issue",
+                json!({"domains": ["a.b"], "challenge": "tls-alpn"}),
+                ErrorCode::InvalidParams,
+            ),
             ("dns.resolve", json!({"name": "a.b"}), ErrorCode::InvalidParams),
-            ("mail.deploy", json!({"version": "1", "url": "https://x", "sha256": "zz", "domain": "d", "hostname": "h", "admin_email": "a@b"}), ErrorCode::InvalidParams),
-            ("mail.deploy", json!({"version": "1", "url": "https://x", "sha256": "0".repeat(64), "domain": "d", "hostname": "h", "admin_email": "a@b", "sending": "relay"}), ErrorCode::InvalidParams),
-            ("mail.deploy", json!({"version": "1", "url": "https://x", "sha256": "0".repeat(64), "domain": "d", "hostname": "h", "admin_email": "ab"}), ErrorCode::InvalidParams),
+            (
+                "mail.deploy",
+                json!({"version": "1", "url": "https://x", "sha256": "zz", "domain": "d", "hostname": "h", "admin_email": "a@b"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "mail.deploy",
+                json!({"version": "1", "url": "https://x", "sha256": "0".repeat(64), "domain": "d", "hostname": "h", "admin_email": "a@b", "sending": "relay"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "mail.deploy",
+                json!({"version": "1", "url": "https://x", "sha256": "0".repeat(64), "domain": "d", "hostname": "h", "admin_email": "ab"}),
+                ErrorCode::InvalidParams,
+            ),
             ("mail.domain.add", json!({"name": ""}), ErrorCode::InvalidParams),
-            ("mail.mailbox.add", json!({"address": "nobody"}), ErrorCode::InvalidParams),
-            ("mail.alias.add", json!({"alias": "a@b", "mailbox": "c"}), ErrorCode::InvalidParams),
-            ("db.database.create", json!({"engine": "sqlite", "name": "x"}), ErrorCode::InvalidParams),
-            ("db.user.create", json!({"engine": "mysql", "username": "u", "password": "short"}), ErrorCode::InvalidParams),
-            ("db.grant.apply", json!({"engine": "mysql", "database": "d", "username": "u", "privileges": ["GRANT"]}), ErrorCode::InvalidParams),
-            ("fw.apply", json!({"rollback_seconds": 500}), ErrorCode::InvalidParams),
+            (
+                "mail.mailbox.add",
+                json!({"address": "nobody"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "mail.alias.add",
+                json!({"alias": "a@b", "mailbox": "c"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "db.database.create",
+                json!({"engine": "sqlite", "name": "x"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "db.user.create",
+                json!({"engine": "mysql", "username": "u", "password": "short"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "db.grant.apply",
+                json!({"engine": "mysql", "database": "d", "username": "u", "privileges": ["GRANT"]}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "fw.apply",
+                json!({"rollback_seconds": 500}),
+                ErrorCode::InvalidParams,
+            ),
             ("fw.ban", json!({"target": "evil;rm"}), ErrorCode::InvalidParams),
-            ("ssh.keys.apply", json!({"user": "root", "keys": [{"public_key": "a\nb"}]}), ErrorCode::InvalidParams),
-            ("ssh.config.apply", json!({"port": 70000}), ErrorCode::InvalidParams),
-            ("backup.list", json!({"repository": "r"}), ErrorCode::InvalidParams),
-            ("backup.prune", json!({"repository": "r", "password_ref": "p", "keep_last": -1}), ErrorCode::InvalidParams),
+            (
+                "ssh.keys.apply",
+                json!({"user": "root", "keys": [{"public_key": "a\nb"}]}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "ssh.config.apply",
+                json!({"port": 70000}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "backup.list",
+                json!({"repository": "r"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "backup.prune",
+                json!({"repository": "r", "password_ref": "p", "keep_last": -1}),
+                ErrorCode::InvalidParams,
+            ),
             ("log.tail", json!({}), ErrorCode::InvalidParams),
-            ("pty.open", json!({"cols": 0, "rows": 24}), ErrorCode::InvalidParams),
+            (
+                "pty.open",
+                json!({"cols": 0, "rows": 24}),
+                ErrorCode::InvalidParams,
+            ),
             ("pty.resize", json!({"cols": 80, "rows": 24}), ErrorCode::NotFound),
             ("pty.close", Value::Null, ErrorCode::NotFound),
             // A valid call to a streaming method with no stream is the
             // connection's mistake, not the caller's.
-            ("service.logs", json!({"unit": "nginx.service"}), ErrorCode::Internal),
+            (
+                "service.logs",
+                json!({"unit": "nginx.service"}),
+                ErrorCode::Internal,
+            ),
             ("mail.update", Value::Null, ErrorCode::Internal),
             // A valid call reaches the null provider, which refuses it.
             ("system.info", Value::Null, ErrorCode::Unsupported),
@@ -1099,7 +1273,11 @@ mod tests {
         .collect();
         for method in &m.methods {
             for c in &method.requires {
-                assert!(known.contains_key(c.as_str()), "{}: unknown capability {c}", method.name);
+                assert!(
+                    known.contains_key(c.as_str()),
+                    "{}: unknown capability {c}",
+                    method.name
+                );
             }
         }
     }

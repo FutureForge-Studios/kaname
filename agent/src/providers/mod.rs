@@ -215,7 +215,11 @@ impl Ctx {
     }
 
     pub fn check(&self) -> PResult<()> {
-        if self.is_cancelled() { Err(self.error()) } else { Ok(()) }
+        if self.is_cancelled() {
+            Err(self.error())
+        } else {
+            Ok(())
+        }
     }
 
     pub fn remaining(&self) -> Option<Duration> {
@@ -483,7 +487,13 @@ pub trait Backups: Send + Sync {
 pub trait Pty: Send + Sync {
     /// Runs the shell until the stream closes, the session is closed or the
     /// context ends. It reports the child pid as soon as it starts.
-    async fn open(&self, ctx: &Ctx, session_id: &str, p: PtyOpenParams, s: StreamRef) -> PResult<PtyOpenResult>;
+    async fn open(
+        &self,
+        ctx: &Ctx,
+        session_id: &str,
+        p: PtyOpenParams,
+        s: StreamRef,
+    ) -> PResult<PtyOpenResult>;
     async fn resize(&self, ctx: &Ctx, session_id: &str, p: PtyResizeParams) -> PResult<()>;
     async fn close(&self, ctx: &Ctx, session_id: &str) -> PResult<()>;
 }
@@ -542,7 +552,10 @@ pub async fn open(name: &str, opts: Options) -> anyhow::Result<ProviderRef> {
         "sim" => Ok(sim::open(opts).await?),
         #[cfg(target_os = "linux")]
         "linux" => Ok(linux::open(opts).await?),
-        other => anyhow::bail!("provider {other:?} is not available in this build (have: {:?})", registered()),
+        other => anyhow::bail!(
+            "provider {other:?} is not available in this build (have: {:?})",
+            registered()
+        ),
     }
 }
 
