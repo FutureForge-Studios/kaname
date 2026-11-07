@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   FEED_VERSION,
+  closeJobDrawer,
   copyableValue,
   definition,
   fleetServer,
@@ -353,7 +354,7 @@ test("a relay deploy carries its password to the host and nowhere else", async (
   await relay.getByLabel("Region").fill("eu-west-1");
   await relay.getByLabel("Username").fill("AKIAE2EEXAMPLE");
   await expect(deploy).toBeDisabled();
-  await relay.getByLabel("Password", { exact: true }).fill(RELAY_PASSWORD);
+  await relay.getByRole("textbox", { name: /^Password/ }).fill(RELAY_PASSWORD);
   await expect(deploy).toBeEnabled();
   await relay.getByLabel("Port").fill("65536");
   await expect(deploy).toBeDisabled();
@@ -387,7 +388,9 @@ test("a relay deploy carries its password to the host and nowhere else", async (
   const everything = [JSON.stringify(job), await api.jobLog(job.id), trail];
   for (const text of everything) expect(text).not.toContain(RELAY_PASSWORD);
 
-  /* Its own secrets, once. */
+  /* Its own secrets, once. The job drawer opened over the page with the
+   * deploy; it is closed first, as an operator would. */
+  await closeJobDrawer(page);
   await finish.getByRole("button", { name: "Reveal setup link and password" }).click();
   noteSecret("setup_url", (await copyableValue(finish, "Console setup link").innerText()).trim());
   noteSecret(
