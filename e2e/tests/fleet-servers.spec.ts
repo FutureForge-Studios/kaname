@@ -68,11 +68,21 @@ test("the add-server form names the field that is wrong, before and after the AP
   const hostname = dialog.getByRole("textbox", { name: /^Hostname/ });
   const submit = dialog.getByRole("button", { name: "Create and enroll" });
 
-  /* Nothing typed: both required fields say so, each on itself. */
+  /* Nothing typed: the browser's own required check stops the submit,
+   * so not even a request is spent on it. */
+  await submit.click();
+  await expect(dialog).toBeVisible();
+  expect(await name.evaluate((el: HTMLInputElement) => el.validity.valueMissing)).toBe(true);
+  expect(await hostname.evaluate((el: HTMLInputElement) => el.validity.valueMissing)).toBe(true);
+
+  /* Whitespace gets past `required` but not the contract: the name is
+   * trimmed before it is checked, and the error sits on that field. */
+  await name.fill("   ");
+  await hostname.fill("ok.example.com");
   await submit.click();
   await expect(name).toHaveAttribute("aria-invalid", "true");
   await expect(name).toHaveAccessibleDescription(/String must contain at least 1 character\(s\)/);
-  await expect(hostname).toHaveAttribute("aria-invalid", "true");
+  await expect(hostname).not.toHaveAttribute("aria-invalid", "true");
 
   /* A hostname that cannot be one, and a name one character too long. */
   await name.fill("x".repeat(65));
@@ -119,7 +129,7 @@ test("a new server enrolls with the command the dialog prints and connects on it
   const enroll = page.getByRole("dialog", { name: `Enroll ${NEW_HOST}` });
   await expect(enroll).toBeVisible();
   await expect(connectionLabel(enroll)).toHaveText("Never enrolled");
-  await expect(enroll.getByText("Waiting for the agent to connect")).toBeVisible();
+  await expect(enroll.locator("p", { hasText: "Waiting for the agent to connect" })).toBeVisible();
 
   /* The one-liner, read off the screen exactly as an operator would copy it. */
   const command = enroll.locator("code").filter({ hasText: "--token=" }).first();
@@ -135,7 +145,7 @@ test("a new server enrolls with the command the dialog prints and connects on it
   newAgent = startAgent(NEW_HOST);
 
   /* Resolved on its own, in the dialog that was left open. */
-  await expect(enroll.getByText("Agent connected")).toBeVisible({ timeout: 30_000 });
+  await expect(enroll.locator("p", { hasText: "Agent connected" })).toBeVisible({ timeout: 30_000 });
   await expect(connectionLabel(enroll)).toHaveText("Connected");
 
   /* The token was spent by that enrollment: a second box cannot reuse it. */
@@ -164,11 +174,16 @@ test("re-issuing the enrollment command supersedes the token printed before it",
   /* The menu entry mints a fresh one, which is the only one live after. */
   await page.goto(`/infrastructure/servers/${target.id}`);
   await page.getByRole("button", { name: "Server actions" }).click();
+  const minted = page.waitForResponse(
+    (response) => response.url().endsWith("/enroll-token") && response.status() === 200,
+  );
   await page.getByRole("menuitem", { name: "Enrollment command" }).click();
+  await minted;
   const dialog = page.getByRole("dialog", { name: `Enroll ${NEW_HOST}` });
   await expect(dialog).toBeVisible();
   await expect(dialog).toContainText("Any previously issued token is superseded.");
-  await dialog.getByRole("button", { name: "Close" }).click();
+  await dialog.getByRole("button", { name: "Close", exact: true }).last().click();
+  await expect(dialog).toBeHidden();
 
   await expect(enrollAgent(`${NEW_HOST}-stale`, first.control_plane_url, first.token)).rejects.toThrow(
     /Enrollment token is invalid, used or expired/,

@@ -80,6 +80,9 @@ async function open(page: Page, path: string): Promise<Locator> {
   await expect(page.getByRole("heading", { level: 1, name: "File Manager" })).toBeVisible();
   const table = page.getByRole("table", { name: "Directory listing" });
   await expect(table).toBeVisible();
+  /* The toolbar arms once the listing has said this account may write;
+   * a file handed to the picker before then is dropped by design. */
+  await expect(page.getByRole("button", { name: "Upload", exact: true })).toBeEnabled();
   return table;
 }
 

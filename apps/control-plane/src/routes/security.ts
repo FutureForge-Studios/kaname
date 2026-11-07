@@ -166,7 +166,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     const serverId = requireServerId(q.server_id);
     const server = await loadServer(req, serverId, "security.firewall:read");
 
-    const state = await firewallStateRow(req, serverId);
+    const state = await settleLapsedWindow(req, server, await firewallStateRow(req, serverId));
     const [total] = await req.ctx.db
       .select({ n: sql<number>`count(*)::int` })
       .from(firewallRules)
@@ -386,7 +386,11 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         default_inbound: body.default_inbound,
         default_outbound: body.default_outbound,
         rollback_seconds: body.rollback_seconds,
-        rules: proposed.map((rule) => ({
+        // Only enabled rules reach the host. fw.apply has no per-rule
+        // enabled flag, so sending a disabled rule installed it as active —
+        // and the lockout check above (which skips disabled rules) had
+        // judged a different rule set from the one the host then ran.
+        rules: proposed.filter((rule) => rule.enabled).map((rule) => ({
           priority: rule.priority,
           action: rule.action,
           direction: rule.direction,
@@ -844,7 +848,15 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     const server = await loadServer(req, serverId, "security.ssh:read");
 
     const cached = await sshConfigRow(req, serverId);
-    if (cached && !q.refresh) return item(reply, toSshConfig(server, cached));
+    // An unconfirmed window that has closed means sshd on the host is back
+    // on its previous configuration, so the cached copy of the applied one
+    // is no longer true. Read the host instead of serving it.
+    const lapsed = Boolean(
+      cached?.pendingRollbackToken &&
+        cached.pendingRollbackUntil &&
+        cached.pendingRollbackUntil.getTime() <= Date.now(),
+    );
+    if (cached && !q.refresh && !lapsed) return item(reply, toSshConfig(server, cached));
 
     // Reading sshd's effective config has no side effect, so it passes
     // through rather than becoming a job (KD-008).
@@ -879,9 +891,67 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
           x11Forwarding: live.x11_forwarding,
           lastSyncedAt: now,
           updatedAt: now,
+          ...(lapsed ? { pendingRollbackToken: null, pendingRollbackUntil: null } : {}),
         },
       })
       .returning();
+
+    return item(reply, toSshConfig(server, row!));
+  });
+
+  /**
+   * Keeps an sshd configuration applied with a rollback window. Without
+   * this there was no way to keep one at all: the host armed its revert,
+   * nothing could cancel it, and every change silently undid itself when
+   * the window closed. The agent's rollback guard is shared by the
+   * firewall and sshd, so fw.confirm with the sshd token is the cancel.
+   * Not a job, for the same reason as /firewall/confirm.
+   */
+  app.post("/ssh/config/confirm", async (req, reply) => {
+    const body = parseBody(req, serverBody);
+    const server = await loadConnectedServer(req, body.server_id, "security.ssh:write");
+    const h = helpers(req);
+
+    const current = await sshConfigRow(req, server.id);
+    if (!current?.pendingRollbackToken) {
+      throw conflict(`sshd on ${server.name} has no configuration waiting to be confirmed.`, {
+        summary: "Either it was already confirmed, or the window closed and the host reverted.",
+        actions: [{ label: "sshd configuration", href: `/security/ssh?panel=config&server_id=${server.id}` }],
+      });
+    }
+    if (current.pendingRollbackUntil && current.pendingRollbackUntil.getTime() < Date.now()) {
+      throw conflict(
+        `The rollback window on ${server.name} closed at ${current.pendingRollbackUntil.toISOString()}.`,
+        {
+          summary:
+            "sshd has already gone back to its previous configuration. Apply the change again, then confirm inside the window.",
+          actions: [{ label: "Re-read from host", href: `/security/ssh?panel=config&server_id=${server.id}` }],
+        },
+      );
+    }
+
+    await req.ctx.hub.call(
+      server.id,
+      "fw.confirm",
+      { rollback_token: current.pendingRollbackToken },
+      { timeoutMs: 10_000 },
+    );
+
+    const [row] = await req.ctx.db
+      .update(sshConfigs)
+      .set({ pendingRollbackToken: null, pendingRollbackUntil: null, updatedAt: new Date() })
+      .where(eq(sshConfigs.serverId, server.id))
+      .returning();
+
+    await req.ctx.audit.record({
+      actor: h.actor(),
+      action: "ssh.config_confirmed",
+      targetType: "server",
+      targetId: server.id,
+      targetLabel: server.name,
+      serverId: server.id,
+    });
+    req.ctx.events.publish("servers", "ssh.config_confirmed", { server_id: server.id }, server.id);
 
     return item(reply, toSshConfig(server, row!));
   });
@@ -941,9 +1011,11 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         lockout: warnings,
         rollback: {
           seconds: rollback_seconds,
+          confirm_action: "ssh.config_confirm",
+          confirm_href: `/api/v1/ssh/config/confirm`,
           summary:
             rollback_seconds > 0
-              ? `sshd on ${server.name} reverts to its current configuration in ${rollback_seconds} seconds unless the new one holds. Open a second SSH session before you close this one.`
+              ? `sshd on ${server.name} reverts to its current configuration in ${rollback_seconds} seconds unless you confirm. Open a second SSH session and check it works before you confirm.`
               : "No rollback window was requested. If the new sshd configuration locks you out, it stays that way.",
         },
       },
@@ -1112,6 +1184,54 @@ async function firewallStateRow(req: FastifyRequest, serverId: string): Promise<
     .where(eq(firewallState.serverId, serverId))
     .limit(1);
   return rows[0] ?? null;
+}
+
+/**
+ * A window that closed without a confirm means the host has put its
+ * previous rule set back on its own timer. Kaname still holds the rules
+ * that were applied, so unless that is recorded the status would go on
+ * reporting them as live — the one lie this page must never tell. The
+ * applied marker is cleared, which makes every rule read as staged again
+ * (true: the host does not have them), and the revert is audited because
+ * the host changed without anyone pressing a button.
+ */
+async function settleLapsedWindow(
+  req: FastifyRequest,
+  server: ServerRow,
+  state: StateRow | null,
+): Promise<StateRow | null> {
+  if (!state?.pendingRollbackToken || !state.pendingRollbackUntil) return state;
+  if (state.pendingRollbackUntil.getTime() > Date.now()) return state;
+
+  const lapsedAt = state.pendingRollbackUntil;
+  const [row] = await req.ctx.db
+    .update(firewallState)
+    .set({
+      pendingRollbackToken: null,
+      pendingRollbackUntil: null,
+      lastAppliedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(firewallState.serverId, server.id),
+        eq(firewallState.pendingRollbackToken, state.pendingRollbackToken),
+      ),
+    )
+    .returning();
+  if (!row) return (await firewallStateRow(req, server.id)) ?? state;
+
+  await req.ctx.audit.record({
+    actor: { type: "system", id: null, name: "rollback window", ip: null, userAgent: null },
+    action: "firewall.reverted",
+    targetType: "server",
+    targetId: server.id,
+    targetLabel: server.name,
+    serverId: server.id,
+    metadata: { window_closed_at: lapsedAt.toISOString() },
+  });
+  req.ctx.events.publish("servers", "firewall.reverted", { server_id: server.id }, server.id);
+  return row;
 }
 
 async function sshConfigRow(req: FastifyRequest, serverId: string): Promise<SshConfigRow | null> {
