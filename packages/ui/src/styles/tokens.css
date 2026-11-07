@@ -1,103 +1,111 @@
 /* ------------------------------------------------------------------ *
- * Kaname design tokens — the Yunori design.
+ * Kaname design tokens — the FF Studios design, Apple UI layer.
  *
- * Visual language shared with the Yunori Mail Server console
- * (yunori.email): warm off-white paper, near-ink text, one terracotta
- * accent ("torii"), deep navy-ink dark mode. Values mirror that product's
- * token sheet (console/src/design/yunori/tokens.css); the `--kn-*` names
- * are Kaname's and never change, so components never hardcode a hex
- * value and never use an arbitrary spacing value off the 4px grid.
+ * Palette, type lanes and the one-accent rule come from the FutureForge
+ * Studios system (ffstudios DESIGN-SYSTEM.md): ink canvas, three text
+ * tiers, brand purple #7A4FF4 as the only accent. On top of it sits an
+ * Apple-style UI layer that deliberately overrides that system's "radius
+ * 0, no shadows" rule: continuous rounded corners, translucent materials
+ * on the chrome, soft layered depth on floating surfaces, a spring-like
+ * ease and a focus halo. See docs/design-system.md and KD-036.
  *
- * Light is the default and the design target; dark ships with the same
- * token names.
+ * Dark is the default and the design target; light is built from the
+ * ffstudios paper palette with the same token names. The `--kn-*` names
+ * never change, so components never hardcode a hex value and never use
+ * an arbitrary spacing value off the 4px grid.
  * ------------------------------------------------------------------ */
 
 :root,
-[data-theme="light"] {
-  color-scheme: light;
+[data-theme="dark"] {
+  color-scheme: dark;
 
-  /* --- surfaces (paper) ----------------------------------------- */
-  --kn-bg: #faf7f2; /* background 39 44% 96.5% */
-  --kn-bg-inset: #f5f2ec; /* a hair darker than bg */
-  --kn-surface: #fefdfb; /* surface / card 40 56% 99% */
-  --kn-surface-2: #f1eee9; /* raised 36 24% 93% */
-  --kn-surface-3: #ebe7e0; /* pressed, active row */
-  --kn-overlay: rgb(15 20 36 / 45%); /* scrim 226 40% 10% @ .45 */
+  /* --- surfaces (ink) ------------------------------------------- */
+  --kn-bg: #0a0a0c; /* canvas */
+  --kn-bg-inset: #060608; /* the recess: terminal, code wells */
+  --kn-surface: #131316; /* cards, tables, one step of lift */
+  --kn-surface-2: #1a1a1f; /* raised: hover, menus, selected */
+  --kn-surface-3: #24242b; /* pressed, active row */
+  --kn-overlay: rgb(0 0 0 / 60%);
 
-  /* --- lines ---------------------------------------------------- */
-  --kn-border: #e2ded9; /* 34 14% 87% */
-  --kn-border-strong: #c9c3ba; /* 34 12% 76% */
-  --kn-border-subtle: #ebe8e5;
+  /* --- lines: white at fixed alphas ----------------------------- */
+  --kn-border: rgb(255 255 255 / 8%);
+  --kn-border-strong: rgb(255 255 255 / 16%);
+  --kn-border-subtle: rgb(255 255 255 / 5%);
 
-  /* --- text (ink) ----------------------------------------------- */
-  --kn-text: #121621; /* foreground 225 30% 10% */
-  --kn-text-2: #595d69; /* muted-foreground 225 8% 38% */
-  --kn-text-3: #757a8a; /* 225 8% 50% — 4.0:1 on bg */
-  --kn-text-inverse: #fbfaf8;
+  /* --- text ----------------------------------------------------- */
+  --kn-text: #f4f4f5; /* 18.0:1 on bg */
+  --kn-text-2: #b4b4bc; /* 9.6:1 */
+  --kn-text-3: #8a8a93; /* 5.8:1 */
+  --kn-text-inverse: #0a0a0c;
 
-  /* --- accent: torii (terracotta) ------------------------------- */
-  --kn-accent-300: #f88f62;
-  --kn-accent-400: #ed5d31;
-  --kn-accent-500: #ce3e12; /* torii 14 84% 44% */
-  --kn-accent-600: #bc3810; /* torii-ink 14 84% 40% */
-  --kn-accent-700: #a0300e;
-  --kn-accent-fg: #ffffff;
-  --kn-accent-soft: rgb(206 62 18 / 12%);
-  --kn-accent-soft-strong: rgb(206 62 18 / 22%);
+  /* --- accent: FF purple. 500 never carries text (4.0:1). ------- */
+  --kn-accent-300: #c9b8fb;
+  --kn-accent-400: #a98df8; /* ff accent-fg: links, active icons, the hot datum (7.4:1) */
+  --kn-accent-500: #7a4ff4; /* ff accent: brand, borders, lit cells */
+  --kn-accent-600: #6a3ee8; /* ff accent-hover: primary fill (white on it 6.1:1) */
+  --kn-accent-700: #5a30d4; /* pressed */
+  --kn-accent-fg: #ffffff; /* ff on-accent */
+  --kn-accent-soft: rgb(122 79 244 / 16%);
+  --kn-accent-soft-strong: rgb(122 79 244 / 30%);
 
-  /* --- semantic ------------------------------------------------- */
-  --kn-ok: #27684c; /* success-ink */
-  --kn-ok-soft: rgb(39 104 76 / 14%);
-  --kn-warn: #904f0e; /* warning-ink */
-  --kn-warn-soft: rgb(144 79 14 / 14%);
-  --kn-danger: #b6202f; /* destructive 354 70% 42% */
-  --kn-danger-soft: rgb(182 32 47 / 14%);
-  --kn-info: #325f76; /* info-ink */
-  --kn-info-soft: rgb(50 95 118 / 14%);
-  --kn-neutral-soft: rgb(89 93 105 / 12%);
+  /* --- semantic: ff secondary hues ------------------------------ */
+  --kn-ok: #4fe3cb; /* teal, 12.4:1 */
+  --kn-ok-soft: rgb(79 227 203 / 14%);
+  --kn-warn: #fbb13c; /* yellow, 10.8:1 */
+  --kn-warn-soft: rgb(251 177 60 / 14%);
+  --kn-danger: #f45b69; /* red, 6.2:1 */
+  --kn-danger-soft: rgb(244 91 105 / 14%);
+  --kn-info: #7cb7ff; /* derived: the ff palette has no blue */
+  --kn-info-soft: rgb(124 183 255 / 14%);
+  --kn-neutral-soft: rgb(180 180 188 / 12%);
 
-  /* --- chart ramp (torii-led) ----------------------------------- */
-  --kn-chart-1: #ce3e12;
-  --kn-chart-2: #325f76;
-  --kn-chart-3: #27684c;
-  --kn-chart-4: #904f0e;
-  --kn-chart-5: #b6202f;
-  --kn-chart-6: #5c678a; /* muted navy */
-  --kn-chart-grid: #ebe8e5;
+  /* --- chart ramp (accent-led) ---------------------------------- */
+  --kn-chart-1: #a98df8;
+  --kn-chart-2: #7cb7ff;
+  --kn-chart-3: #4fe3cb;
+  --kn-chart-4: #fbb13c;
+  --kn-chart-5: #f45b69;
+  --kn-chart-6: #8a8a93;
+  --kn-chart-grid: rgb(255 255 255 / 6%);
 
-  /* --- radius: from --radius .5rem (nothing pill-shaped except status badges) */
-  --kn-r-xs: 4px;
-  --kn-r-sm: 6px;
-  --kn-r-md: 8px;
-  --kn-r-lg: 12px;
+  /* --- radius: continuous corners (pill only for badges, segments) */
+  --kn-r-xs: 6px;
+  --kn-r-sm: 8px;
+  --kn-r-md: 10px;
+  --kn-r-lg: 14px;
+  --kn-r-xl: 16px; /* dialogs, drawers */
   --kn-r-pill: 9999px;
 
-  /* --- elevation: Yunori shadow-panel / shadow-pop recipe ------- */
-  --kn-shadow-tint: 226 40% 10%;
-  --kn-shadow-sm: 0 1px 2px 0 hsl(var(--kn-shadow-tint) / 0.05);
-  --kn-shadow-md: 0 4px 10px -4px hsl(var(--kn-shadow-tint) / 0.07),
-    0 1px 2px 0 hsl(var(--kn-shadow-tint) / 0.05);
-  --kn-shadow-lg: 0 16px 40px -12px hsl(var(--kn-shadow-tint) / 0.12),
-    0 4px 10px -4px hsl(var(--kn-shadow-tint) / 0.07);
+  /* --- depth: a tight ambient line plus a wide, faint drop ------- */
+  --kn-shadow-sm: 0 1px 1px rgb(0 0 0 / 24%), 0 4px 14px -6px rgb(0 0 0 / 40%);
+  --kn-shadow-md: 0 1px 2px rgb(0 0 0 / 30%), 0 12px 32px -10px rgb(0 0 0 / 55%);
+  --kn-shadow-lg: 0 1px 3px rgb(0 0 0 / 32%), 0 28px 64px -16px rgb(0 0 0 / 65%);
 
-  /* --- focus ---------------------------------------------------- */
-  --kn-ring: var(--kn-accent-500);
+  /* --- materials: translucent chrome (sidebar, top bar) --------- */
+  --kn-material: rgb(19 19 22 / 72%);
+  --kn-material-filter: saturate(180%) blur(20px);
+
+  /* --- focus: an Apple-style halo in ff accent-fg --------------- */
+  --kn-ring: rgb(169 141 248 / 60%); /* 3.3:1 on bg */
+  --kn-ring-width: 3px;
+  --kn-ring-offset-width: 2px;
   --kn-ring-offset: var(--kn-bg);
 
-  /* --- motion: 150-250ms, the "quiet" curve, opacity/transform only */
-  --kn-ease: cubic-bezier(0.22, 1, 0.36, 1);
-  --kn-dur-fast: 150ms;
-  --kn-dur: 200ms;
-  --kn-dur-slow: 250ms;
+  /* --- motion: spring-like ease, opacity/transform only --------- */
+  --kn-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --kn-dur-fast: 140ms;
+  --kn-dur: 240ms;
+  --kn-dur-slow: 360ms;
 
   /* --- type ----------------------------------------------------- */
   --kn-font-sans:
-    "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "Inter", system-ui,
+    sans-serif;
   --kn-font-mono:
-    "Geist Mono Variable", "Geist Mono", ui-monospace, "SFMono-Regular", "SF Mono", Menlo,
-    Consolas, monospace;
-  --kn-font-display: "Fraunces Variable", "Fraunces", ui-serif, Georgia, serif;
+    "SF Mono", ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+  --kn-font-display:
+    var(--font-geist-pixel-square, "Geist Pixel Square"), "SF Pro Display", "Inter Variable",
+    -apple-system, system-ui, sans-serif;
 
   /* --- layout metrics ------------------------------------------- */
   --kn-sidebar-w: 232px;
@@ -107,60 +115,64 @@
   --kn-row-h-compact: 30px;
 }
 
-[data-theme="dark"] {
-  color-scheme: dark;
+[data-theme="light"] {
+  color-scheme: light;
 
-  /* --- surfaces (navy ink) -------------------------------------- */
-  --kn-bg: #060913; /* background 226 52% 5% */
-  --kn-bg-inset: #04060e;
-  --kn-surface: #0d111c; /* surface / card 224 38% 8% */
-  --kn-surface-2: #1a1f2e; /* raised 224 28% 14% */
-  --kn-surface-3: #1e2433; /* accent 224 26% 16% */
-  --kn-overlay: rgb(2 4 8 / 60%); /* scrim 226 60% 2% @ .6 */
+  /* --- surfaces (ff paper) -------------------------------------- */
+  --kn-bg: #f5f4f0; /* paper */
+  --kn-bg-inset: #eceae4; /* paper-2 */
+  --kn-surface: #ffffff;
+  --kn-surface-2: #f0eee9;
+  --kn-surface-3: #e8e5de;
+  --kn-overlay: rgb(10 10 12 / 32%);
 
-  --kn-border: #242938; /* 224 22% 18% */
-  --kn-border-strong: #3f465a; /* 224 18% 30% */
-  --kn-border-subtle: #191d29;
+  --kn-border: #dedbd3; /* ff line */
+  --kn-border-strong: #c8c4ba;
+  --kn-border-subtle: #e8e5de;
 
-  --kn-text: #faf8f5; /* foreground 40 30% 97% */
-  --kn-text-2: #acb3c3; /* muted-foreground 222 16% 72% */
-  --kn-text-3: #878fa1; /* 222 12% 58% — 6.1:1 on bg */
-  --kn-text-inverse: #060913;
+  --kn-text: #0a0a0c; /* ink, 18.0:1 on paper */
+  --kn-text-2: #52525b; /* 7.0:1 */
+  --kn-text-3: #6e6e78; /* 4.6:1 */
+  --kn-text-inverse: #f5f4f0;
 
-  /* On ink the readable accent is torii-ink (18 92% 68%), so the
-     300/400 tints carry links and icons; 500 stays torii for fills. */
-  --kn-accent-300: #fbb293;
-  --kn-accent-400: #f88f62; /* torii-ink (dark) */
-  --kn-accent-500: #d54013; /* torii 14 84% 45.5% */
-  --kn-accent-600: #bc3810;
-  --kn-accent-700: #a0300e;
-  --kn-accent-soft: rgb(213 64 19 / 12%);
-  --kn-accent-soft-strong: rgb(213 64 19 / 22%);
+  /* On paper the readable purple is ff primary-ink #6A3EE8, so 400 (the
+     text accent) takes it; 500 stays the brand purple for fills. */
+  --kn-accent-300: #8b66f6;
+  --kn-accent-400: #6a3ee8; /* 5.5:1 on paper */
+  --kn-accent-500: #7a4ff4;
+  --kn-accent-600: #6a3ee8;
+  --kn-accent-700: #5a30d4;
+  --kn-accent-soft: rgb(122 79 244 / 10%);
+  --kn-accent-soft-strong: rgb(122 79 244 / 20%);
 
-  --kn-ok: #79c3a1; /* success-ink */
-  --kn-ok-soft: rgb(121 195 161 / 14%);
-  --kn-warn: #e7b155; /* warning-ink */
-  --kn-warn-soft: rgb(231 177 85 / 14%);
-  --kn-danger: #f0757d; /* danger-ink: destructive (354 72% 50%) is 3.4:1 on raised */
-  --kn-danger-soft: rgb(240 117 125 / 14%);
-  --kn-info: #81b5cf; /* info-ink */
-  --kn-info-soft: rgb(129 181 207 / 14%);
-  --kn-neutral-soft: rgb(172 179 195 / 12%);
+  /* The secondary hues, darkened to pass 4.5:1 on paper and white. */
+  --kn-ok: #0b7564;
+  --kn-ok-soft: rgb(11 117 100 / 12%);
+  --kn-warn: #8f5300;
+  --kn-warn-soft: rgb(143 83 0 / 12%);
+  --kn-danger: #c42b3c;
+  --kn-danger-soft: rgb(196 43 60 / 12%);
+  --kn-info: #22639e;
+  --kn-info-soft: rgb(34 99 158 / 12%);
+  --kn-neutral-soft: rgb(82 82 91 / 10%);
 
-  --kn-chart-1: #f88f62;
-  --kn-chart-2: #81b5cf;
-  --kn-chart-3: #79c3a1;
-  --kn-chart-4: #e7b155;
-  --kn-chart-5: #f0757d;
-  --kn-chart-6: #8591ad;
-  --kn-chart-grid: #1e2433;
+  --kn-chart-1: #7a4ff4;
+  --kn-chart-2: #22639e;
+  --kn-chart-3: #0b7564;
+  --kn-chart-4: #8f5300;
+  --kn-chart-5: #c42b3c;
+  --kn-chart-6: #6e6e78;
+  --kn-chart-grid: #e8e5de;
 
-  --kn-shadow-tint: 226 60% 2%;
-  --kn-shadow-sm: 0 1px 2px 0 hsl(var(--kn-shadow-tint) / 0.25);
-  --kn-shadow-md: 0 4px 10px -4px hsl(var(--kn-shadow-tint) / 0.32),
-    0 1px 2px 0 hsl(var(--kn-shadow-tint) / 0.25);
-  --kn-shadow-lg: 0 16px 40px -12px hsl(var(--kn-shadow-tint) / 0.5),
-    0 4px 10px -4px hsl(var(--kn-shadow-tint) / 0.32);
+  --kn-shadow-sm: 0 1px 1px rgb(10 10 12 / 5%), 0 4px 14px -6px rgb(10 10 12 / 10%);
+  --kn-shadow-md: 0 1px 2px rgb(10 10 12 / 6%), 0 12px 32px -10px rgb(10 10 12 / 16%);
+  --kn-shadow-lg: 0 1px 3px rgb(10 10 12 / 8%), 0 28px 64px -16px rgb(10 10 12 / 24%);
+
+  --kn-material: rgb(255 255 255 / 72%);
+
+  /* accent-fg (#A98DF8) is 2.4:1 on paper; the halo uses primary-ink,
+     at 75% because 60% falls under 3:1. */
+  --kn-ring: rgb(106 62 232 / 75%); /* 3.4:1 on paper */
   --kn-ring-offset: var(--kn-bg);
 }
 
@@ -184,7 +196,7 @@ body {
   font-family: var(--kn-font-sans);
   font-size: 13px;
   line-height: 1.5;
-  font-feature-settings: normal; /* Geist renders with its defaults */
+  font-feature-settings: "cv05" 1; /* Inter fallback: tailed l, so l/I/1 differ in hostnames */
   -webkit-font-smoothing: antialiased;
 }
 
@@ -205,22 +217,52 @@ samp,
   font-variant-ligatures: none;
 }
 
-/* Display type: Fraunces for page titles only. */
+/*
+ * Display type: Geist Pixel Square for page titles only. The face is drawn
+ * on a 0.076em cell, so it is only set where the cell is a whole pixel
+ * (the ffstudios pixel rule): 2px cell = 26.32px. No tracking, no bold.
+ */
 .kn-display {
   font-family: var(--kn-font-display);
+  font-size: 26.32px;
+  line-height: 32px;
   font-weight: 500;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
+}
+
+/*
+ * Materials: the sidebar and top bar are translucent vibrancy panels with
+ * a hairline. Opaque where transparency is unwanted or unsupported.
+ */
+.kn-material {
+  background-color: var(--kn-material);
+  -webkit-backdrop-filter: var(--kn-material-filter);
+  backdrop-filter: var(--kn-material-filter);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .kn-material {
+    background-color: var(--kn-surface);
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .kn-material {
+    background-color: var(--kn-surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
 }
 
 ::selection {
   background: var(--kn-accent-soft-strong);
 }
 
-/* One focus treatment for the entire product. */
+/*
+ * One focus treatment for the entire product: a 3px halo, 2px off the
+ * edge. The outline follows the element's own corner radius.
+ */
 :focus-visible {
-  outline: 2px solid var(--kn-ring);
-  outline-offset: 1px;
-  border-radius: var(--kn-r-xs);
+  outline: var(--kn-ring-width) solid var(--kn-ring);
+  outline-offset: var(--kn-ring-offset-width);
 }
 
 /* Scrollbars that match the surface instead of the OS. */
