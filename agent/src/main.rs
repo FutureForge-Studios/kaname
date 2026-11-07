@@ -190,9 +190,7 @@ async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result
     .await?;
 
     let capabilities = provider.capabilities();
-    let mut registry = registry::Registry::new(registry::CapabilityGate::new(capabilities.clone()));
-    handlers::register_handlers(&mut registry, provider.clone(), &[store.dir()]);
-    let registry = Arc::new(registry);
+    let registry = build_registry(&provider, &capabilities, store.dir());
 
     let tls = store.tls_config()?;
     let key = store.private_key()?;
@@ -220,7 +218,16 @@ async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result
     });
 
     let mut attempt = Backoff::default();
+    let mut capabilities = capabilities;
+    let mut registry = registry;
     while !stop.is_cancelled() {
+        // Re-read each time: a deploy can add one between connections.
+        let now = provider.capabilities();
+        if now != capabilities {
+            tracing::info!(capabilities = ?now, "capabilities changed; announcing them on this connection");
+            registry = build_registry(&provider, &now, store.dir());
+            capabilities = now;
+        }
         let host = provider
             .host(&Ctx::background())
             .await
@@ -237,10 +244,15 @@ async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result
             registry: registry.clone(),
         };
 
-        let (lived, err) = session(&stop, provider.clone(), opts).await;
+        let (lived, ended) = session(&stop, provider.clone(), opts).await;
         if stop.is_cancelled() {
             break;
         }
+        let err = match ended {
+            // Not a failure: reconnect at once so the new hello goes out.
+            SessionEnd::CapabilitiesChanged => continue,
+            SessionEnd::Failed(err) => err,
+        };
         if lived >= BACKOFF_RESET_AFTER {
             attempt.reset();
         }
@@ -257,18 +269,38 @@ async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result
     Ok(())
 }
 
-/// Holds one connection open until it fails or the process is asked to
-/// stop, and reports how long it lasted.
+fn build_registry(
+    provider: &ProviderRef,
+    capabilities: &[String],
+    state_dir: &std::path::Path,
+) -> Arc<registry::Registry> {
+    let mut registry = registry::Registry::new(registry::CapabilityGate::new(capabilities.to_vec()));
+    handlers::register_handlers(&mut registry, provider.clone(), &[state_dir]);
+    Arc::new(registry)
+}
+
+/// How long a connection waits after a capability change before closing,
+/// so the response to the call that caused it (a deploy) reaches the
+/// control plane first.
+const REANNOUNCE_GRACE: Duration = Duration::from_secs(2);
+
+enum SessionEnd {
+    CapabilitiesChanged,
+    Failed(anyhow::Error),
+}
+
+/// Holds one connection open until it fails, the process is asked to stop
+/// or the host's capabilities change, and reports how long it lasted.
 async fn session(
     stop: &CancellationToken,
     provider: ProviderRef,
     opts: conn::Options,
-) -> (Duration, anyhow::Error) {
+) -> (Duration, SessionEnd) {
     let started = Instant::now();
     let url = opts.connect_url.clone();
     let conn = match conn::dial(opts).await {
         Ok(c) => c,
-        Err(e) => return (started.elapsed(), e),
+        Err(e) => return (started.elapsed(), SessionEnd::Failed(e)),
     };
     tracing::info!(url, "connected");
 
@@ -277,15 +309,34 @@ async fn session(
     let metrics = tokio::spawn(push_metrics(handle.clone(), provider.clone(), conn_stop.clone()));
     let events = tokio::spawn(forward_events(handle, provider.clone(), conn_stop.clone()));
 
-    let outcome = conn.serve(stop.clone()).await;
+    // A child of the process token: a shutdown still closes this session,
+    // and a capability change closes only this one.
+    let session_stop = stop.child_token();
+    let changed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let session_stop = session_stop.clone();
+        let changed = changed.clone();
+        tokio::spawn(async move {
+            providers::capabilities_changed().await;
+            changed.store(true, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(REANNOUNCE_GRACE).await;
+            session_stop.cancel();
+        })
+    };
+
+    let outcome = conn.serve(session_stop).await;
     conn_stop.cancel();
     metrics.abort();
     events.abort();
+    watcher.abort();
+    if changed.load(std::sync::atomic::Ordering::SeqCst) && !stop.is_cancelled() {
+        return (started.elapsed(), SessionEnd::CapabilitiesChanged);
+    }
     let err = match outcome {
         Ok(()) => anyhow::anyhow!("closed"),
         Err(e) => e,
     };
-    (started.elapsed(), err)
+    (started.elapsed(), SessionEnd::Failed(err))
 }
 
 /// Relays the provider's state changes onto the socket, so the control

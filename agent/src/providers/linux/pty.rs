@@ -643,8 +643,18 @@ mod tests {
             ops.close(&Ctx::background(), "s2").await,
             Err(ProviderError::NotFound(_))
         ));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(kill(session.pid, None).is_err(), "the shell outlived pty.close");
+        // close() sends SIGHUP, then SIGKILL two seconds later for a shell
+        // that ignores it; a loaded machine can take most of that window, so
+        // the check waits it out rather than racing it.
+        let mut gone = false;
+        for _ in 0..60 {
+            if kill(session.pid, None).is_err() {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(gone, "the shell outlived pty.close");
     }
 
     /// A `Shared` with no host probing behind it: the terminal only needs

@@ -163,8 +163,19 @@ pub async fn open(opts: Options) -> anyhow::Result<ProviderRef> {
 
 #[async_trait]
 impl Provider for LinuxProvider {
+    /// Probed once at startup, except Yunori: a deploy installs it under the
+    /// running agent, so its binary is looked at again on every hello.
     fn capabilities(&self) -> Vec<String> {
-        self.shared.cap_list.clone()
+        let mut caps = self.shared.cap_list.clone();
+        let yunori = exec::file_exists(capabilities::YUNORI_BIN) || exec::has_binary("yunori-mail");
+        let listed = caps.iter().any(|c| c == cap::YUNORI);
+        if yunori && !listed {
+            caps.push(cap::YUNORI.to_string());
+            caps.sort();
+        } else if !yunori && listed {
+            caps.retain(|c| c != cap::YUNORI);
+        }
+        caps
     }
 
     /// The identity block of the hello frame: the subset of the system

@@ -107,6 +107,9 @@ pub struct World {
 /// `Arc<Sim>`, so all state lives in one place.
 pub struct Sim {
     pub opts: Options,
+    /// The stable name the host was derived from (the state directory's
+    /// name in a development fleet, e.g. `mail-01`).
+    pub identity: String,
     pub seed: u64,
     pub id: Identity,
     pub fs: FsRef,
@@ -128,7 +131,8 @@ impl Sim {
     /// several agents side by side on one box and four identical hosts is
     /// a worse demo than no demo.
     pub fn new(opts: Options) -> Arc<Sim> {
-        let seed = seed_for(&identity_source(&opts.state_dir));
+        let identity = identity_source(&opts.state_dir);
+        let seed = seed_for(&identity);
         let now = Utc::now();
         let (tx, rx) = mpsc::channel(EVENT_BUFFER);
 
@@ -169,6 +173,7 @@ impl Sim {
         let fs = files::build_filesystem(&id);
         let sim = Arc::new(Sim {
             opts,
+            identity,
             seed,
             id,
             fs,
