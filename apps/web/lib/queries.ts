@@ -548,7 +548,14 @@ export function useMutationWithJob<TVars = void>(
 ): UseMutationResult<Job[], ApiError, TVars> {
   const drawer = useJobDrawer();
   const { toast } = useToast();
-  const { mutationFn, invalidates = [], describe, onQueued, onFailed, toastErrors = true } = options;
+  const {
+    mutationFn,
+    invalidates = [],
+    describe,
+    onQueued,
+    onFailed,
+    toastErrors = true,
+  } = options;
 
   return useMutation<Job[], ApiError, TVars>({
     mutationFn: async (variables) => jobsOf(await mutationFn(variables)),
@@ -608,8 +615,14 @@ export function useResourceMutation<TVars = void, TResult = unknown>(
 ): UseMutationResult<TResult, ApiError, TVars> {
   const client = useQueryClient();
   const { toast } = useToast();
-  const { mutationFn, invalidates = [], successMessage, onDone, onFailed, toastErrors = true } =
-    options;
+  const {
+    mutationFn,
+    invalidates = [],
+    successMessage,
+    onDone,
+    onFailed,
+    toastErrors = true,
+  } = options;
 
   return useMutation<TResult, ApiError, TVars>({
     mutationFn: async (variables) => {

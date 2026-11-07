@@ -58,7 +58,9 @@ test("Check now re-reads the host and the card shows what it said", async ({ pag
   await closeJobDrawer(page);
 
   const row = (await mailServerOn(api, MAIL_HOST))!;
-  expect(new Date(row.last_synced_at!).getTime()).toBeGreaterThan(new Date(before.last_synced_at ?? 0).getTime());
+  expect(new Date(row.last_synced_at!).getTime()).toBeGreaterThan(
+    new Date(before.last_synced_at ?? 0).getTime(),
+  );
   /* The simulated host runs 0.1.0 and serves a second domain the seed
    * never had; both arrived through the sync. */
   expect(row.version).toBe("0.1.0");
@@ -71,8 +73,12 @@ test("Check now re-reads the host and the card shows what it said", async ({ pag
   /* A row the host no longer lists is marked, not silently deleted. */
   const detective = await mailboxAt(api, "detective@futureforge.dev");
   expect(detective?.status).toBe("error");
-  const syncs = await api.data<JobRow[]>(`/jobs?type=mail.server.sync&server_id=${row.server_id}&per_page=50`);
-  expect(await api.jobLog(syncs[0]!.id)).toContain(`yunori-mail 0.1.0 on mail.futureforge.dev: ${row.checks.length} checks`);
+  const syncs = await api.data<JobRow[]>(
+    `/jobs?type=mail.server.sync&server_id=${row.server_id}&per_page=50`,
+  );
+  expect(await api.jobLog(syncs[0]!.id)).toContain(
+    `yunori-mail 0.1.0 on mail.futureforge.dev: ${row.checks.length} checks`,
+  );
   /* Whichever sync first saw it gone said so in its log. */
   const logs = await Promise.all(syncs.map((job) => api.jobLog(job.id)));
   expect(logs.join("\n")).toContain(
@@ -91,7 +97,9 @@ test("the verdict filter narrows the cards and says when none match", async ({ p
   await expect(serverCard(page, MAIL_HOST)).toBeVisible();
 });
 
-test("forgetting is refused while an added domain remains, then drops only Kaname's record", async ({ page }) => {
+test("forgetting is refused while an added domain remains, then drops only Kaname's record", async ({
+  page,
+}) => {
   const api = await owner();
   const row = (await mailServerOn(api, MAIL_HOST))!;
   const extra = (await mailDomainNamed(api, "kaname.sh"))!;
@@ -105,7 +113,9 @@ test("forgetting is refused while an added domain remains, then drops only Kanam
   let confirm = page.getByRole("dialog", { name: `Forget the mail server on ${MAIL_HOST}?` });
   await confirm.getByLabel(`Type ${MAIL_HOST} to confirm`).fill(MAIL_HOST);
   await confirm.getByRole("button", { name: "Forget", exact: true }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "besides its primary one" })).toBeVisible();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "besides its primary one" }),
+  ).toBeVisible();
   expect((await mailServerOn(api, MAIL_HOST))?.id).toBe(row.id);
   await confirm.getByRole("button", { name: "Cancel" }).click();
 
@@ -162,7 +172,11 @@ test("adopting the host again reads its server, domains and mailboxes back", asy
   await closeJobDrawer(page);
 
   const row = (await mailServerOn(api, MAIL_HOST))!;
-  expect(row).toMatchObject({ status: "installed", hostname: "mail.futureforge.dev", version: "0.1.0" });
+  expect(row).toMatchObject({
+    status: "installed",
+    hostname: "mail.futureforge.dev",
+    version: "0.1.0",
+  });
   expect(row.primary_domain).toBe("futureforge.dev");
   const primary = (await mailDomainNamed(api, "futureforge.dev"))!;
   expect(primary).toMatchObject({ is_primary: true, status: "active" });

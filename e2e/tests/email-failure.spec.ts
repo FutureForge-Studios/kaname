@@ -43,7 +43,9 @@ test.afterAll(async () => {
   await startAgent(MAIL_HOST);
 });
 
-test("with the mail host's agent gone, every live surface says so and a check waits for it", async ({ page }) => {
+test("with the mail host's agent gone, every live surface says so and a check waits for it", async ({
+  page,
+}) => {
   test.setTimeout(240_000);
   const api = await owner();
   await syncMail(api, MAIL_HOST);
@@ -61,7 +63,10 @@ test("with the mail host's agent gone, every live surface says so and a check wa
   await expect(heading).toContainText("Fail");
 
   /* Inline mailbox calls refuse with the agent's state, not a timeout. */
-  const create = await api.post("/mailboxes", { mail_domain_id: domain.id, local_part: unique("offline") });
+  const create = await api.post("/mailboxes", {
+    mail_domain_id: domain.id,
+    local_part: unique("offline"),
+  });
   expect(create.status).toBe(503);
   expect(create.body.error?.code).toBe("agent_offline");
   const reset = await api.post(`/mailboxes/${hello.id}/reset-password`);
@@ -92,9 +97,13 @@ test("with the mail host's agent gone, every live surface says so and a check wa
   const drawer = page.getByRole("dialog", { name: "Job activity" });
   const entry = drawer.getByRole("listitem").filter({ hasText: "Check mail server" }).first();
   await expect(jobStatusPill(entry)).toContainText("Queued");
-  const queued = (await api.data<JobRow[]>(`/jobs?type=mail.server.sync&server_id=${row.server_id}&per_page=1`))[0]!;
+  const queued = (
+    await api.data<JobRow[]>(`/jobs?type=mail.server.sync&server_id=${row.server_id}&per_page=1`)
+  )[0]!;
   expect(queued.status).toBe("queued");
-  expect((queued as unknown as { blocked_reason: string | null }).blocked_reason).toBe("agent_offline");
+  expect((queued as unknown as { blocked_reason: string | null }).blocked_reason).toBe(
+    "agent_offline",
+  );
 
   await startAgent(MAIL_HOST);
   expect((await api.job(queued.id, 90_000)).status).toBe("succeeded");
@@ -131,7 +140,10 @@ test("a job the host refuses fails visibly and marks its row", async ({ page }) 
 
   /* The way out works on a row the host never had. */
   await rowAction(page, row, "Remove alias");
-  await page.getByRole("dialog", { name: `Remove ${local}@${DOMAIN}?` }).getByRole("button", { name: "Remove alias" }).click();
+  await page
+    .getByRole("dialog", { name: `Remove ${local}@${DOMAIN}?` })
+    .getByRole("button", { name: "Remove alias" })
+    .click();
   await expectJobInDrawer(page, "Remove alias");
   await closeJobDrawer(page);
   await expect(row).toHaveCount(0);
@@ -151,7 +163,9 @@ test("the deploy dialog does not offer a host whose agent is away", async ({ pag
     await expect(named("edge-01")).toHaveCount(0);
 
     const api = await owner();
-    const edge = (await api.data<{ id: string; name: string }[]>("/servers?per_page=100")).find((s) => s.name === "edge-01")!;
+    const edge = (await api.data<{ id: string; name: string }[]>("/servers?per_page=100")).find(
+      (s) => s.name === "edge-01",
+    )!;
     const domain = (await api.data<{ id: string; name: string }[]>("/domains?per_page=100")).find(
       (d) => d.name === "panel.futureforge.dev",
     )!;

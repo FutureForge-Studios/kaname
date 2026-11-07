@@ -210,13 +210,17 @@ test("a direct deploy lands, the host re-announces Yunori, and the setup secrets
   await expect(dialog).toBeHidden();
 
   /* The Finish setup panel follows the job to the end. */
-  const finish = page.locator("section").filter({ has: page.getByRole("heading", { name: "Finish setup" }) });
+  const finish = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: "Finish setup" }) });
   await expect(finish).toBeVisible();
   await expect(jobStatusPill(finish)).toContainText("Succeeded", { timeout: 60_000 });
   await expect(finish).toContainText("The install finished.");
 
   const row = (await mailServerOn(api, DIRECT_HOST))!;
-  const jobs = await api.data<JobRow[]>(`/jobs?type=mail.server.deploy&server_id=${row.server_id}&per_page=5`);
+  const jobs = await api.data<JobRow[]>(
+    `/jobs?type=mail.server.deploy&server_id=${row.server_id}&per_page=5`,
+  );
   const job = jobs.find((candidate) => candidate.status === "succeeded")!;
   expect(job).toMatchObject({ target_label: `mail.${DIRECT_DOMAIN}`, server_name: DIRECT_HOST });
 
@@ -226,7 +230,9 @@ test("a direct deploy lands, the host re-announces Yunori, and the setup secrets
     .poll(async () => (await fleetServer(api, DIRECT_HOST)).capabilities, { timeout: 30_000 })
     .toContain("yunori");
   await expect
-    .poll(async () => (await mailServerOn(api, DIRECT_HOST))?.last_synced_at ?? null, { timeout: 30_000 })
+    .poll(async () => (await mailServerOn(api, DIRECT_HOST))?.last_synced_at ?? null, {
+      timeout: 30_000,
+    })
     .not.toBeNull();
 
   const card = serverCard(page, DIRECT_HOST);
@@ -253,10 +259,14 @@ test("a direct deploy lands, the host re-announces Yunori, and the setup secrets
 
   const setupUrl = (await copyableValue(finish, "Console setup link").innerText()).trim();
   expect(setupUrl).toMatch(
-    new RegExp(`^https://mail\\.${DIRECT_DOMAIN.replace(/\./g, "\\.")}/console/setup#token=sim-[0-9a-f]{16}$`),
+    new RegExp(
+      `^https://mail\\.${DIRECT_DOMAIN.replace(/\./g, "\\.")}/console/setup#token=sim-[0-9a-f]{16}$`,
+    ),
   );
   await expect(copyableValue(finish, "First mailbox")).toHaveText(`postbox@${DIRECT_DOMAIN}`);
-  const password = (await copyableValue(finish, `Password for postbox@${DIRECT_DOMAIN}`).innerText()).trim();
+  const password = (
+    await copyableValue(finish, `Password for postbox@${DIRECT_DOMAIN}`).innerText()
+  ).trim();
   expect(password).toMatch(/^[a-km-zA-HJ-NP-Z2-9]{20}$/);
   noteSecret("setup_url", setupUrl);
   noteSecret("first_mailbox_password", password);
@@ -268,7 +278,9 @@ test("a direct deploy lands, the host re-announces Yunori, and the setup secrets
   /* Second read: gone, with the way to get a new link. */
   const again = await api.get(`/mail-servers/${row.id}/deploy-secrets`);
   expect(again.status).toBe(404);
-  expect(again.body.error?.message).toBe("The deploy secrets are not available (shown once, or expired).");
+  expect(again.body.error?.message).toBe(
+    "The deploy secrets are not available (shown once, or expired).",
+  );
   expect(again.body.error?.remediation?.summary).toContain("yunori-mail setup-token");
 
   /* Nothing about them in the job, its log or the audit trail; that they
@@ -322,7 +334,9 @@ test("the freshly deployed host is manageable at once: a mailbox, the live tail,
   await page.goto(`/email/logs?server_id=${forge.id}`);
   await expect(page.getByRole("combobox", { name: "Mail server" })).toHaveValue(DIRECT_HOST);
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
-  await expect(page.getByRole("log", { name: `Mail log on ${DIRECT_HOST}` })).toContainText("stalwart-mail");
+  await expect(page.getByRole("log", { name: `Mail log on ${DIRECT_HOST}` })).toContainText(
+    "stalwart-mail",
+  );
 
   /* An alias delivers to a mailbox on the same server; the new host's
    * mailbox is not a target for a domain on mail-01. */
@@ -363,14 +377,20 @@ test("a relay deploy carries its password to the host and nowhere else", async (
   noteSecret("relay_password", RELAY_PASSWORD);
 
   await deploy.click();
-  const finish = page.locator("section").filter({ has: page.getByRole("heading", { name: "Finish setup" }) });
+  const finish = page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: "Finish setup" }) });
   await expect(jobStatusPill(finish)).toContainText("Succeeded", { timeout: 60_000 });
 
   const row = (await mailServerOn(api, RELAY_HOST))!;
   expect(row).toMatchObject({ status: "installed", sending_mode: "relay", relay_provider: "ses" });
-  await expect(definition(serverCard(page, RELAY_HOST), "Sending")).toHaveText("Through a relay (ses)");
+  await expect(definition(serverCard(page, RELAY_HOST), "Sending")).toHaveText(
+    "Through a relay (ses)",
+  );
 
-  const job = (await api.data<JobRow[]>(`/jobs?type=mail.server.deploy&server_id=${row.server_id}&per_page=5`))[0]!;
+  const job = (
+    await api.data<JobRow[]>(`/jobs?type=mail.server.deploy&server_id=${row.server_id}&per_page=5`)
+  )[0]!;
   expect(job.status).toBe("succeeded");
 
   /* The request is on the record with everything but the password: the

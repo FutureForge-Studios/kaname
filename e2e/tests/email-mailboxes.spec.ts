@@ -82,7 +82,11 @@ test("creating a mailbox shows its password once, in a dialog that cannot be dis
    * not on the page after a reload. */
   const api = await owner();
   const created = (await mailboxAt(api, address))!;
-  expect(created).toMatchObject({ status: "active", display_name: "E2E Box", quota_bytes: 50 * 1024 * 1024 });
+  expect(created).toMatchObject({
+    status: "active",
+    display_name: "E2E Box",
+    quota_bytes: 50 * 1024 * 1024,
+  });
   const one = await api.get(`/mailboxes/${created.id}`);
   const all = await api.get("/mailboxes?per_page=200");
   expect(one.text).not.toContain(firstPassword);
@@ -129,10 +133,14 @@ test("the create form names what is wrong, field by field", async ({ page }) => 
     local_part: "x".repeat(65),
   });
   expect(direct.status).toBe(422);
-  expect(direct.body.error?.fields?.["local_part"]).toBe("String must contain at most 64 character(s)");
+  expect(direct.body.error?.fields?.["local_part"]).toBe(
+    "String must contain at most 64 character(s)",
+  );
 });
 
-test("an address already taken by a mailbox or an alias is refused before the host is asked", async ({ page }) => {
+test("an address already taken by a mailbox or an alias is refused before the host is asked", async ({
+  page,
+}) => {
   const api = await owner();
   const postmaster = await aliasAt(api, `postmaster@${DOMAIN}`);
   expect(postmaster?.status, "the host's postmaster alias should be synced").toBe("active");

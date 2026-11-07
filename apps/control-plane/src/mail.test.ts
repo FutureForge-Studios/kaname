@@ -241,7 +241,9 @@ describe("mail servers", () => {
   it("refuses to forget a server that still hosts domains besides its primary, and never uninstalls", async () => {
     // The primary domain goes with the record (it cannot be removed on its
     // own); a domain an operator added is what makes forgetting refuse.
-    const extra = data<Domain[]>(await get("/api/v1/domains?per_page=50")).find((d) => !d.has_mail)!;
+    const extra = data<Domain[]>(await get("/api/v1/domains?per_page=50")).find(
+      (d) => !d.has_mail,
+    )!;
     const [added] = await handle.db
       .insert(mailDomains)
       .values({

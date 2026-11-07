@@ -56,7 +56,9 @@ test("this spec's own credentials: a mailbox, a reset and a relay deploy nobody 
   });
   expect(created.status, created.text).toBe(201);
   noteSecret("mailbox_password", created.body.data!.password);
-  const reset = await api.post<{ password: string }>(`/mailboxes/${created.body.data!.mailbox.id}/reset-password`);
+  const reset = await api.post<{ password: string }>(
+    `/mailboxes/${created.body.data!.mailbox.id}/reset-password`,
+  );
   expect(reset.status).toBe(200);
   expect(reset.body.data!.password).not.toBe(created.body.data!.password);
   noteSecret("mailbox_password", reset.body.data!.password);
@@ -70,7 +72,12 @@ test("this spec's own credentials: a mailbox, a reset and a relay deploy nobody 
     domain_id: target.id,
     admin_email: "alerts@example.org",
     sending: "relay",
-    relay: { provider: "postmark", host: "smtp.postmarkapp.com", port: 587, password: RELAY_PASSWORD },
+    relay: {
+      provider: "postmark",
+      host: "smtp.postmarkapp.com",
+      port: 587,
+      password: RELAY_PASSWORD,
+    },
   });
   expect(deploy.status, deploy.text).toBe(202);
   expect(deploy.text).not.toContain(RELAY_PASSWORD);
@@ -109,7 +116,9 @@ test("no credential appears in the control plane's or the agents' own logs", asy
   const secrets = readSecrets();
   const control = processLog("control-plane");
   expect(control.length).toBeGreaterThan(0);
-  const agents = ["mail-01", "forge-01", "db-01", "edge-01"].map((name) => processLog(`agent-${name}`)).join("\n");
+  const agents = ["mail-01", "forge-01", "db-01", "edge-01"]
+    .map((name) => processLog(`agent-${name}`))
+    .join("\n");
   expect(agents.length).toBeGreaterThan(0);
 
   for (const { kind, value } of secrets) {
@@ -136,7 +145,9 @@ test("the database holds none of them, and deploy secrets nobody read do not sur
       );
       const parts: string[] = [];
       for (const { table_name } of tables.rows) {
-        const rows = await db.query<{ row: string }>(`select t::text as row from "${table_name}" t`);
+        const rows = await db.query<{ row: string }>(
+          `select t::text as row from "${table_name}" t`,
+        );
         parts.push(`== ${table_name}\n${rows.rows.map((r) => r.row).join("\n")}`);
       }
       return parts.join("\n");
@@ -160,6 +171,8 @@ test("the database holds none of them, and deploy secrets nobody read do not sur
   const fresh = await owner();
   const lost = await fresh.get(`/mail-servers/${edgeMailServerId}/deploy-secrets`);
   expect(lost.status).toBe(404);
-  expect(lost.body.error?.message).toBe("The deploy secrets are not available (shown once, or expired).");
+  expect(lost.body.error?.message).toBe(
+    "The deploy secrets are not available (shown once, or expired).",
+  );
   expect(lost.body.error?.remediation?.summary).toContain("sudo yunori-mail setup-token");
 });
