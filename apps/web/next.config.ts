@@ -48,6 +48,16 @@ const nextConfig: NextConfig = {
   experimental: {
     /* GET /api/v1/events is an SSE feed that stays open for hours. */
     proxyTimeout: 24 * 60 * 60 * 1000,
+    /*
+     * Because middleware.ts exists, Next tees every request body through
+     * a clone capped at 10 MB by default — including the /api rewrite.
+     * A file upload past that was cut off mid-stream ("Premature close"
+     * on the control plane, a progress bar stuck at 100% in the panel).
+     * Match the control plane's own multipart limit (server.ts) so the
+     * rewrite never truncates what the API would have accepted. In
+     * production Caddy sends /api straight to the control plane.
+     */
+    middlewareClientMaxBodySize: "2gb",
   },
 
   /*

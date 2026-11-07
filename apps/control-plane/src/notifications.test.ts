@@ -44,6 +44,7 @@ const posted: Posted[] = [];
 const mailed: MailEnvelope[] = [];
 const mailers: ResolvedSmtp[] = [];
 let failNextPost = false;
+let refuseNextPost = false;
 
 const fakeFetch: typeof fetch = async (input, init) => {
   posted.push({
@@ -56,6 +57,14 @@ const fakeFetch: typeof fetch = async (input, init) => {
     ),
     body: String(init?.body ?? ""),
   });
+  if (refuseNextPost) {
+    refuseNextPost = false;
+    // What undici really throws when nothing listens: the useful part is in `cause`.
+    const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:9"), {
+      code: "ECONNREFUSED",
+    });
+    throw new TypeError("fetch failed", { cause });
+  }
   if (failNextPost) {
     failNextPost = false;
     return new Response("nope", { status: 500 });
@@ -258,6 +267,21 @@ describe("routing", () => {
     const rows = await handle.db.select().from(notificationChannels);
     const failed = rows.find((r) => r.lastError !== null);
     expect(failed?.lastError).toContain("500");
+  });
+
+  it("records the transport's own error, not fetch's wrapper, when nothing answers", async () => {
+    refuseNextPost = true;
+    ctx.events.publish("jobs", "job.failed", {
+      job_id: "00000000-0000-0000-0000-000000000004",
+      job_type: "service.restart",
+      error: { code: "x", message: "boom" },
+    });
+    await drain();
+    const rows = await handle.db.select().from(notificationChannels);
+    const refused = rows.find((r) => r.lastError?.includes("ECONNREFUSED"));
+    expect(refused?.lastError).toBe(
+      "connect ECONNREFUSED 127.0.0.1:9 — nothing is listening at that address.",
+    );
   });
 
   it("waits out the grace period before reporting a server offline, and reports recovery", async () => {

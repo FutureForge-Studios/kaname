@@ -65,15 +65,23 @@ test.describe("users", () => {
     await page.getByRole("button", { name: "Invite user" }).first().click();
 
     const dialog = dialogNamed(page, "Invite a user");
+    /* Empty, the browser's own required-field check stops the submit. */
+    await dialog.getByRole("button", { name: "Send invitation" }).click();
+    const emailField = dialog.getByLabel("Email");
+    expect(await emailField.evaluate((el: HTMLInputElement) => el.validity.valueMissing)).toBe(true);
+    await expect(dialog).toBeVisible();
+
+    /* Past the browser, the control plane names each field it refuses. */
+    await emailField.fill("ines@localhost");
+    await dialog.getByLabel("Name").fill("Ines Invitee");
     await dialog.getByRole("button", { name: "Send invitation" }).click();
     await expect(dialog.getByText("Invalid email")).toBeVisible();
-    await expect(dialog.getByText("String must contain at least 1 character(s)")).toBeVisible();
     await expect(dialog.getByText("Array must contain at least 1 element(s)")).toBeVisible();
 
     const email = uniqueEmail("invitee");
     await dialog.getByLabel("Email").fill(email);
     await dialog.getByLabel("Name").fill("Ines Invitee");
-    await chooseOption(page, dialog.getByRole("combobox"), "Viewer");
+    await chooseOption(page, dialog.getByRole("combobox", { name: /^Roles/ }), "Viewer");
     await dialog.getByRole("button", { name: "Send invitation" }).click();
 
     const issued = dialogNamed(page, `${email} is invited`);
@@ -93,7 +101,7 @@ test.describe("users", () => {
     const again = dialogNamed(page, "Invite a user");
     await again.getByLabel("Email").fill(email.toUpperCase());
     await again.getByLabel("Name").fill("Ines Again");
-    await chooseOption(page, again.getByRole("combobox"), "Viewer");
+    await chooseOption(page, again.getByRole("combobox", { name: /^Roles/ }), "Viewer");
     await again.getByRole("button", { name: "Send invitation" }).click();
     await expect(again.getByText(`${email} already has an account.`)).toBeVisible();
     await again.getByRole("button", { name: "Cancel" }).click();
@@ -108,7 +116,7 @@ test.describe("users", () => {
     const token = decodeURIComponent(link.split("/invite/")[1]!);
     expect((await acceptInvite(token, STRONG_PASSWORD)).status).toBe(200);
     const reused = await acceptInvite(token, "Another-Strong-Passphrase-88");
-    expect(reused.status).toBeGreaterThanOrEqual(400);
+    expect(reused.status).toBe(401);
     expect((await login(email, STRONG_PASSWORD)).length).toBeGreaterThan(0);
 
     await page.reload();
@@ -116,21 +124,45 @@ test.describe("users", () => {
   });
 
   test("the invitation link opens a page that sets the first password", async ({ browser }) => {
-    const { user, token } = await invite("invitepage", [(await roleBySlug("viewer")).id]);
+    const { user } = await invite("invitepage", [(await roleBySlug("viewer")).id]);
     const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const page = await context.newPage();
     await page.goto(user.invite.url);
 
-    /* Not a 404: the link an owner was told to send has to lead somewhere. */
-    await expect(page.getByRole("heading", { name: "This page could not be found." })).toHaveCount(0);
-    await expect(page.getByText(user.email)).toBeVisible();
-    await page.getByLabel(/^Password/).first().fill(STRONG_PASSWORD);
-    const confirm = page.getByLabel(/Repeat|Confirm/);
-    if ((await confirm.count()) > 0) await confirm.first().fill(STRONG_PASSWORD);
-    await page.getByRole("button", { name: /Set password|Accept|Create|Continue/ }).click();
-    await expect(page).not.toHaveURL(/\/invite\//);
-    expect((await login(user.email, STRONG_PASSWORD)).length).toBeGreaterThan(0);
-    expect(token.length).toBeGreaterThan(0);
+    /* The link an owner was told to send has to lead somewhere. */
+    await expect(page.getByRole("heading", { name: "Choose your password" })).toBeVisible();
+    const submit = page.getByRole("button", { name: "Set password and sign in" });
+
+    await submit.click();
+    await expect(page.getByText("Use at least 12 characters.")).toBeVisible();
+    await expect(page.getByText("Type the password again.")).toBeVisible();
+
+    /* Strength is the server's call, shown under the field. */
+    await page.getByLabel("Password", { exact: true }).fill("aaaaaaaaaaaaaa");
+    await page.getByLabel("Confirm password").fill("aaaaaaaaaaaaaa");
+    await submit.click();
+    await expect(page.getByText(/Mix upper and lower case\./)).toBeVisible();
+
+    await page.getByLabel("Password", { exact: true }).fill(STRONG_PASSWORD);
+    await page.getByLabel("Confirm password").fill("Something-Else-Entirely-1");
+    await submit.click();
+    await expect(page.getByText("The two passwords do not match.")).toBeVisible();
+
+    await page.getByLabel("Confirm password").fill(STRONG_PASSWORD);
+    await submit.click();
+    /* Signed straight in, as a viewer: the Command Center, not admin. */
+    await expect(page).toHaveURL(`${webUrl}/`);
+    await expect(page.getByRole("heading", { level: 1, name: "Command Center" })).toBeVisible();
+    expect(await sidebarEntries(page)).not.toContain("Administration › Users");
+
+    /* The same link a second time is spent, and says so. */
+    const again = await (await browser.newContext({ storageState: { cookies: [], origins: [] } })).newPage();
+    await again.goto(user.invite.url);
+    await again.getByLabel("Password", { exact: true }).fill("Another-Strong-Passphrase-88");
+    await again.getByLabel("Confirm password").fill("Another-Strong-Passphrase-88");
+    await again.getByRole("button", { name: "Set password and sign in" }).click();
+    await expect(again.getByText("This invitation is not valid any more.")).toBeVisible();
+    await expect(again).toHaveURL(/\/invite\//);
   });
 
   test("a weak or spent invitation is refused with a reason", async () => {
@@ -138,8 +170,7 @@ test.describe("users", () => {
     const weak = await acceptInvite(token, "aaaaaaaaaaaa");
     expect(weak.status).toBe(422);
     const bogus = await acceptInvite("kn_invite_not-a-real-token", STRONG_PASSWORD);
-    expect(bogus.status).toBeGreaterThanOrEqual(400);
-    expect(bogus.status).toBeLessThan(500);
+    expect(bogus.status).toBe(401);
   });
 
   test("a role change is a different panel on the member's next request", async ({
@@ -156,7 +187,7 @@ test.describe("users", () => {
     await row.click();
     const dialog = dialogNamed(page, account.email);
     await dialog.getByRole("button", { name: "Remove Viewer" }).click();
-    await chooseOption(page, dialog.getByRole("combobox"), "Operator");
+    await chooseOption(page, dialog.getByRole("combobox", { name: /^Roles/ }), "Operator");
     await dialog.getByRole("button", { name: "Save changes" }).click();
     await expect(page.getByText(`${account.email} updated.`)).toBeVisible();
     await expect(row).toContainText("Operator");
@@ -475,7 +506,9 @@ test.describe.serial("settings", () => {
     /* Empty is refused, with the field named. */
     await page.locator("section#panel").getByRole("textbox").first().fill("");
     await page.locator("section#panel").getByRole("button", { name: "Save" }).click();
-    await expect(page.locator("section#panel").getByRole("alert").first()).toContainText("panel.name");
+    await expect(page.locator("section#panel").getByRole("list", { name: "Panel problems" })).toHaveText(
+      "panel.name: String must contain at least 1 character(s)",
+    );
 
     const audit = data<{ action: string }[]>(
       await asOwner("GET", "/audit?per_page=20&q=settings"),

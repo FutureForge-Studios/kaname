@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { expect, type Locator, type Page } from "@playwright/test";
@@ -407,6 +407,7 @@ export async function stopAgent(name: string): Promise<void> {
  */
 export async function startAgent(name: string): Promise<void> {
   if (agentPid(name) && alive(agentPid(name)!)) return;
+  keepLog(`agent-${name}`);
   const agent = launch(
     `agent-${name}`,
     agentBinary,
@@ -441,6 +442,7 @@ export async function withControlPlaneStopped<T>(whileDown: () => Promise<T>): P
   try {
     result = await whileDown();
   } finally {
+    keepLog("control-plane");
     const cp = startControlPlane();
     record(cp.pid);
     await waitUntil(`the control plane and ${fleetSize} agents`, () => healthy(fleetSize), {
@@ -480,10 +482,22 @@ export async function argon2Hash(password: string): Promise<string> {
   return hash(password, { memoryCost: 19_456, timeCost: 2, parallelism: 1 });
 }
 
-/** Everything a process in this stack has printed so far. */
-export function processLog(name: string): string {
+/**
+ * A relaunched process reopens its log with "w", so the previous run's
+ * output is moved aside first; processLog reads every generation.
+ */
+function keepLog(name: string): void {
   const path = join(logsDir, `${name}.log`);
-  return existsSync(path) ? readFileSync(path, "utf8") : "";
+  if (existsSync(path)) renameSync(path, join(logsDir, `${name}.${Date.now()}.previous.log`));
+}
+
+/** Everything a process in this stack has printed so far, across restarts. */
+export function processLog(name: string): string {
+  if (!existsSync(logsDir)) return "";
+  return readdirSync(logsDir)
+    .filter((file) => file === `${name}.log` || (file.startsWith(`${name}.`) && file.endsWith(".previous.log")))
+    .map((file) => readFileSync(join(logsDir, file), "utf8"))
+    .join("\n");
 }
 
 /* ----------------------------------- ui ----------------------------------- */

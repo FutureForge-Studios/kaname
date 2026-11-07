@@ -395,7 +395,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     if (!(await req.ctx.auth.verifyTotp(user.id, body.code))) {
       await recordFailure(req, user.email, user.id, "bad_totp_on_enable");
-      throw invalidTotp();
+      throw wrongEnrolmentCode();
     }
 
     await req.ctx.auth.enableTotp(user.id);
@@ -430,7 +430,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     if (!(await req.ctx.auth.verifyPassword(user.passwordHash, body.password))) {
       await recordFailure(req, user.email, user.id, "bad_password_on_totp_disable");
-      throw wrongCurrentPassword();
+      throw wrongCurrentPassword("password");
     }
 
     const settings = await loadSettings(req.ctx);
@@ -678,10 +678,27 @@ const inviteNotValid = () =>
     },
   });
 
-const wrongCurrentPassword = () =>
-  new ApiException("unauthenticated", "Your current password is not correct.", {
-    fields: { current_password: "does not match" },
+/*
+ * 422, not 401. These answer a signed-in caller whose session is fine
+ * and who mistyped something on their own account page; a 401 is "your
+ * session is gone", so the panel's client did what it does with one and
+ * sent them to the sign-in form — a typo in "current password" or in the
+ * enrolment code signed the operator out of the page they were on.
+ */
+const wrongCurrentPassword = (field = "current_password") =>
+  new ApiException("validation_failed", "Your current password is not correct.", {
+    fields: { [field]: "does not match" },
     remediation: { summary: "Re-enter the password you use to sign in today.", actions: [] },
+  });
+
+const wrongEnrolmentCode = () =>
+  new ApiException("validation_failed", "That authentication code is not valid.", {
+    fields: { code: "That authentication code is not valid." },
+    remediation: {
+      summary:
+        "Codes last 30 seconds — enter the one your app shows now. If it keeps failing, check the device clock.",
+      actions: [],
+    },
   });
 
 const totpAlreadyEnabled = () =>

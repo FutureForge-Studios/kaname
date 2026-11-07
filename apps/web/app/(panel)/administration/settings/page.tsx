@@ -250,6 +250,19 @@ function SettingsSection({
         {error && (
           <div className="py-3">
             <PageError error={error} onRetry={onSave} context={title} />
+            {/* The rows here are FieldRows, not FormFields, so a validation
+                failure has no input to hang its message on. Without this
+                list a refused save read only "Invalid request body." and
+                never said which setting was wrong. */}
+            {error.fieldEntries.length > 0 && (
+              <ul aria-label={`${title} problems`} className="mt-2 flex flex-col gap-1 text-sm">
+                {error.fieldEntries.map(([field, message]) => (
+                  <li key={field} className="text-[var(--kn-danger)]">
+                    <span className="font-mono">{field}</span>: {message}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
         {children}

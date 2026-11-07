@@ -258,6 +258,18 @@ export default function SshPage() {
     onFailed: (error) => setConfigError(error),
   });
 
+  // The host reverts sshd unless this arrives inside the window, exactly
+  // like the firewall; there used to be no way to send it at all.
+  const confirmConfig = useResourceMutation<void, SshConfig>({
+    mutationFn: () => api.post<SshConfig>("/ssh/config/confirm", { server_id: serverId }),
+    invalidates: ["ssh"],
+    successMessage: () => `sshd configuration on ${serverName} confirmed. It will not revert.`,
+    onDone: () => {
+      setRollback(null);
+      void config.refetch();
+    },
+  });
+
   const tabsHref = React.useCallback(
     (next: View) => {
       const params = new URLSearchParams();
@@ -515,7 +527,14 @@ export default function SshPage() {
       />
 
       <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
-        {rollback && <RollbackBanner window={rollback} onDismiss={() => setRollback(null)} />}
+        {rollback && (
+          <RollbackBanner
+            window={rollback}
+            confirming={confirmConfig.isPending}
+            onConfirm={() => confirmConfig.mutate()}
+            onDismiss={() => setRollback(null)}
+          />
+        )}
 
         <ServerPicker selection={selection} />
 
