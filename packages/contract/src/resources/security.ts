@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { cidr, identifier, ipAddress, isoDate, listQuery, port, uuid } from "../primitives.js";
+import { cidr, identifier, ipAddress, isoDate, listQuery, port, queryBoolean, uuid } from "../primitives.js";
 import {
   auditActorType,
   firewallAction,
@@ -75,7 +75,7 @@ export const firewallRuleListQuery = listQuery.extend({
   direction: firewallDirection.optional(),
   protocol: firewallProtocol.optional(),
   managed_by: managedBy.optional(),
-  enabled: z.coerce.boolean().optional(),
+  enabled: queryBoolean.optional(),
 });
 export type FirewallRuleListQuery = z.infer<typeof firewallRuleListQuery>;
 
@@ -86,6 +86,27 @@ export type FirewallRuleListQuery = z.infer<typeof firewallRuleListQuery>;
  */
 export const firewallPolicy = z.enum(["allow", "deny"]);
 export type FirewallPolicy = z.infer<typeof firewallPolicy>;
+
+/**
+ * A change the host is holding behind its lockout-rollback window. It is
+ * part of the status reads, not only of the apply response, because the
+ * window outlives the browser tab that opened it: a reload used to drop
+ * the countdown and with it the only way to confirm, so the change
+ * silently reverted.
+ */
+export const pendingRollback = z.object({
+  /** When the host reverts on its own unless confirmed. */
+  expires_at: isoDate,
+  /** The window the host was given when the change was applied. */
+  seconds: z.number().int().positive(),
+  /** The apply job that armed the window, when it can still be found. */
+  job_id: uuid.nullable(),
+  /** What reverts, one line per change, e.g. "MaxAuthTries 6". */
+  changes: z.array(z.string()),
+  /** The same sentence the apply response gave about what happens next. */
+  summary: z.string(),
+});
+export type PendingRollback = z.infer<typeof pendingRollback>;
 
 export const firewallStatus = z.object({
   server_id: uuid,
@@ -98,6 +119,8 @@ export const firewallStatus = z.object({
   last_applied_at: isoDate.nullable(),
   /** Rules edited in the panel that the host has not been given yet. */
   pending_changes: z.number().int().nonnegative(),
+  /** Null when nothing is waiting to be confirmed. */
+  pending_rollback: pendingRollback.nullable(),
   last_synced_at: isoDate,
 });
 export type FirewallStatus = z.infer<typeof firewallStatus>;
@@ -133,6 +156,12 @@ export const threatEvent = z.object({
   first_seen: isoDate,
   last_seen: isoDate,
   disposition: threatDisposition,
+  /**
+   * Why the last ban or unban of this address failed on the host. Set
+   * when the job fails (and the disposition goes back to what it was),
+   * cleared by the next one that succeeds.
+   */
+  disposition_error: z.string().nullable(),
   /** One representative log line, truncated by the agent. */
   sample: z.string().max(1000).nullable(),
   last_synced_at: isoDate,
@@ -223,7 +252,7 @@ export const ipBlockListQuery = listQuery.extend({
   server_id: uuid.optional(),
   source: ipBlockSource.optional(),
   /** Expired blocks are kept for the audit trail, so they are opt-in on read. */
-  include_expired: z.coerce.boolean().default(false),
+  include_expired: queryBoolean.default(false),
 });
 export type IpBlockListQuery = z.infer<typeof ipBlockListQuery>;
 
@@ -262,6 +291,8 @@ export const sshKey = z.object({
   comment: z.string().nullable(),
   /** Null for a shared deploy key that belongs to no panel user. */
   user_id: uuid.nullable(),
+  /** The POSIX account on each host whose authorized_keys holds this key. */
+  posix_user: identifier,
   server_ids: z.array(uuid),
   last_used_at: isoDate.nullable(),
   created_at: isoDate,
@@ -273,6 +304,12 @@ export const createSshKeyInput = z.object({
   name: z.string().min(1).max(64),
   public_key: openSshPublicKey,
   user_id: uuid.nullable().default(null),
+  /**
+   * Whose ~/.ssh/authorized_keys the key is written to. Root was the only
+   * possibility before; the host checks the account exists before it
+   * writes anything.
+   */
+  posix_user: identifier.max(32).default("root"),
   server_ids: z.array(uuid).max(200).default([]),
 });
 export type CreateSshKeyInput = z.infer<typeof createSshKeyInput>;
@@ -303,12 +340,20 @@ export const sshConfig = z.object({
   allow_groups: z.array(identifier),
   x11_forwarding: z.boolean(),
   last_applied_at: isoDate.nullable(),
+  /** Null when sshd is not inside a rollback window. */
+  pending_rollback: pendingRollback.nullable(),
   last_synced_at: isoDate,
 });
 export type SshConfig = z.infer<typeof sshConfig>;
 
 export const applySshConfigInput = sshConfig
-  .omit({ server_id: true, server_name: true, last_applied_at: true, last_synced_at: true })
+  .omit({
+    server_id: true,
+    server_name: true,
+    last_applied_at: true,
+    pending_rollback: true,
+    last_synced_at: true,
+  })
   .partial()
   .extend({
     /** Same lockout guard as the firewall: a bad sshd config reverts itself. */

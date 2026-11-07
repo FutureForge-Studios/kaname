@@ -2,8 +2,8 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Ban, Globe, Plus, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Ban, FileKey, Globe, Plus, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
 import {
   CERT_EXPIRY_SOON_DAYS,
   certificateUrgency,
@@ -22,12 +22,18 @@ import {
   type DataTableColumn,
   type DataTableRowAction,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import {
+  ResourcePage,
+  serverPrerequisite,
+  useOpenFromQuery,
+  useResourceListState,
+} from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { PageError } from "@/components/PageError";
 import { formatCount } from "@/lib/format";
 import { useCan } from "@/lib/queries";
 import { CertificateDialog } from "../_components/CertificateDialog";
+import { InstallCertificateDialog } from "../_components/InstallCertificateDialog";
 import { JobPanel } from "../_components/JobPanel";
 import { FilterSelect } from "../_components/filters";
 import {
@@ -77,6 +83,19 @@ export default function SslPage() {
   const router = useRouter();
   const can = useCan();
 
+  /*
+   * The Command Center's "certificate expires in N days" items link here
+   * with ?certificate_id=, and this page used to ignore it — the operator
+   * landed on the whole list and had to find the row the alert had
+   * already named. A certificate is a detail page, so go there; replace,
+   * not push, so Back returns to the Command Center rather than bouncing.
+   */
+  const searchParams = useSearchParams();
+  const linkedCertificate = searchParams.get("certificate_id");
+  React.useEffect(() => {
+    if (linkedCertificate) router.replace(`/websites/ssl/${encodeURIComponent(linkedCertificate)}`);
+  }, [linkedCertificate, router]);
+
   const selection = useServerSelection({ permission: "websites.ssl:read" });
   const extraParams = React.useMemo(
     () => ({ server_id: selection.serverId ?? undefined }),
@@ -101,6 +120,12 @@ export default function SslPage() {
   const autoRenew = useSetAutoRenew();
 
   const [issuing, setIssuing] = React.useState(false);
+  const [installing, setInstalling] = React.useState(false);
+  useOpenFromQuery("new", () => setIssuing(true), can("websites.ssl:write"));
+  const noServer = serverPrerequisite(
+    selection,
+    "A certificate is ordered and installed on the host that serves the name.",
+  );
   const [pendingRevoke, setPendingRevoke] = React.useState<Certificate | null>(null);
   const [watchedJobId, setWatchedJobId] = React.useState<string | null>(null);
 
@@ -274,6 +299,18 @@ export default function SslPage() {
       Issue certificate
     </Button>
   );
+  /* For a certificate another authority issued; ACME is not involved. */
+  const installCertificate = (
+    <Button
+      variant="secondary"
+      size="sm"
+      icon={FileKey}
+      onClick={() => setInstalling(true)}
+      disabled={!can("websites.ssl:write")}
+    >
+      Install certificate
+    </Button>
+  );
 
   return (
     <>
@@ -281,6 +318,7 @@ export default function SslPage() {
         title="SSL / TLS"
         subtitle={selection.server ? selection.server.hostname : "Every host in scope"}
         primaryAction={issueCertificate}
+        headerActions={installCertificate}
         state={state}
         query={query}
         columns={columns}
@@ -292,6 +330,7 @@ export default function SslPage() {
         emptyTitle="No certificates yet"
         emptyDescription="Kaname runs the ACME order on the host and installs the result. Issue one to serve a domain over HTTPS."
         emptyAction={issueCertificate}
+        prerequisite={noServer}
         selectable
         isRowSelectable={(certificate) => certificate.status !== "revoked"}
         onRowClick={(certificate) => router.push(`/websites/ssl/${certificate.id}`)}
@@ -354,6 +393,12 @@ export default function SslPage() {
         open={issuing}
         onOpenChange={setIssuing}
         defaultServerId={selection.serverId}
+      />
+      <InstallCertificateDialog
+        open={installing}
+        onOpenChange={setInstalling}
+        defaultServerId={selection.serverId}
+        onQueued={(job) => setWatchedJobId(job.id)}
       />
 
       <ConfirmDialog

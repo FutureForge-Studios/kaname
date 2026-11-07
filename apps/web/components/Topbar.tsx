@@ -61,7 +61,7 @@ export function applyTheme(choice: ThemeChoice): void {
 }
 
 function readTheme(): ThemeChoice {
-  if (typeof window === "undefined") return "dark";
+  if (typeof window === "undefined") return "system";
   try {
     const stored = window.localStorage.getItem(THEME_KEY);
     return stored === "light" || stored === "dark" ? stored : "system";
@@ -106,7 +106,7 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
   return (
     <header
       className={cn(
-        "flex h-[var(--kn-topbar-h)] shrink-0 items-center gap-2 border-b border-[var(--kn-border)] bg-[var(--kn-bg)] px-3",
+        "flex h-[var(--kn-topbar-h)] shrink-0 items-center gap-2 kn-material border-b border-[var(--kn-border)] px-3",
         className,
       )}
     >
@@ -193,7 +193,10 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
         </MenuItem>
 
         {user && (
-          <MenuItem icon={UserRound} onSelect={() => window.location.assign("/administration/users")}>
+          // /account, not /administration/users: the account page is where
+          // your own password, two-factor and sessions live, and the users
+          // list is forbidden to every role without admin.users:read.
+          <MenuItem icon={UserRound} onSelect={() => window.location.assign("/account")}>
             Your profile and sessions
           </MenuItem>
         )}

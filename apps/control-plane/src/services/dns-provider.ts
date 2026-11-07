@@ -154,7 +154,6 @@ export class ManualProvider implements DnsProvider {
  * Cloudflare
  * ------------------------------------------------------------------ */
 
-const CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
 const CLOUDFLARE_TIMEOUT_MS = 15_000;
 const CLOUDFLARE_PAGE_SIZE = 100;
 /** The only records any CDN can proxy; asking for the rest is silently ignored. */
@@ -200,6 +199,8 @@ export class CloudflareProvider implements DnsProvider {
   constructor(
     private readonly target: DnsProviderTarget,
     private readonly token: string,
+    /** KANAME_CLOUDFLARE_API_URL: configurable so tests can stand one up on loopback. */
+    private readonly apiUrl = "https://api.cloudflare.com/client/v4",
   ) {}
 
   async zone(): Promise<ProviderZone> {
@@ -363,7 +364,7 @@ export class CloudflareProvider implements DnsProvider {
   ): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(`${CLOUDFLARE_API}${path}`, {
+      response = await fetch(`${this.apiUrl.replace(/\/$/, "")}${path}`, {
         method: init.method,
         headers: {
           authorization: `Bearer ${this.token}`,
@@ -497,7 +498,11 @@ export async function dnsProviderFor(
 ): Promise<DnsProvider> {
   switch (target.dnsProvider) {
     case "cloudflare":
-      return new CloudflareProvider(target, await cloudflareToken(deps, target));
+      return new CloudflareProvider(
+        target,
+        await cloudflareToken(deps, target),
+        deps.config.KANAME_CLOUDFLARE_API_URL,
+      );
     case "manual":
       return new ManualProvider(target);
     default:

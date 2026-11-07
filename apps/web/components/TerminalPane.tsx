@@ -85,25 +85,25 @@ function token(styles: CSSStyleDeclaration, name: string, fallback: string): str
 function buildTheme(): Record<string, string> {
   const styles = getComputedStyle(document.documentElement);
 
-  const background = token(styles, "--kn-bg-inset", "#08090a");
-  const foreground = token(styles, "--kn-text", "#e7e9ec");
-  const muted = token(styles, "--kn-text-2", "#9ba3ae");
-  const dim = token(styles, "--kn-text-3", "#6b7280");
-  const accent = token(styles, "--kn-accent-400", "#8aa0ff");
-  const accentSoft = token(styles, "--kn-accent-300", "#a9b8ff");
-  const ok = token(styles, "--kn-ok", "#3fb950");
-  const warn = token(styles, "--kn-warn", "#d29922");
-  const danger = token(styles, "--kn-danger", "#f85149");
-  const info = token(styles, "--kn-info", "#58a6ff");
+  const background = token(styles, "--kn-bg-inset", "#060608");
+  const foreground = token(styles, "--kn-text", "#f4f4f5");
+  const muted = token(styles, "--kn-text-2", "#b4b4bc");
+  const dim = token(styles, "--kn-text-3", "#8a8a93");
+  const accent = token(styles, "--kn-accent-400", "#a98df8");
+  const accentSoft = token(styles, "--kn-accent-300", "#c9b8fb");
+  const ok = token(styles, "--kn-ok", "#4fe3cb");
+  const warn = token(styles, "--kn-warn", "#fbb13c");
+  const danger = token(styles, "--kn-danger", "#f45b69");
+  const info = token(styles, "--kn-info", "#7cb7ff");
 
   return {
     background,
     foreground,
     cursor: accent,
     cursorAccent: background,
-    selectionBackground: token(styles, "--kn-accent-soft-strong", "rgba(91,118,247,0.22)"),
+    selectionBackground: token(styles, "--kn-accent-soft-strong", "rgba(122,79,244,0.3)"),
     selectionForeground: foreground,
-    black: token(styles, "--kn-surface-3", "#1c2024"),
+    black: token(styles, "--kn-surface-3", "#24242b"),
     red: danger,
     green: ok,
     yellow: warn,

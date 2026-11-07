@@ -5,6 +5,9 @@ import type { Config } from "../config.js";
 import { AgentOfflineError, AgentRpcError, type AgentHub } from "../agent/hub.js";
 import type { EventBus } from "../services/events.js";
 import type { AuditService } from "../services/audit.js";
+import type { MailReleaseService } from "../services/mail-release.js";
+import { releaseAbandoned } from "./threats.js";
+import type { MailSecretStore } from "../services/mail-secrets.js";
 import { JobQueue, type ClaimedJob } from "./queue.js";
 
 /* ------------------------------------------------------------------ *
@@ -24,6 +27,8 @@ export interface JobContext {
   audit: AuditService;
   config: Config;
   log: Logger;
+  mailReleases: MailReleaseService;
+  mailSecrets: MailSecretStore;
   job: ClaimedJob;
   /** Emits a job log line and pushes it to any open job drawer. */
   log_(level: "debug" | "info" | "warn" | "error", message: string): Promise<void>;
@@ -50,6 +55,8 @@ export class JobWorker {
       audit: AuditService;
       config: Config;
       log: Logger;
+      mailReleases: MailReleaseService;
+      mailSecrets: MailSecretStore;
     },
   ) {}
 
@@ -135,6 +142,14 @@ export class JobWorker {
           job.server_id,
         );
       }
+      // A ban or unban that ended here never reached its handler's own
+      // failure path, so the threat rows it was holding are released now.
+      await releaseAbandoned(
+        this.deps.db,
+        [...reaped, ...expired]
+          .filter((job) => job.status === "failed" || job.status === "timed_out")
+          .map((job) => ({ id: job.id, reason: job.error?.message ?? "the request did not complete" })),
+      );
     } catch (err) {
       this.deps.log.error({ err }, "job maintenance failed");
     }

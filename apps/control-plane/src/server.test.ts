@@ -181,7 +181,8 @@ describe("every list endpoint answers", () => {
     "/api/v1/ftp-accounts",
     "/api/v1/mailboxes",
     "/api/v1/mail-aliases",
-    "/api/v1/mail-forwarders",
+    "/api/v1/mail-domains",
+    "/api/v1/mail-servers",
     "/api/v1/db-instances",
     "/api/v1/databases",
     "/api/v1/db-users",
@@ -269,6 +270,11 @@ describe("live reads degrade honestly", () => {
     const error = JSON.parse(res.body).error;
     expect(error.code).toBe("agent_offline");
     expect(error.remediation.summary).toBeTruthy();
+    // "Server details" lands on this host, not on the fleet list.
+    const details = (error.remediation.actions as { label: string; href?: string }[]).find(
+      (action) => action.label === "Server details",
+    );
+    expect(details?.href).toBe(`/infrastructure/servers/${await serverId()}`);
   });
 });
 

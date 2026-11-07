@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "failed_login_at" timestamp with time zone[] DEFAULT '{}'::timestamptz[] NOT NULL;

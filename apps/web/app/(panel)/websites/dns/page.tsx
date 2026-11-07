@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   CircleAlert,
   CircleCheck,
@@ -13,6 +13,7 @@ import {
   Search,
   Trash2,
   TriangleAlert,
+  Upload,
 } from "lucide-react";
 import type { DnsRecord, DnsValidationIssue, Domain, RemediationAction } from "@kaname/contract";
 import {
@@ -34,12 +35,14 @@ import {
 import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
 import { PageError } from "@/components/PageError";
 import { formatCount } from "@/lib/format";
-import { useCan } from "@/lib/queries";
+import { useCan, useJob } from "@/lib/queries";
 import { DnsRecordDialog } from "../_components/DnsRecordDialog";
 import { useDnsColumns } from "../_components/dnsColumns";
 import { DNS_RECORD_TYPES } from "../_components/dnsTypes";
 import { FilterSelect } from "../_components/filters";
+import { JobPanel } from "../_components/JobPanel";
 import {
+  useApplyDns,
   useDeleteDnsRecords,
   useDnsRecords,
   useDnsValidation,
@@ -81,12 +84,35 @@ export default function DnsPage() {
   const router = useRouter();
   const can = useCan();
 
+  /*
+   * The zone is what this page is about, not a filter on it. It used to
+   * be one of `filterKeys`, so an empty zone counted as "filtered" and
+   * showed "No matches — clear search and filters" (which also dropped
+   * the zone) instead of this page's own empty state for a zone with no
+   * records. It lives in the URL beside the filters, the way the Sites
+   * page carries its server.
+   */
+  const pathname = usePathname() ?? "/websites/dns";
+  const searchParams = useSearchParams();
+  const domainId = searchParams.get("domain_id") || null;
+  const extraParams = React.useMemo(() => ({ domain_id: domainId ?? undefined }), [domainId]);
+  const setDomainId = React.useCallback(
+    (next: string | null) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (next) params.set("domain_id", next);
+      else params.delete("domain_id");
+      params.delete("page");
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
   const state = useResourceListState({
     defaultSort: { id: "name", order: "asc" },
-    filterKeys: ["domain_id", "type", "managed_by", "drifted"],
+    filterKeys: ["type", "managed_by", "drifted"],
+    extraParams,
   });
-
-  const domainId = state.filters["domain_id"] ?? null;
   const domains = useDomains({ per_page: 200, sort: "name", order: "asc" });
   const domain = React.useMemo<Domain | null>(
     () => domains.data?.data.find((row) => row.id === domainId) ?? null,
@@ -95,8 +121,29 @@ export default function DnsPage() {
 
   const query = useDnsRecords(state.params);
   const validation = useDnsValidation(domainId);
-  const [syncSummary, setSyncSummary] = React.useState<DnsSyncResult | null>(null);
-  const sync = useSyncDns(setSyncSummary);
+  /*
+   * Sync and apply are jobs, watched in place: the summary a sync used
+   * to answer with is now its job's result, rendered once it succeeds.
+   */
+  const [zoneJob, setZoneJob] = React.useState<{ id: string; domainId: string } | null>(null);
+  const watched = useJob(zoneJob?.id);
+  const sync = useSyncDns(
+    (job) => job.target_id && setZoneJob({ id: job.id, domainId: job.target_id }),
+  );
+  const apply = useApplyDns(
+    (job) => job.target_id && setZoneJob({ id: job.id, domainId: job.target_id }),
+  );
+  const syncSummary =
+    watched.data?.type === "dns.sync" && watched.data.status === "succeeded"
+      ? (watched.data.result as DnsSyncResult | null)
+      : null;
+  // Counted on its own so a filter or a page boundary cannot hide drift
+  // from the button that pushes it.
+  const stagedQuery = useDnsRecords(
+    { domain_id: domainId ?? undefined, drifted: true, managed_by: "kaname", per_page: 1 },
+    Boolean(domainId),
+  );
+  const staged = stagedQuery.data?.meta.total ?? 0;
   const reconcile = useReconcileDnsRecord();
   const reconcileMany = useReconcileDnsRecords();
   const removeRecords = useDeleteDnsRecords();
@@ -180,9 +227,10 @@ export default function DnsPage() {
         router.push(action.href);
         return;
       }
-      if (action.action === "dns.sync" && domainId) sync.mutate({ domainId });
+      if (action.action === "dns.sync" && domainId)
+        sync.mutate({ domainId, domainName: domain?.name });
     },
-    [domainId, router, sync],
+    [domain, domainId, router, sync],
   );
 
   const addRecord = (
@@ -205,23 +253,50 @@ export default function DnsPage() {
         subtitle={domain ? domain.name : "Every zone in scope"}
         primaryAction={addRecord}
         headerActions={
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={RefreshCw}
-            loading={sync.isPending}
-            disabled={!domain || domain.dns_provider === "manual"}
-            title={
-              domain
-                ? domain.dns_provider === "manual"
-                  ? "A manual zone has no API to pull from."
-                  : "Re-read the zone from the provider."
-                : "Choose a zone to sync."
-            }
-            onClick={() => domainId && sync.mutate({ domainId })}
-          >
-            Sync zone
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={Upload}
+              loading={apply.isPending}
+              disabled={!domain || domain.dns_provider === "manual" || !writable || staged === 0}
+              title={
+                domain
+                  ? domain.dns_provider === "manual"
+                    ? "A manual zone has no API to push to."
+                    : staged === 0
+                      ? "Nothing is staged: every record matches the provider."
+                      : "Write Kaname's value back over every drifted record."
+                  : "Choose a zone to apply."
+              }
+              onClick={() =>
+                domain && apply.mutate({ domainId: domain.id, domainName: domain.name })
+              }
+            >
+              {/* A manual zone's records are all "drifted" until published by
+                hand; there is nothing to push, so no count either. */}
+              {staged > 0 && domain?.dns_provider !== "manual"
+                ? `Apply ${formatCount(staged)} staged`
+                : "Apply staged"}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={RefreshCw}
+              loading={sync.isPending}
+              disabled={!domain || domain.dns_provider === "manual"}
+              title={
+                domain
+                  ? domain.dns_provider === "manual"
+                    ? "A manual zone has no API to pull from."
+                    : "Re-read the zone from the provider."
+                  : "Choose a zone to sync."
+              }
+              onClick={() => domainId && sync.mutate({ domainId, domainName: domain?.name })}
+            >
+              Sync zone
+            </Button>
+          </>
         }
         state={state}
         query={query}
@@ -304,9 +379,7 @@ export default function DnsPage() {
           <Combobox
             options={domainOptions}
             value={domainId ?? ""}
-            onValueChange={(next) =>
-              state.setFilter("domain_id", next && next.length > 0 ? next : null)
-            }
+            onValueChange={(next) => setDomainId(next && next.length > 0 ? next : null)}
             placeholder={domainOptions.length === 0 ? "No domains in scope" : "All zones"}
             emptyMessage="No domain matches that name."
             loading={domains.isLoading}
@@ -341,8 +414,16 @@ export default function DnsPage() {
           />
         )}
 
+        {zoneJob && zoneJob.domainId === domainId && !syncSummary && (
+          <JobPanel
+            jobId={zoneJob.id}
+            title={watched.data?.type === "dns.apply" ? "Apply job" : "Sync job"}
+            onDismiss={() => setZoneJob(null)}
+          />
+        )}
+
         {syncSummary && syncSummary.domain_id === domainId && (
-          <SyncSummary summary={syncSummary} onDismiss={() => setSyncSummary(null)} />
+          <SyncSummary summary={syncSummary} onDismiss={() => setZoneJob(null)} />
         )}
 
         {domain && (

@@ -10,7 +10,8 @@ import type { DateInput } from "./Primitives.js";
  * Page chrome: PageHeader, SectionCard, ResourceHeader, DetailLayout.
  *
  * SectionCard is the default container for everything — a bordered
- * surface with a header row, not a floating card with a shadow. Detail
+ * surface with a header row and only the soft card shadow (--kn-shadow-sm),
+ * never a floating, heavily lifted card. Detail
  * pages pair a main column with a sticky metadata rail so identity and
  * status stay on screen while the body scrolls.
  * ------------------------------------------------------------------ */
@@ -48,7 +49,7 @@ export const PageHeader = React.forwardRef<HTMLElement, PageHeaderProps>(functio
       )}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="truncate text-xl font-medium tracking-tight text-[var(--kn-text)]">
+          <h1 className="kn-display truncate text-xl font-medium text-[var(--kn-text)]">
             {title}
           </h1>
           {subtitle && (
@@ -97,7 +98,7 @@ export const SectionCard = React.forwardRef<HTMLElement, SectionCardProps>(funct
     <section
       ref={ref}
       className={cn(
-        "overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)]",
+        "overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] shadow-[var(--kn-shadow-sm)]",
         className,
       )}
       {...props}
@@ -185,7 +186,7 @@ export const ResourceHeader = React.forwardRef<HTMLElement, ResourceHeaderProps>
         <div className="flex items-start justify-between gap-4">
           <div className="flex min-w-0 flex-col gap-1">
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-              <h1 className="truncate text-xl font-medium tracking-tight text-[var(--kn-text)]">
+              <h1 className="kn-display truncate text-xl font-medium text-[var(--kn-text)]">
                 {name}
               </h1>
               {connection && (

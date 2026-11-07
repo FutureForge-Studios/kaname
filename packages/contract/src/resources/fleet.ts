@@ -7,6 +7,7 @@ import {
   isoDate,
   listQuery,
   percent,
+  queryBoolean,
   uuid,
 } from "../primitives.js";
 import {
@@ -152,7 +153,8 @@ export type Service = z.infer<typeof service>;
 export const serviceListQuery = listQuery.extend({
   server_id: uuid.optional(),
   active_state: serviceActiveState.optional(),
-  enabled: z.coerce.boolean().optional(),
+  /** queryBoolean: `enabled=false` must mean disabled units, not every unit. */
+  enabled: queryBoolean.optional(),
 });
 
 export const serviceAction = z.enum(["start", "stop", "restart", "reload", "enable", "disable"]);
@@ -286,11 +288,17 @@ export type MonitoringOverview = z.infer<typeof monitoringOverview>;
 
 export const alertRule = z.object({
   id: uuid,
-  name: z.string(),
+  /** Required: a rule with an empty name fires as an alert nobody can identify. */
+  name: z.string().trim().min(1).max(96),
   metric: metricName,
   comparator: alertComparator,
   threshold: z.number(),
-  duration_seconds: z.number().int(),
+  /**
+   * How long the condition must hold. Bounded: a negative duration was
+   * accepted and stored, and the evaluator then treated it as "fire on
+   * the first breached sample" without anyone having asked for that.
+   */
+  duration_seconds: z.number().int().min(0).max(604_800),
   severity: alertSeverity,
   scope: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("fleet") }),
@@ -324,9 +332,54 @@ export const createAlertRuleInput = alertRule
   .omit({ id: true, created_at: true, updated_at: true })
   .partial({ enabled: true, channels: true });
 
+/**
+ * A notification channel as the alert rule form sees it. The full
+ * channel (its address or webhook URL) is Settings' business and needs
+ * admin.settings:read; choosing where a rule's alerts go only needs to
+ * name one. `receives_alerts` says whether the channel is subscribed to
+ * alert events at all, because a rule's list only narrows that set.
+ */
+export const alertRuleChannel = z.object({
+  id: uuid,
+  name: z.string(),
+  kind: z.enum(["email", "webhook", "slack"]),
+  enabled: z.boolean(),
+  receives_alerts: z.boolean(),
+});
+export type AlertRuleChannel = z.infer<typeof alertRuleChannel>;
+
 /* ------------------------------------------------------------------ *
  * Command Center
  * ------------------------------------------------------------------ */
+
+/**
+ * Getting Started. Each step is a fact read from the control plane's own
+ * rows, never a flag the browser sets, so the checklist cannot claim
+ * progress the fleet does not have. A step the caller cannot read is
+ * left out rather than reported as undone.
+ */
+export const onboardingStepId = z.enum([
+  "server_paired",
+  "agents_connected",
+  "domain_added",
+  "site_created",
+  "certificate_issued",
+  "mail_server_installed",
+  "mailbox_created",
+  "database_created",
+  "firewall_applied",
+  "ssh_key_added",
+  "backup_destination_added",
+  "backup_succeeded",
+  "alert_rule_created",
+  "notification_channel_added",
+  "teammate_invited",
+  "two_factor_enabled",
+]);
+export type OnboardingStepId = z.infer<typeof onboardingStepId>;
+
+export const onboardingStep = z.object({ id: onboardingStepId, done: z.boolean() });
+export type OnboardingStep = z.infer<typeof onboardingStep>;
 
 export const commandCenterSummary = z.object({
   fleet: monitoringOverview.shape.fleet,
@@ -339,6 +392,7 @@ export const commandCenterSummary = z.object({
         "backup_failed",
         "service_failed",
         "mail_auth_failing",
+        "mail_server_unhealthy",
         "threat_spike",
         "job_failed",
         "update_available",
@@ -369,5 +423,6 @@ export const commandCenterSummary = z.object({
       z.object({ ip: ipAddress, attempts: z.number().int(), country: z.string().nullable() }),
     ),
   }),
+  onboarding: z.array(onboardingStep),
 });
 export type CommandCenterSummary = z.infer<typeof commandCenterSummary>;

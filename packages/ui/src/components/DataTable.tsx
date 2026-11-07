@@ -353,6 +353,11 @@ function DataTableInner<T>(
           focusRow(rows.length - 1);
           break;
         case "Enter": {
+          // Enter on a control inside the row (the row menu, a link) is
+          // that control's own activation. Taking it for the row opened the
+          // row instead and, with preventDefault, made the row menu
+          // unreachable from the keyboard.
+          if (target.closest(CONTROL_SELECTOR)) break;
           const row = rows[current];
           if (onRowClick && row !== undefined) {
             event.preventDefault();
@@ -449,8 +454,16 @@ function DataTableInner<T>(
       {...props}
     >
       {showToolbar && (
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--kn-border)] px-2">
-          <div className="flex min-w-0 flex-1 items-center gap-2">{toolbar}</div>
+        /*
+         * A minimum height, not a fixed one, and the slot wraps. With
+         * `h-10` a toolbar holding a search and five filters (Backups ›
+         * Schedules) wrapped at 1440px into a second row that the card's
+         * overflow-hidden then cut off, search row included. One row still
+         * renders at exactly 40px; more rows grow the bar instead of
+         * clipping it, and the column menu stays pinned to the first row.
+         */
+        <div className="flex min-h-10 shrink-0 items-start gap-2 border-b border-[var(--kn-border)] px-2 py-1.5">
+          <div className="flex min-h-7 min-w-0 flex-1 flex-wrap items-center gap-2">{toolbar}</div>
           {columnVisibility && (
             <DropdownMenu
               placement="bottom-end"

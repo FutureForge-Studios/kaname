@@ -6,7 +6,7 @@ import { Combobox, FormField, Input, Select, Switch, type ComboboxOption } from 
 import { useCan, useServers } from "@/lib/queries";
 import { FormDialog, fieldErrors } from "./FormDialog";
 import { DNS_PROVIDER_LABELS } from "./status";
-import { useCreateDomain, useSites, useUpdateDomain } from "./queries";
+import { useCreateDomain, useSaveDnsToken, useSites, useUpdateDomain } from "./queries";
 
 /* ------------------------------------------------------------------ *
  * Add and edit a domain.
@@ -29,6 +29,8 @@ interface FormState {
   zoneId: string;
   proxied: boolean;
   registrar: string;
+  /** Write-only: sent once and sealed; never read back into the form. */
+  apiToken: string;
 }
 
 function initialState(domain: Domain | null): FormState {
@@ -40,6 +42,7 @@ function initialState(domain: Domain | null): FormState {
     zoneId: domain?.dns_zone_id ?? "",
     proxied: domain?.proxied ?? false,
     registrar: domain?.registrar ?? "",
+    apiToken: "",
   };
 }
 
@@ -65,6 +68,7 @@ export function DomainDialog({
   const sites = useSites({ per_page: 200, sort: "name", order: "asc" }, open);
   const create = useCreateDomain();
   const update = useUpdateDomain(domain?.id ?? "");
+  const saveToken = useSaveDnsToken();
   const mutation = editing ? update : create;
   const resetMutation = mutation.reset;
 
@@ -141,7 +145,15 @@ export function DomainDialog({
       ...(form.registrar.trim() ? { registrar: form.registrar.trim() } : {}),
     };
 
-    const close = { onSuccess: () => onOpenChange(false) };
+    // The token is saved against the domain once the row says it is an
+    // API-driven zone; the PUT refuses a manual one.
+    const token = form.provider === "manual" ? "" : form.apiToken.trim();
+    const close = {
+      onSuccess: (saved: Domain) => {
+        if (token) saveToken.mutate({ domainId: saved.id, domainName: saved.name, token });
+        onOpenChange(false);
+      },
+    };
     if (editing) update.mutate(payload, close);
     else create.mutate({ ...payload, name: form.name.trim().toLowerCase() }, close);
   };
@@ -260,6 +272,23 @@ export function DomainDialog({
             value={form.zoneId}
             onChange={(event) => set("zoneId", event.target.value)}
             placeholder="Discovered on sync"
+            mono
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </FormField>
+      )}
+
+      {form.provider !== "manual" && (
+        <FormField
+          label="API token"
+          description={`Zone:Read and DNS:Edit on this zone. Sealed when saved and never shown again${editing ? "; leave blank to keep the stored one" : ""}.`}
+        >
+          <Input
+            type="password"
+            value={form.apiToken}
+            onChange={(event) => set("apiToken", event.target.value)}
+            placeholder={editing ? "Unchanged" : "Paste the provider token"}
             mono
             autoComplete="off"
             spellCheck={false}

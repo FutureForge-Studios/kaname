@@ -5,6 +5,7 @@ import { idParam, jobListQueryExtra, jobLogQuery, listQuery } from "@kaname/cont
 import { helpers, item, list, offset, paginate, parseParams, parseQuery } from "../http/plugin.js";
 import { notFound } from "../lib/errors.js";
 import { combine, scopeFilter } from "./_shared.js";
+import { releaseAbandoned } from "../jobs/threats.js";
 
 /* ------------------------------------------------------------------ *
  * Jobs.
@@ -103,10 +104,26 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
 
     const job = await req.ctx.queue.get(id);
     if (!job) throw notFound("Job", id);
-    h.authorize("infra.servers:write", job.server_id);
+    /*
+     * Whoever started a job may stop it; anyone else needs
+     * infra.servers:write on its host, as before. Without the first half
+     * a Developer could restart a unit but not take the restart back,
+     * which is the wrong way round for the safer of the two verbs.
+     * Cancelling never does more than the job would have, so honouring
+     * the creator needs no fresher grant than the one that enqueued it.
+     * (The spec's own permission was the alternative; it was not chosen
+     * because one spec can serve several permission sets — every db.*
+     * job names the MySQL set — so it would refuse a PostgreSQL-only
+     * role its own job. KD-037.)
+     */
+    const principal = h.requirePrincipal();
+    const ownJob = principal.kind === "user" && job.created_by === principal.id;
+    if (!ownJob) h.authorize("infra.servers:write", job.server_id);
 
     const cancelled = await req.ctx.queue.cancel(id);
     if (cancelled) {
+      // A cancelled ban or unban will not settle its threat rows itself.
+      await releaseAbandoned(req.ctx.db, [{ id, reason: "the request was cancelled" }]);
       await req.ctx.audit.record({
         actor: h.actor(),
         action: "job.cancelled",

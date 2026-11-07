@@ -1,5 +1,4 @@
 import { sql } from "drizzle-orm";
-import { MAIL_AUTH_CHECK_META } from "@kaname/contract";
 import { createDb, type Database } from "./index.js";
 import * as s from "./schema/index.js";
 
@@ -8,8 +7,8 @@ import * as s from "./schema/index.js";
  *
  * Creates a plausible small fleet with the state an owner-operator
  * would actually have: a few servers, sites with certificates at
- * different stages of expiry, a mail domain whose DNS authentication is
- * partly broken in the way real ones are, databases, backups, and 48
+ * different stages of expiry, a Yunori Mail Server whose DNS checklist
+ * is partly unpublished in the way real ones are, databases, backups, and 48
  * hours of metric history so every chart has something honest to draw.
  *
  * Servers are marked `simulated` so the panel can label them
@@ -73,9 +72,7 @@ const SERVERS = [
       "systemd",
       "docker",
       "nginx",
-      "mail",
-      "postfix",
-      "dovecot",
+      "yunori",
       "nftables",
       "fail2ban",
       "certbot",
@@ -371,7 +368,7 @@ export async function seedDemo(db: Database): Promise<void> {
         expiresAt: new Date(now + 200 * 86_400_000),
         nameservers: ["ns1.cloudflare.com", "ns2.cloudflare.com"],
         verified: true,
-        verificationMethod: "dns",
+        verificationMethod: "dns_txt",
         verifiedAt: new Date(now - 30 * 86_400_000),
         hasMail: spec.domain === "futureforge.dev",
       })
@@ -475,217 +472,266 @@ export async function seedDemo(db: Database): Promise<void> {
   }
 
   /* -------------------------------- mail ------------------------------ */
+  //
+  // One Yunori Mail Server, installed and healthy except for the two
+  // things that are really still open on a fresh box: the provider's
+  // reverse DNS has not been set, and the DKIM record is not published
+  // yet. Every value below is written the way a sync would write it from
+  // `yunori-mail status`, `doctor` and `domain dns`, so the demo and the
+  // real thing cannot drift.
 
   const mailServerId = serverIds["mail-01"]!;
   const mailDomainId = domainIds["futureforge.dev"]!;
+  const mailHost = "mail.futureforge.dev";
+  const mailIp = "198.51.100.42";
+  const syncedAt = new Date(now - 4 * 60_000);
+  const dkimValue =
+    "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0xM3RkFtb3VudE9mS2V5RGF0YUZvclNlZWQ";
+
+  const [mailServer] = await db
+    .insert(s.mailServers)
+    .values({
+      serverId: mailServerId,
+      status: "installed",
+      version: "0.3.1",
+      installComplete: false,
+      hostname: mailHost,
+      primaryDomain: "futureforge.dev",
+      adminEmail: "ops@futureforge.studio",
+      sendingMode: "direct",
+      relayProvider: null,
+      consoleUrl: `https://${mailHost}/console`,
+      steps: [
+        { title: "Check this server", status: "done", detail: null },
+        { title: "Your domain", status: "done", detail: null },
+        { title: "Point the mail hostname here", status: "done", detail: null },
+        { title: "Open mail ports", status: "done", detail: null },
+        { title: "Install the mail engine", status: "done", detail: null },
+        { title: "Configure the mail engine", status: "done", detail: null },
+        { title: "Start the console and HTTPS edge", status: "done", detail: null },
+        { title: "Get a trusted TLS certificate", status: "done", detail: null },
+        { title: "Publish DNS records", status: "done", detail: null },
+        {
+          title: "Set reverse DNS",
+          status: "waiting",
+          detail: `In the Vultr control panel, set the reverse DNS of ${mailIp} to ${mailHost}. The server re-checks every minute and moves on by itself.`,
+        },
+        { title: "Create your first mailbox", status: "done", detail: null },
+        { title: "Finish", status: "pending", detail: null },
+      ],
+      services: [
+        { name: "stalwart", active: true },
+        { name: "yunori-mail", active: true },
+        { name: "unbound", active: true },
+      ],
+      checks: [
+        {
+          id: "services",
+          label: "Services",
+          status: "pass",
+          detail: "stalwart, yunori-mail and unbound are running.",
+          remedy: null,
+          help_url: null,
+        },
+        {
+          id: "ports",
+          label: "Mail ports",
+          status: "pass",
+          detail: "25, 465, 587 and 993 answer from the public address.",
+          remedy: null,
+          help_url: null,
+        },
+        {
+          id: "certificate",
+          label: "TLS certificate",
+          status: "pass",
+          detail: `Let's Encrypt certificate for ${mailHost}, valid for another 71 days; the same certificate is served on 465, 587 and 993.`,
+          remedy: null,
+          help_url: null,
+        },
+        {
+          id: "outbound_25",
+          label: "Outbound port 25",
+          status: "pass",
+          detail:
+            "A connection to a public MX on port 25 succeeded, so direct sending works from here.",
+          remedy: null,
+          help_url: null,
+        },
+        {
+          id: "ptr",
+          label: "Reverse DNS",
+          status: "warn",
+          detail: `${mailIp} reverses to 198-51-100-42.vultrusercontent.com, not to ${mailHost}. Receivers that require forward-confirmed reverse DNS will mark mail from here as suspicious.`,
+          remedy: `Set the reverse DNS of ${mailIp} to ${mailHost} in the Vultr control panel. It is checked again every minute.`,
+          help_url: "https://yunori.email/server/docs/reverse-dns",
+        },
+        {
+          id: "blocklists",
+          label: "Blocklists",
+          status: "fail",
+          detail: `${mailIp} is listed on Spamhaus PBL (policy block list), which covers the whole provider range as end-user space.`,
+          remedy:
+            "Request removal of this single address at spamhaus.org/pbl, or ask Vultr to delist the range. Until then, large receivers will refuse mail from it.",
+          help_url: "https://yunori.email/server/docs/blocklists",
+        },
+        {
+          id: "clock",
+          label: "Clock",
+          status: "pass",
+          detail: "The system clock is within 40 ms of NTP time.",
+          remedy: null,
+          help_url: null,
+        },
+        {
+          id: "disk",
+          label: "Disk",
+          status: "pass",
+          detail: "/var/lib/stalwart has 61 GB free.",
+          remedy: null,
+          help_url: null,
+        },
+        {
+          id: "updates",
+          label: "Release",
+          status: "info",
+          detail: "yunori-mail 0.3.1 is the newest release.",
+          remedy: null,
+          help_url: null,
+        },
+      ],
+      health: "fail",
+      certificate: {
+        state: "valid",
+        covers: [mailHost, "autoconfig.futureforge.dev", "mta-sts.futureforge.dev"],
+        issuer: "Let's Encrypt",
+        expires_at: new Date(now + 71 * 86_400_000).toISOString(),
+        days_left: 71,
+        authority: "https://acme-v02.api.letsencrypt.org/directory",
+        renews_at: new Date(now + 41 * 86_400_000).toISOString(),
+        last_attempt: new Date(now - 19 * 86_400_000).toISOString(),
+        next_attempt: new Date(now + 41 * 86_400_000).toISOString(),
+      },
+      lastSyncedAt: syncedAt,
+    })
+    .returning({ id: s.mailServers.id });
+
+  const dnsRecord = (
+    type: string,
+    name: string,
+    expected: string,
+    status: "pass" | "warn" | "fail",
+    actual: string[],
+    required = true,
+  ) => ({ id: `${type}:${name}`, type, name, expected, actual, status, required });
+
+  const dnsRecords = [
+    dnsRecord("MX", "futureforge.dev", `10 ${mailHost}.`, "pass", [`10 ${mailHost}.`]),
+    dnsRecord("A", mailHost, mailIp, "pass", [mailIp]),
+    dnsRecord("TXT", "futureforge.dev", `"v=spf1 mx -all"`, "pass", ["v=spf1 mx -all"]),
+    dnsRecord("TXT", mailHost, `"v=spf1 a -all"`, "pass", ["v=spf1 a -all"]),
+    // Not published yet: the host generated the key, the operator has not
+    // copied it to the zone. The expected value is what the copy button carries.
+    dnsRecord("TXT", "yunori._domainkey.futureforge.dev", `"${dkimValue}"`, "fail", []),
+    dnsRecord(
+      "TXT",
+      "_dmarc.futureforge.dev",
+      `"v=DMARC1; p=quarantine; rua=mailto:dmarc@futureforge.dev"`,
+      "pass",
+      ["v=DMARC1; p=quarantine; rua=mailto:dmarc@futureforge.dev"],
+    ),
+    dnsRecord("CNAME", "mta-sts.futureforge.dev", `${mailHost}.`, "pass", [`${mailHost}.`], false),
+    dnsRecord(
+      "TXT",
+      "_mta-sts.futureforge.dev",
+      `"v=STSv1; id=20260301T000000"`,
+      "pass",
+      ["v=STSv1; id=20260301T000000"],
+      false,
+    ),
+    dnsRecord(
+      "TXT",
+      "_smtp._tls.futureforge.dev",
+      `"v=TLSRPTv1; rua=mailto:tls-reports@futureforge.dev"`,
+      "warn",
+      [],
+      false,
+    ),
+    dnsRecord(
+      "CNAME",
+      "autoconfig.futureforge.dev",
+      `${mailHost}.`,
+      "pass",
+      [`${mailHost}.`],
+      false,
+    ),
+    dnsRecord(
+      "SRV",
+      "_imaps._tcp.futureforge.dev",
+      `0 1 993 ${mailHost}.`,
+      "pass",
+      [`0 1 993 ${mailHost}.`],
+      false,
+    ),
+  ];
+  const zoneFile = dnsRecords
+    .map((r) => `${r.name}.\t3600\tIN\t${r.type}\t${r.expected}`)
+    .join("\n");
+
   const [mailDomain] = await db
     .insert(s.mailDomains)
     .values({
       domainId: mailDomainId,
       serverId: mailServerId,
-      mailHostname: "mail.futureforge.dev",
+      mailServerId: mailServer!.id,
+      isPrimary: true,
       status: "active",
-      dkimSelector: "kaname",
-      dkimPublicKey:
-        "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0xM3RkFtb3VudE9mS2V5RGF0YUZvclNlZWQ",
-      quotaTotal: 50 * 1024 ** 3,
-      lastAuthCheckAt: new Date(now - 20 * 60_000),
+      dnsStatus: "fail",
+      dnsCheckedAt: syncedAt,
+      dnsRecords,
+      zoneFile,
+      lastSyncedAt: syncedAt,
     })
     .returning({ id: s.mailDomains.id });
 
-  await db.insert(s.mailboxes).values(
+  const mailboxRows = await db
+    .insert(s.mailboxes)
+    .values(
+      [
+        { local: "hello", name: "Studio Inbox", quota: 10 },
+        { local: "detective", name: "Lone Detective", quota: 20 },
+        { local: "billing", name: "Billing", quota: 5 },
+        { local: "noreply", name: "No Reply", quota: 1 },
+        { local: "support", name: "Support", quota: 0 },
+      ].map((m) => ({
+        mailDomainId: mailDomain!.id,
+        serverId: mailServerId,
+        address: `${m.local}@futureforge.dev`,
+        localPart: m.local,
+        displayName: m.name,
+        quotaBytes: Math.round(m.quota * 1024 ** 3),
+        status: "active" as const,
+        lastSyncedAt: syncedAt,
+      })),
+    )
+    .returning({ id: s.mailboxes.id, address: s.mailboxes.address });
+  const mailboxIdByAddress = new Map(mailboxRows.map((row) => [row.address, row.id]));
+
+  await db.insert(s.mailAliases).values(
     [
-      { local: "hello", name: "Studio Inbox", quota: 10, used: 3.2 },
-      { local: "detective", name: "Lone Detective", quota: 20, used: 14.8 },
-      { local: "billing", name: "Billing", quota: 5, used: 0.4 },
-      { local: "noreply", name: "No Reply", quota: 1, used: 0.05 },
-      { local: "support", name: "Support", quota: 10, used: 9.6 },
-    ].map((m) => ({
+      { alias: "admin", mailbox: "detective" },
+      { alias: "security", mailbox: "detective" },
+      { alias: "invoices", mailbox: "billing" },
+      { alias: "postmaster", mailbox: "hello" },
+    ].map((a) => ({
       mailDomainId: mailDomain!.id,
       serverId: mailServerId,
-      address: `${m.local}@futureforge.dev`,
-      localPart: m.local,
-      displayName: m.name,
-      quotaBytes: Math.round(m.quota * 1024 ** 3),
-      usedBytes: Math.round(m.used * 1024 ** 3),
-      messageCount: Math.round(m.used * 900),
+      address: `${a.alias}@futureforge.dev`,
+      mailboxId: mailboxIdByAddress.get(`${a.mailbox}@futureforge.dev`) ?? null,
+      mailboxAddress: `${a.mailbox}@futureforge.dev`,
       status: "active" as const,
-      lastLoginAt: new Date(now - random() * 6 * 3600_000),
-      lastSyncedAt: new Date(now - 300_000),
     })),
   );
-
-  await db.insert(s.mailAliases).values([
-    {
-      mailDomainId: mailDomain!.id,
-      address: "admin@futureforge.dev",
-      destinations: ["detective@futureforge.dev"],
-      enabled: true,
-      comment: "Ops escalation",
-    },
-    {
-      mailDomainId: mailDomain!.id,
-      address: "security@futureforge.dev",
-      destinations: ["detective@futureforge.dev", "hello@futureforge.dev"],
-      enabled: true,
-      comment: "security.txt contact",
-    },
-  ]);
-
-  await db.insert(s.mailForwarders).values([
-    {
-      mailDomainId: mailDomain!.id,
-      source: "invoices@futureforge.dev",
-      destination: "billing@futureforge.dev",
-      keepCopy: true,
-      enabled: true,
-    },
-  ]);
-
-  // The interesting part: one domain whose mail DNS is broken exactly the
-  // way real ones are — proxied MX host and no host-level SPF.
-  //
-  // Every row below is written the way MailAuthChecker would write it for
-  // this scenario: titles come from MAIL_AUTH_CHECK_META, records are zone-
-  // file shaped (name, TTL 3600, class, type, value — tab separated) and
-  // the copyable values are the engine's, so the demo and the engine
-  // cannot drift and the e2e spec asserts what a real run produces.
-  const mailHost = "mail.futureforge.dev";
-  const mailIp = "198.51.100.42";
-  const proxyIp = "104.21.34.12";
-  const checkedAt = new Date(now - 20 * 60_000);
-  const resolverUsed = "host:mail-01";
-  const zoneRecord = (name: string, type: string, value: string) =>
-    `${name}.\t3600\tIN\t${type}\t${value}`;
-  const dkimValue =
-    "v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0xM3RkFtb3VudE9mS2V5RGF0YUZvclNlZWQ";
-  const dmarcActual = "v=DMARC1; p=quarantine; rua=mailto:dmarc@futureforge.dev; pct=50";
-  const proxyRecord = `${zoneRecord(mailHost, "A", mailIp)}   ; DNS only, never proxied`;
-
-  await db.insert(s.mailAuthChecks).values([
-    {
-      mailDomainId: mailDomain!.id,
-      check: "mx",
-      status: "pass",
-      title: MAIL_AUTH_CHECK_META.mx.title,
-      detail: `futureforge.dev delivers to ${mailHost} at preference 10, which resolves to ${proxyIp}.`,
-      expected: zoneRecord("futureforge.dev", "MX", `10 ${mailHost}.`),
-      actual: `10 ${mailHost}`,
-      resolverUsed,
-      durationMs: 41,
-      checkedAt,
-    },
-    {
-      mailDomainId: mailDomain!.id,
-      check: "proxy_exposure",
-      status: "fail",
-      title: MAIL_AUTH_CHECK_META.proxy_exposure.title,
-      detail: `${mailHost} resolves to ${proxyIp}, which belongs to Cloudflare's proxy network. Two separate things break. First, Cloudflare proxies HTTP and HTTPS only: a sending server that opens port 25 to that address reaches nothing, so inbound mail for futureforge.dev fails and outbound connections are refused by receivers doing a callback. Second, the addresses published are the proxy's, not mail-01's — so an SPF record authorising "a" or "mx" for this name authorises tens of thousands of Cloudflare machines while ${mailIp} is not authorised at all, which is a spoofing hole and a delivery failure in the same record.`,
-      expected: proxyRecord,
-      actual: `${proxyIp} (Cloudflare)`,
-      remediation: {
-        summary: `Turn the proxy off for this record: click the orange cloud next to the record in the Cloudflare dashboard so it goes DNS-only. The record must resolve to ${mailIp} directly for SMTP to reach the host, and for SPF to authorise the right address.`,
-        actions: [
-          { label: "Copy record", copy: proxyRecord },
-          { label: "Open DNS", href: "/websites/dns" },
-        ],
-      },
-      resolverUsed,
-      durationMs: 58,
-      checkedAt,
-    },
-    {
-      mailDomainId: mailDomain!.id,
-      check: "host_spf",
-      status: "fail",
-      title: MAIL_AUTH_CHECK_META.host_spf.title,
-      detail: `${mailHost} publishes no SPF record of its own, separate from the one on futureforge.dev. This matters for a specific class of message: a bounce or delivery-status notification leaves with an empty envelope sender, so the receiver has no MAIL FROM domain to evaluate and falls back to the HELO identity — which is ${mailHost}, not futureforge.dev. With nothing published there the HELO check returns "none", and receivers that require an authenticated identity (Outlook.com most visibly) treat those messages as unauthenticated no matter how correct futureforge.dev's own SPF is.`,
-      expected: zoneRecord(mailHost, "TXT", '"v=spf1 a -all"'),
-      actual: null,
-      remediation: {
-        summary: `Add a TXT record on the mail hostname itself. "a" authorises whatever ${mailHost} resolves to, so it stays correct if the server's address changes; "-all" refuses everything else. This is a second record, not a replacement for the one on futureforge.dev.`,
-        actions: [
-          { label: "Copy record", copy: "v=spf1 a -all" },
-          { label: "Open DNS", href: "/websites/dns" },
-        ],
-      },
-      resolverUsed,
-      durationMs: 37,
-      checkedAt,
-    },
-    {
-      mailDomainId: mailDomain!.id,
-      check: "spf",
-      status: "pass",
-      title: MAIL_AUTH_CHECK_META.spf.title,
-      detail:
-        'futureforge.dev publishes one SPF record ending in "-all", evaluated in 2 of the 10 permitted DNS lookups.',
-      expected: zoneRecord("futureforge.dev", "TXT", `"v=spf1 ip4:${mailIp} -all"`),
-      actual: `v=spf1 mx a:${mailHost} -all`,
-      resolverUsed,
-      durationMs: 88,
-      checkedAt,
-    },
-    {
-      mailDomainId: mailDomain!.id,
-      check: "dkim",
-      status: "pass",
-      title: MAIL_AUTH_CHECK_META.dkim.title,
-      detail:
-        "kaname._domainkey.futureforge.dev publishes the same 2048-bit key that mail-01 signs with, so signatures verify at the receiver.",
-      expected: zoneRecord("kaname._domainkey.futureforge.dev", "TXT", `"${dkimValue}"`),
-      actual: dkimValue,
-      resolverUsed,
-      durationMs: 64,
-      checkedAt,
-    },
-    {
-      mailDomainId: mailDomain!.id,
-      check: "dmarc",
-      status: "warn",
-      title: MAIL_AUTH_CHECK_META.dmarc.title,
-      detail:
-        'The policy is "p=quarantine" but "pct=50", so it is applied to only 50% of failing mail. That is the right setting while ramping up, and the wrong one to leave in place — the remaining 50% of spoofed mail is delivered untouched.',
-      expected: zoneRecord(
-        "_dmarc.futureforge.dev",
-        "TXT",
-        '"v=DMARC1; p=none; rua=mailto:dmarc@futureforge.dev; fo=1; adkim=r; aspf=r"',
-      ),
-      actual: dmarcActual,
-      remediation: {
-        summary:
-          "Remove the pct tag (it defaults to 100) once the reports show no legitimate sender failing.",
-        actions: [{ label: "Open DNS", href: "/websites/dns" }],
-      },
-      resolverUsed,
-      durationMs: 44,
-      checkedAt,
-    },
-    {
-      mailDomainId: mailDomain!.id,
-      check: "ptr",
-      status: "pass",
-      title: MAIL_AUTH_CHECK_META.ptr.title,
-      detail: `${mailIp} reverses to ${mailHost} and that name resolves back to ${mailIp}, so forward-confirmed reverse DNS holds.`,
-      expected: `42.100.51.198.in-addr.arpa.\t3600\tIN\tPTR\t${mailHost}.`,
-      actual: mailHost,
-      resolverUsed,
-      durationMs: 52,
-      checkedAt,
-    },
-    {
-      mailDomainId: mailDomain!.id,
-      check: "tls",
-      status: "pass",
-      title: MAIL_AUTH_CHECK_META.tls.title,
-      detail: `${mailHost} covers ${mailHost} and is valid for another 62 days, so STARTTLS presents a name the receiver can verify.`,
-      expected: null,
-      actual: `${mailHost} (expires ${new Date(now + 62 * 86_400_000).toISOString().slice(0, 10)})`,
-      resolverUsed,
-      durationMs: 9,
-      checkedAt,
-    },
-  ]);
 
   /* ----------------------------- databases ---------------------------- */
 
@@ -915,12 +961,21 @@ export async function seedDemo(db: Database): Promise<void> {
       .values({
         name: `${name} nightly`,
         serverId: id,
+        // Selectors the planner accepts: "*" is not a path or a database
+        // name, so these schedules could never run — not by hand, and not
+        // once the scheduler started firing them at 03:00. An empty
+        // selector list is "everything this kind covers".
         scope:
           name === "db-01"
-            ? [{ kind: "databases", selectors: ["*"] }]
+            ? [
+                {
+                  kind: "databases",
+                  selectors: [...pgDbs.map((db) => `postgres:${db}`), "mariadb:legacy_shop"],
+                },
+              ]
             : [
                 { kind: "files", selectors: ["/etc", "/var/www", "/home"] },
-                { kind: "config", selectors: ["*"] },
+                { kind: "config", selectors: [] },
               ],
         cron: "0 3 * * *",
         timezone: "UTC",
@@ -939,6 +994,16 @@ export async function seedDemo(db: Database): Promise<void> {
         nextRunAt: new Date(now + 15 * 3600_000),
       })
       .returning({ id: s.backupSchedules.id });
+
+    // Encrypted, so it names its repository password the way a schedule
+    // created through the API does. Without a ref the agent refuses every
+    // verify and restore of these points ("password_ref is required"),
+    // matching snapshot ids or not. The password itself lives on the host
+    // (the agent's backup secrets directory), never here.
+    await db
+      .update(s.backupSchedules)
+      .set({ passwordRef: `backup_schedule:${schedule!.id}` })
+      .where(sql`${s.backupSchedules.id} = ${schedule!.id}`);
 
     for (let i = 0; i < 7; i += 1) {
       const started = now - (i * 24 + 9) * 3600_000;
@@ -965,10 +1030,10 @@ export async function seedDemo(db: Database): Promise<void> {
           scheduleId: schedule!.id,
           serverId: id,
           label: `${name}-${new Date(started).toISOString().slice(0, 10)}`,
-          snapshotId: Array.from(
-            { length: 16 },
-            () => "0123456789abcdef"[Math.floor(random() * 16)],
-          ).join(""),
+          // The simulated agent seeds the same repository with the same
+          // history (newest first, one a day), so day i here is its
+          // snapshot i. A random id verified and restored as "not found".
+          snapshotId: simSnapshotId(name, `b2:futureforge-backups:kaname/${name}`, i),
           takenAt: new Date(started + 480_000),
           bytes: Math.round(8 * 1024 ** 3 + random() * 4 * 1024 ** 3),
           fileCount: 40_000 + Math.round(random() * 20_000),
@@ -1007,6 +1072,46 @@ export async function seedDemo(db: Database): Promise<void> {
   });
 
   console.log(`seeded ${SERVERS.length} simulated servers with 48h of history`);
+}
+
+/* ------------------------------------------------------------------ *
+ * The simulated agent's restic history, reproduced.
+ *
+ * agent/src/providers/sim/backups.rs `snapshots_for` materialises a
+ * repository the first time it is asked about, with ids derived from
+ * the host's identity (its state directory's name, which is the server
+ * name in both the dev fleet and the e2e stack) and the repository
+ * string. These are the same FNV-1a and splitmix64 it uses, so a seeded
+ * restore point names a snapshot the simulated repository really holds.
+ * Change one side and the other must follow.
+ * ------------------------------------------------------------------ */
+
+const U64 = (1n << 64n) - 1n;
+/** `SIM_SEED` in agent/src/providers/sim/state.rs: "kaname". */
+const SIM_SEED = 0x6b616e616d65n;
+
+function fnv1a64(value: string): bigint {
+  let h = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(value)) {
+    h ^= BigInt(byte);
+    h = (h * 0x100000001b3n) & U64;
+  }
+  return h;
+}
+
+function splitmix64(input: bigint): bigint {
+  let x = (input + 0x9e3779b97f4a7c15n) & U64;
+  x = ((x ^ (x >> 30n)) * 0xbf58476d1ce4e5b9n) & U64;
+  x = ((x ^ (x >> 27n)) * 0x94d049bb133111ebn) & U64;
+  return x ^ (x >> 31n);
+}
+
+/** Snapshot `index` (0 = newest) of `repository` on the simulated host `identity`. */
+export function simSnapshotId(identity: string, repository: string, index: number): string {
+  const seed = fnv1a64(identity) ^ SIM_SEED ^ fnv1a64(repository);
+  const i = BigInt(index);
+  const hex = (v: bigint) => v.toString(16).padStart(16, "0");
+  return hex(splitmix64(seed ^ i ^ 0xe1n)) + hex(splitmix64(seed ^ i ^ 0xe2n));
 }
 
 function clamp(v: number, lo: number, hi: number): number {

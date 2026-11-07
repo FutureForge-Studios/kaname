@@ -15,13 +15,19 @@ import {
   dbInstanceInfo,
   dbUserInfo,
   directoryListing,
-  dkimKeyInfo,
   fileEntry,
   firewallRuleInfo,
   imageInfo,
   logRecord,
   logSource,
-  mailQueueEntry,
+  mailAliasEntry,
+  mailCertificateStatus,
+  mailCheck,
+  mailDeployResult,
+  mailDnsRecord,
+  mailDomainEntry,
+  mailServerStatusInfo,
+  mailboxEntry,
   metricsSample,
   packageInfo,
   processInfo,
@@ -64,6 +70,40 @@ export interface MethodSpec {
 const ok = z.object({ ok: z.literal(true) });
 const empty = z.object({});
 const unit = z.object({ unit: z.string().min(1).max(256) });
+
+/**
+ * A transfer credential: the panel's floor, and no line break or NUL,
+ * because chpasswd reads `user:password` lines from stdin and a newline
+ * would smuggle a second account's password in after the first.
+ */
+const ftpPassword = z
+  .string()
+  .min(16)
+  .max(256)
+  .regex(/^[^\r\n\0]*$/, "may not contain a line break or NUL");
+
+const ftpAccountParams = z.object({
+  username: identifier,
+  home_dir: absolutePath,
+  protocol: z.enum(["sftp", "ftps"]),
+  /** 0 clears any quota; above 0 needs a quota-enabled filesystem. */
+  quota_bytes: z.number().int().min(0).default(0),
+  /** SFTP key authentication; one OpenSSH public key line. */
+  ssh_public_key: z.string().max(4096).optional(),
+});
+
+const ftpAccountInfo = z.object({
+  username: identifier,
+  uid: z.number().int(),
+  home_dir: z.string(),
+  protocol: z.enum(["sftp", "ftps"]),
+  suspended: z.boolean(),
+  /** "applied": a block limit is set; "unlimited": none is. */
+  quota: z.enum(["applied", "unlimited"]),
+  /** The mount the limit was set on, when there is one. */
+  quota_mount: z.string().nullable(),
+  quota_bytes: z.number().int(),
+});
 
 /**
  * Identity function that PRESERVES each method's exact params and result
@@ -640,6 +680,59 @@ export const AGENT_METHODS = {
     readOnly: false,
     summary: "Reload the web server.",
   }),
+  /*
+   * Releases. A deployment writes `<root>/releases/<release>` and then
+   * swaps `<root>/current` onto it in one rename, so a reader of the
+   * site never sees a half-written tree; a rollback is the same swap onto
+   * a release that is already there. Neither needs nginx: what serves
+   * `current` (a vhost root, an app process) is the site's business.
+   */
+  "site.release.create": m({
+    params: z.object({
+      name: z.string().max(128),
+      root: absolutePath,
+      release: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+      source: z.enum(["git", "upload"]),
+      repo_url: z.string().max(512).optional(),
+      branch: z.string().max(200).optional(),
+      commit_sha: z
+        .string()
+        .regex(/^[0-9a-f]{7,40}$/)
+        .optional(),
+      /** Where an upload deployment's files are staged; the site's webroot when absent. */
+      upload_path: absolutePath.optional(),
+      /** Releases kept on disk after this one, newest first; older ones are pruned. */
+      keep: z.number().int().min(1).max(50).default(5),
+    }),
+    result: z.object({
+      release_path: z.string(),
+      current_path: z.string(),
+      commit_sha: z.string().nullable(),
+      /** Release directories removed by retention, so the panel can forget them. */
+      pruned: z.array(z.string()),
+      log: z.array(z.string()),
+    }),
+    stream: "none",
+    requires: [],
+    readOnly: false,
+    summary: "Write a release directory for a site and switch its current symlink to it.",
+  }),
+  "site.release.activate": m({
+    params: z.object({
+      name: z.string().max(128),
+      root: absolutePath,
+      release_path: absolutePath,
+    }),
+    result: z.object({
+      current_path: z.string(),
+      release_path: z.string(),
+      previous: z.string().nullable(),
+    }),
+    stream: "none",
+    requires: [],
+    readOnly: false,
+    summary: "Point a site's current symlink at a release already on disk.",
+  }),
 
   /* ---------------------------- certificates -------------------------- */
   "cert.list": m({
@@ -731,114 +824,217 @@ export const AGENT_METHODS = {
     readOnly: true,
     summary: "Resolve a record from the host's vantage point.",
   }),
+  /*
+   * A simulated host has no internet to resolve against: its resolver
+   * stands in for public DNS. Without this it served a fixed zone, so a
+   * record Kaname told the operator to publish could never be seen and
+   * domain verification could only ever fail on the sim. The control
+   * plane hands it the zone Kaname manages — what the world would see
+   * once those records are published. Gated on `simulated`, so a real
+   * host never offers it and its resolver cannot be told what to answer.
+   */
+  "dns.publish": m({
+    params: z.object({
+      zone: z.string().max(253),
+      records: z
+        .array(
+          z.object({
+            name: z.string().max(253),
+            type: z.string().max(10),
+            content: z.string().max(4096),
+            ttl: z.number().int().min(0).max(604800).optional(),
+          }),
+        )
+        .max(1000),
+    }),
+    result: ok,
+    stream: "none",
+    requires: ["simulated"],
+    readOnly: false,
+    summary: "Simulated hosts only: serve the zone Kaname manages from this host's resolver.",
+  }),
 
   /* -------------------------------- mail ------------------------------ */
+  /*
+   * Mail is Yunori Mail Server on the host (KD-023). Every verb below is
+   * one `yunori-mail` CLI invocation with an argv slice: the one root
+   * interface that product sanctions, and the one place its invariants
+   * (vault-sealed secrets, audited mutations) are enforced. Nothing here
+   * reaches into its database, its vault or Stalwart's API.
+   */
+  "mail.status": m({
+    params: empty,
+    result: mailServerStatusInfo,
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: true,
+    summary: "Yunori Mail Server install state, version and services on this host.",
+  }),
+  "mail.preflight": m({
+    params: z.object({ hostname: z.string().max(253).optional() }),
+    result: z.object({ checks: z.array(mailCheck) }),
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: true,
+    summary: "Can this server run mail? Changes nothing.",
+  }),
+  "mail.doctor": m({
+    params: empty,
+    result: z.object({ checks: z.array(mailCheck) }),
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: true,
+    summary: "End-to-end health of the mail server, with fixes.",
+  }),
+  "mail.deploy": m({
+    params: z.object({
+      /** Release to install; the agent verifies the archive's sha256 before anything runs. */
+      version: z.string().min(1).max(64),
+      url: z.string().url().max(2048),
+      sha256: z.string().regex(/^[0-9a-f]{64}$/),
+      domain: z.string().max(253),
+      hostname: z.string().max(253),
+      /** An address on another provider, for certificates and alerts. */
+      admin_email: z.string().email().max(320),
+      first_mailbox: identifier.default("hello"),
+      sending: z.enum(["direct", "relay"]).default("direct"),
+      relay: z
+        .object({
+          provider: z.string().max(32),
+          host: z.string().max(253).optional(),
+          region: z.string().max(64).optional(),
+          port: z.number().int().min(1).max(65535).default(587),
+          username: z.string().max(320).optional(),
+          /** Handed to the installer through an environment variable, never argv. */
+          password: z.string().max(1024).optional(),
+        })
+        .optional(),
+      /** Continue past blocking preflight failures. */
+      force: z.boolean().default(false),
+      skip_ptr: z.boolean().default(false),
+    }),
+    result: mailDeployResult,
+    stream: "response",
+    requires: ["systemd"],
+    readOnly: false,
+    summary: "Install Yunori Mail Server: verified download, then the unattended installer.",
+  }),
+  "mail.update": m({
+    params: empty,
+    result: ok,
+    stream: "response",
+    requires: ["yunori"],
+    readOnly: false,
+    summary: "Update yunori-mail to the newest release (verified download, engine upgrade).",
+  }),
+  "mail.domain.list": m({
+    params: empty,
+    result: z.object({ domains: z.array(mailDomainEntry) }),
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: true,
+    summary: "Mail domains on the host.",
+  }),
+  "mail.domain.add": m({
+    params: z.object({ name: z.string().max(253) }),
+    result: ok,
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: false,
+    summary: "Add a mail domain; DKIM keys are generated by the engine.",
+  }),
+  "mail.domain.remove": m({
+    params: z.object({ name: z.string().max(253) }),
+    result: ok,
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: false,
+    summary: "Remove a mail domain that has no mailboxes left.",
+  }),
+  "mail.domain.dns": m({
+    params: z.object({ name: z.string().max(253) }),
+    result: z.object({ records: z.array(mailDnsRecord), zone_file: z.string() }),
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: true,
+    summary: "Expected vs published DNS records, verified against public resolvers.",
+  }),
   "mail.mailbox.list": m({
     params: z.object({ domain: z.string().max(253).optional() }),
-    result: z.object({
-      mailboxes: z.array(
-        z.object({
-          address: z.string(),
-          quota_bytes: z.number().int(),
-          used_bytes: z.number().int(),
-          active: z.boolean(),
-          last_login: z.string().nullable(),
-        }),
-      ),
-    }),
+    result: z.object({ mailboxes: z.array(mailboxEntry) }),
     stream: "none",
-    requires: ["mail"],
+    requires: ["yunori"],
     readOnly: true,
-    summary: "Mailboxes known to the mail stack.",
+    summary: "Mailboxes on the host.",
   }),
-  "mail.mailbox.create": m({
+  "mail.mailbox.add": m({
     params: z.object({
       address: z.string().email(),
-      password: z.string().min(12).max(256),
-      quota_bytes: z.number().int().nonnegative().default(0),
       display_name: z.string().max(128).optional(),
+      /** Omit for unlimited. */
+      quota_mb: z.number().int().positive().optional(),
     }),
+    result: z.object({ password: z.string() }),
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: false,
+    summary: "Create a mailbox. The host generates its password and returns it once.",
+  }),
+  "mail.mailbox.passwd": m({
+    params: z.object({ address: z.string().email() }),
+    result: z.object({ password: z.string() }),
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: false,
+    summary: "Set a new generated password on a mailbox and return it once.",
+  }),
+  "mail.mailbox.remove": m({
+    params: z.object({ address: z.string().email() }),
     result: ok,
     stream: "none",
-    requires: ["mail"],
+    requires: ["yunori"],
     readOnly: false,
-    summary: "Create a mailbox.",
+    summary: "Delete a mailbox and all its mail.",
   }),
-  "mail.mailbox.update": m({
-    params: z.object({
-      address: z.string().email(),
-      quota_bytes: z.number().int().nonnegative().optional(),
-      active: z.boolean().optional(),
-      display_name: z.string().max(128).optional(),
-    }),
-    result: ok,
+  "mail.alias.list": m({
+    params: z.object({ domain: z.string().max(253).optional() }),
+    result: z.object({ aliases: z.array(mailAliasEntry) }),
     stream: "none",
-    requires: ["mail"],
-    readOnly: false,
-    summary: "Update a mailbox.",
-  }),
-  "mail.mailbox.delete": m({
-    params: z.object({ address: z.string().email(), delete_maildir: z.boolean().default(false) }),
-    result: ok,
-    stream: "none",
-    requires: ["mail"],
-    readOnly: false,
-    summary: "Delete a mailbox.",
-  }),
-  "mail.mailbox.password": m({
-    params: z.object({
-      address: z.string().email(),
-      password: z.string().min(12).max(256),
-      /** Also close every authenticated IMAP/POP session; a new hash alone does not. */
-      revoke_sessions: z.boolean().default(false),
-    }),
-    result: ok,
-    stream: "none",
-    requires: ["mail"],
-    readOnly: false,
-    summary: "Set a mailbox password, optionally signing out its open sessions.",
-  }),
-  "mail.alias.apply": m({
-    params: z.object({
-      domain: z.string().max(253),
-      aliases: z
-        .array(z.object({ address: z.string(), destinations: z.array(z.string()).min(1) }))
-        .max(2000),
-    }),
-    result: ok,
-    stream: "none",
-    requires: ["mail"],
-    readOnly: false,
-    summary: "Replace the alias map for a domain.",
-  }),
-  "mail.forwarder.apply": m({
-    params: z.object({
-      domain: z.string().max(253),
-      forwarders: z
-        .array(z.object({ source: z.string(), destination: z.string(), keep_copy: z.boolean() }))
-        .max(2000),
-    }),
-    result: ok,
-    stream: "none",
-    requires: ["mail"],
-    readOnly: false,
-    summary: "Replace the forwarder map for a domain.",
-  }),
-  "mail.dkim.read": m({
-    params: z.object({ domain: z.string().max(253) }),
-    result: dkimKeyInfo,
-    stream: "none",
-    requires: ["mail"],
+    requires: ["yunori"],
     readOnly: true,
-    summary: "Read the host's DKIM public key so DNS can be compared against it.",
+    summary: "Aliases on the host and the mailbox each delivers to.",
   }),
-  "mail.queue.list": m({
-    params: z.object({ limit: z.number().int().min(1).max(1000).default(200) }),
-    result: z.object({ entries: z.array(mailQueueEntry) }),
+  "mail.alias.add": m({
+    params: z.object({ alias: z.string().email(), mailbox: z.string().email() }),
+    result: ok,
     stream: "none",
-    requires: ["mail"],
+    requires: ["yunori"],
+    readOnly: false,
+    summary: "Add an alias delivering to a mailbox.",
+  }),
+  "mail.alias.remove": m({
+    params: z.object({ alias: z.string().email() }),
+    result: ok,
+    stream: "none",
+    requires: ["yunori"],
+    readOnly: false,
+    summary: "Remove an alias.",
+  }),
+  "mail.certificate.status": m({
+    params: empty,
+    result: mailCertificateStatus,
+    stream: "none",
+    requires: ["yunori"],
     readOnly: true,
-    summary: "Deferred mail queue.",
+    summary: "The mail server's TLS certificate: state, last and next attempt.",
+  }),
+  "mail.certificate.renew": m({
+    params: empty,
+    result: z.object({ outcome: z.string() }),
+    stream: "response",
+    requires: ["yunori"],
+    readOnly: false,
+    summary: "Ask the certificate authority now.",
   }),
   "mail.logs": m({
     params: z.object({
@@ -848,9 +1044,9 @@ export const AGENT_METHODS = {
     }),
     result: z.object({ records: z.array(logRecord) }),
     stream: "response",
-    requires: ["mail"],
+    requires: ["yunori"],
     readOnly: true,
-    summary: "Mail transport log.",
+    summary: "The mail engine's and yunori-mail's journal.",
   }),
 
   /* ------------------------------ databases ---------------------------- */
@@ -1133,6 +1329,48 @@ export const AGENT_METHODS = {
     requires: [],
     readOnly: true,
     summary: "Active SSH sessions.",
+  }),
+
+  /* --------------------------------- ftp ------------------------------- */
+  /*
+   * Transfer accounts are real POSIX users: SFTP through sshd's
+   * internal-sftp in a chroot, FTPS through vsftpd. Each verb needs the
+   * daemon its protocol rides on, so a host with neither answers
+   * `unsupported` at the gate instead of failing half-way through
+   * useradd. The password travels in params only (the agent hands it to
+   * chpasswd on stdin) and no result ever echoes it.
+   */
+  "ftp.account.create": m({
+    params: ftpAccountParams.extend({ password: ftpPassword }),
+    result: ftpAccountInfo,
+    stream: "none",
+    requires: ["sftp", "vsftpd"],
+    readOnly: false,
+    summary: "Create a transfer account: POSIX user, chroot home, credential and quota.",
+  }),
+  "ftp.account.update": m({
+    params: ftpAccountParams.extend({ suspended: z.boolean().default(false) }),
+    result: ftpAccountInfo,
+    stream: "none",
+    requires: ["sftp", "vsftpd"],
+    readOnly: false,
+    summary: "Re-apply a transfer account's protocol, home, quota, key and suspension.",
+  }),
+  "ftp.account.passwd": m({
+    params: z.object({ username: identifier, password: ftpPassword }),
+    result: ok,
+    stream: "none",
+    requires: ["sftp", "vsftpd"],
+    readOnly: false,
+    summary: "Set a transfer account's password (chpasswd over stdin).",
+  }),
+  "ftp.account.delete": m({
+    params: z.object({ username: identifier }),
+    result: ok,
+    stream: "none",
+    requires: ["sftp", "vsftpd"],
+    readOnly: false,
+    summary: "Remove a transfer account's POSIX user, daemon config and quota; the home stays.",
   }),
 
   /* ------------------------------- backups ----------------------------- */

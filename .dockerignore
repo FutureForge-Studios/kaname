@@ -25,6 +25,7 @@ dist
 *.tsbuildinfo
 **/*.tsbuildinfo
 agent/bin
+agent/target
 
 # Local state and secrets.
 .data

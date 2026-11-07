@@ -279,6 +279,8 @@ function TotpCard({ user, onChanged }: { user: User | null; onChanged: () => voi
 
   return (
     <SectionCard
+      id="two-factor"
+      className="scroll-mt-4"
       title="Two-factor authentication"
       icon={ShieldCheck}
       description="A time-based code from an authenticator app, checked on every sign-in."
@@ -453,7 +455,7 @@ function TotpCard({ user, onChanged }: { user: User | null; onChanged: () => voi
  * DOM node rather than a thousand rects.
  */
 const QR_LIGHT = "#ffffff";
-const QR_DARK = "#0b0c0e";
+const QR_DARK = "#121621";
 const QR_QUIET_ZONE = 4;
 
 function QrCode({ value, size = 180 }: { value: string; size?: number }) {

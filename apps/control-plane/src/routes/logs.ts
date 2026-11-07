@@ -273,13 +273,30 @@ async function searchHost(
         }),
         { timeoutMs: SEARCH_TIMEOUT_MS },
       );
-      await handle.done;
+      const result = await handle.done;
+      // Without follow, both providers answer with the backlog in the
+      // result and stream nothing, so reading only the chunks made every
+      // search come back empty. Chunks are still honoured for an agent
+      // that streams them.
+      if (collected.length === 0) {
+        for (const record of result.records) {
+          seq += 1;
+          collected.push(toRow(server, source, record, seq));
+        }
+      }
       return collected;
     }),
   );
 
-  for (const result of perSource) {
+  for (const [index, result] of perSource.entries()) {
     if (result.status === "fulfilled") rows.push(...result.value);
+    // One unreadable source must not empty the search, but it must not
+    // vanish without a trace either.
+    else
+      req.log.warn(
+        { err: result.reason, serverId: server.id, source: sources[index] },
+        "log search: a source could not be read",
+      );
   }
   return rows;
 }
@@ -307,7 +324,7 @@ async function defaultSources(req: FastifyRequest, server: ServerRow): Promise<s
  * mid-record; the tail of an incomplete line is held back until the rest
  * arrives.
  */
-function recordDecoder(
+export function recordDecoder(
   source: string,
   onRecord: (record: LogRecord) => void | Promise<void>,
 ): ChunkConsumer {

@@ -42,12 +42,18 @@ import {
   type DataTableRowAction,
   type Tone,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import {
+  ResourcePage,
+  serverPrerequisite,
+  useOpenFromQuery,
+  useResourceListState,
+} from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { PageError } from "@/components/PageError";
 import {
   LockoutNotice,
   RollbackBanner,
+  windowFromStatus,
   type LockoutAssessment,
   type RollbackWindow,
 } from "@/components/RollbackBanner";
@@ -148,11 +154,29 @@ export default function FirewallPage() {
 
   const [editing, setEditing] = React.useState<FirewallRule | null>(null);
   const [creating, setCreating] = React.useState(false);
+  useOpenFromQuery("new", () => setCreating(true), can("security.firewall:write"));
+  const noServer = serverPrerequisite(selection, "Firewall rules are applied on a host Kaname manages.");
   const [deleting, setDeleting] = React.useState<FirewallRule[] | null>(null);
   const [applyOpen, setApplyOpen] = React.useState(false);
   const [lockout, setLockout] = React.useState<LockoutAssessment | null>(null);
   const [applyError, setApplyError] = React.useState<ApiError | null>(null);
   const [rollback, setRollback] = React.useState<RollbackWindow | null>(null);
+
+  /* The open window is part of the status read, so a reload (or a second
+   * tab) still shows the countdown and the Confirm that keeps the rules.
+   * It used to live only in this component's state, and a refresh threw
+   * away the one way to stop the host reverting. */
+  const pendingWindow = status.data?.pending_rollback ?? null;
+  const dismissedWindow = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!pendingWindow || !serverId) return;
+    if (dismissedWindow.current === pendingWindow.expires_at) return;
+    setRollback((current) => ({
+      ...windowFromStatus(pendingWindow, { id: serverId, name: serverName }, "firewall rule set"),
+      // The status read has no lockout assessment; keep the apply's.
+      lockout: current?.serverId === serverId ? current.lockout : null,
+    }));
+  }, [pendingWindow, serverId, serverName]);
 
   const mayWrite = can("security.firewall:write", serverId);
 
@@ -575,16 +599,21 @@ export default function FirewallPage() {
         emptyTitle="No rules staged"
         emptyDescription="With no rules, the chain default policy decides everything. Add the rules you need, then apply them to the host."
         emptyAction={newRule}
+        prerequisite={noServer}
+        waiting={selection.isLoading || (!serverId && selection.servers.length > 0)}
         errorContext="Firewall rules"
       >
         {/* Above the host picker on purpose: while the window is open it
             is the only thing on this page that is time-critical. */}
-        {rollback && (
+        {rollback && rollback.serverId === serverId && (
           <RollbackBanner
             window={rollback}
             confirming={confirm.isPending}
             onConfirm={() => confirm.mutate()}
-            onDismiss={() => setRollback(null)}
+            onDismiss={() => {
+              dismissedWindow.current = pendingWindow?.expires_at ?? null;
+              setRollback(null);
+            }}
           />
         )}
 

@@ -16,7 +16,12 @@ import {
   type DataTableColumn,
   type DataTableRowAction,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import {
+  ResourcePage,
+  serverPrerequisite,
+  useOpenFromQuery,
+  useResourceListState,
+} from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { useCan } from "@/lib/queries";
 import { CertificateDialog } from "../_components/CertificateDialog";
@@ -87,6 +92,8 @@ export default function SitesPage() {
   const remove = useDeleteSite();
 
   const [creating, setCreating] = React.useState(false);
+  useOpenFromQuery("new", () => setCreating(true), can("websites.sites:write"));
+  const noServer = serverPrerequisite(selection, "A site is served from a host Kaname manages.");
   const [editing, setEditing] = React.useState<Site | null>(null);
   const [deploying, setDeploying] = React.useState<Site | null>(null);
   const [issuing, setIssuing] = React.useState<Site | null>(null);
@@ -270,6 +277,7 @@ export default function SitesPage() {
         emptyTitle="No sites yet"
         emptyDescription="A site is a vhost Kaname writes and reloads for you. Add one to point a domain at a webroot."
         emptyAction={newSite}
+        prerequisite={noServer}
         selectable
         onRowClick={(site) => router.push(`/websites/sites/${site.id}`)}
         rowActions={rowActions}

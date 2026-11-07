@@ -5,13 +5,15 @@ import {
   CircleCheck,
   CircleSlash,
   KeyRound,
+  Lock,
+  LockOpen,
   Mail,
   Pencil,
   Trash2,
   UserPlus,
   Users,
 } from "lucide-react";
-import type { Role, User } from "@kaname/contract";
+import type { InvitedUser, Role, User } from "@kaname/contract";
 import {
   Badge,
   Button,
@@ -23,6 +25,7 @@ import {
   DialogFooter,
   DialogHeader,
   FormField,
+  InlineError,
   Input,
   MonoText,
   RelativeTime,
@@ -34,7 +37,7 @@ import {
   type Tone,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { api, type ApiError } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { useCan, useList, useResourceMutation, useSession } from "@/lib/queries";
@@ -58,7 +61,9 @@ const STATUS_TONES: Record<User["status"], Tone> = {
   suspended: "danger",
 };
 
-type InvitedUser = User & { invite: { url: string; expires_at: string } };
+/** A lock still in force; the API reports only those. */
+const isLocked = (user: User) =>
+  user.locked_until !== null && new Date(user.locked_until).getTime() > Date.now();
 
 export default function UsersPage() {
   const can = useCan();
@@ -71,6 +76,7 @@ export default function UsersPage() {
   const roles = useList<Role>("roles", { per_page: 200, sort: "name", order: "asc" });
 
   const [inviting, setInviting] = React.useState(false);
+  useOpenFromQuery("invite", () => setInviting(true), can("admin.users:write"));
   const [invited, setInvited] = React.useState<InvitedUser | null>(null);
   const [editing, setEditing] = React.useState<User | null>(null);
   const [deleting, setDeleting] = React.useState<User | null>(null);
@@ -82,6 +88,17 @@ export default function UsersPage() {
     successMessage: (_result, { ids, suspend }) =>
       `${formatCount(ids.length)} account${ids.length === 1 ? "" : "s"} ${suspend ? "suspended" : "activated"}.`,
     onDone: () => state.setSelected([]),
+  });
+
+  /*
+   * A locked account is still `active`, so the status toggle offers
+   * Suspend for it — which is not what the lockout message promised.
+   * Unlock lifts the failed-sign-in lock and nothing else.
+   */
+  const unlock = useResourceMutation<User, User>({
+    mutationFn: (user) => api.post<User>(`/users/${user.id}/unlock`),
+    invalidates: ["users"],
+    successMessage: (_result, user) => `${user.email} unlocked.`,
   });
 
   const remove = useResourceMutation<User, void>({
@@ -137,9 +154,16 @@ export default function UsersPage() {
         width: 104,
         sortable: true,
         cell: (user) => (
-          <StatusBadge tone={STATUS_TONES[user.status]} size="sm">
-            {user.status}
-          </StatusBadge>
+          <div className="flex items-center gap-1">
+            <StatusBadge tone={STATUS_TONES[user.status]} size="sm">
+              {user.status}
+            </StatusBadge>
+            {isLocked(user) && (
+              <Badge tone="warn" size="xs" icon={Lock}>
+                locked
+              </Badge>
+            )}
+          </div>
         ),
       },
       {
@@ -253,6 +277,17 @@ export default function UsersPage() {
             disabled: !can("admin.users:write"),
             onSelect: () => setEditing(user),
           },
+          ...(isLocked(user)
+            ? [
+                {
+                  id: "unlock",
+                  label: "Unlock",
+                  icon: LockOpen,
+                  disabled: !can("admin.users:write"),
+                  onSelect: () => unlock.mutate(user),
+                },
+              ]
+            : []),
           {
             id: "status",
             label: user.status === "suspended" ? "Activate" : "Suspend",
@@ -451,14 +486,28 @@ function InviteLinkDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   if (!user) return null;
+  const emailed = user.invite.email;
 
   return (
     <Dialog open onOpenChange={onOpenChange} size="md">
       <DialogHeader
         title={`${user.email} is invited`}
-        description="This link sets their first password. It is shown once and expires on its own."
+        description={
+          emailed?.sent
+            ? `The invitation was emailed to ${user.email}. The same link is below, shown once, in case it does not arrive.`
+            : "This link sets their first password. It is shown once and expires on its own."
+        }
       />
       <DialogBody>
+        {emailed && !emailed.sent && (
+          // The invitation stands either way; only the email failed, so
+          // say why and fall back to the link rather than an error page.
+          <InlineError
+            tone="warn"
+            className="mb-3"
+            message={`The invitation email could not be sent: ${emailed.error ?? "the mail server refused it"} Send the link below yourself.`}
+          />
+        )}
         <CopyableCode value={user.invite.url} label="Invitation link" block />
         <p className="mt-3 text-[var(--kn-text-2)]">
           Expires <RelativeTime value={user.invite.expires_at} />. Send it over a channel you

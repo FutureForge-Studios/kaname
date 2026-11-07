@@ -556,6 +556,49 @@ export class NotificationService {
     }
   }
 
+  /* --------------------------- invitations -------------------------- */
+
+  /**
+   * Emails an invitation link through the same outgoing mail server the
+   * test email uses. Never throws: the account already exists and its
+   * link is valid whether or not the message left, so a mail failure is
+   * reported to the inviter (who still gets the link once) rather than
+   * failing the invite. The link is a bearer credential, so it goes in
+   * the message body only — never in a log line or an error.
+   */
+  async sendInvitation(invite: {
+    to: string;
+    inviteeName: string;
+    inviterName: string;
+    url: string;
+    expiresAt: Date;
+  }): Promise<{ sent: boolean; error: string | null }> {
+    try {
+      const smtp = await loadSmtp(this.ctx);
+      const mailer = this.mailerFor(smtp);
+      const panel = await this.panel();
+      // The inviter is waiting on this response, so a mail server that
+      // accepts the connection and then stalls is cut off rather than
+      // holding the invite open for the transport's 30-second socket limit.
+      let timer: NodeJS.Timeout | undefined;
+      const stalled = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          const err = new Error("The mail server did not answer in time.");
+          err.name = "TimeoutError";
+          reject(err);
+        }, DELIVERY_TIMEOUT_MS);
+      });
+      try {
+        await Promise.race([mailer.send(composeInvitation(smtp, panel, invite)), stalled]);
+      } finally {
+        clearTimeout(timer);
+      }
+      return { sent: true, error: null };
+    } catch (err) {
+      return { sent: false, error: describe(err) };
+    }
+  }
+
   /* ---------------------------- handlers ---------------------------- */
 
   private async onJob(event: StreamEvent): Promise<void> {
@@ -1251,6 +1294,46 @@ function composeMail(
 }
 
 /**
+ * The invitation email. It names both the person who sent it and the
+ * panel (by its configured name), because "you have been invited to
+ * Kaname" from an address the reader has never seen looks like phishing;
+ * "Ana invited you to Forge Fleet" is something they can check.
+ */
+function composeInvitation(
+  smtp: ResolvedSmtp,
+  panel: { name: string; url: string },
+  invite: { to: string; inviteeName: string; inviterName: string; url: string; expiresAt: Date },
+): MailEnvelope {
+  const from = smtp.from_name
+    ? `"${smtp.from_name.replace(/["\\]/g, "")}" <${smtp.from_address}>`
+    : smtp.from_address;
+  const title = `${invite.inviterName} invited you to ${panel.name}`;
+  const expires = invite.expiresAt.toUTCString();
+  const text = [
+    `Hello ${invite.inviteeName},`,
+    "",
+    `${invite.inviterName} has invited you to ${panel.name} (${panel.url}).`,
+    "",
+    "Open this link to choose your password and sign in:",
+    invite.url,
+    "",
+    `The link works once and expires ${expires}. If you were not expecting this, ignore it — nothing happens until the link is opened.`,
+    "",
+    `— ${panel.name}`,
+  ].join("\n");
+  const html = [
+    `<div style="font-family:ui-sans-serif,system-ui,sans-serif;font-size:14px;line-height:1.5;color:#1c2024">`,
+    `<h2 style="font-size:16px;margin:0 0 12px">${escapeHtml(title)}</h2>`,
+    `<p style="margin:0 0 12px">Hello ${escapeHtml(invite.inviteeName)}, ${escapeHtml(invite.inviterName)} has invited you to ${escapeHtml(panel.name)}.</p>`,
+    `<p style="margin:0 0 12px"><a href="${escapeHtml(invite.url)}">Accept the invitation and choose a password</a></p>`,
+    `<p style="margin:0 0 12px;color:#6b7280">Or paste this link into your browser: ${escapeHtml(invite.url)}</p>`,
+    `<p style="margin:0;color:#9ba3ae;font-size:12px">The link works once and expires ${escapeHtml(expires)}. If you were not expecting this, ignore it.</p>`,
+    `</div>`,
+  ].join("");
+  return { from, to: invite.to, subject: `[${panel.name}] ${title}`, text, html };
+}
+
+/**
  * Which warning a certificate is in: one message per threshold, not one
  * per sweep. 14 days out, then 7, 3, 1 and the day itself.
  */
@@ -1269,6 +1352,13 @@ function escapeHtml(value: string): string {
 }
 
 function describe(err: unknown): string {
+  // fetch() reports every transport failure as "TypeError: fetch failed"
+  // and keeps the real one (ECONNREFUSED, ENOTFOUND, a TLS error) in
+  // `cause`. Reporting the wrapper told the operator nothing about what
+  // the far end — or the network in between — actually said.
+  if (err instanceof TypeError && err.message === "fetch failed" && err.cause instanceof Error) {
+    return describe(err.cause);
+  }
   if (err instanceof Error) {
     const code = (err as { code?: string }).code;
     const message = err.message || err.name;

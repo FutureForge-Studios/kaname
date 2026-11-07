@@ -109,24 +109,38 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: agent/go.mod
-          cache-dependency-path: agent/go.sum
+      # Static musl binaries for both architectures, cross-linked with zig
+      # (the same recipe Yunori Mail Server ships with). The asset names
+      # are unchanged, so install.sh and the control plane's /download
+      # route keep working.
+      - name: Rust toolchain (plus zig as the musl cross-linker)
+        run: |
+          rustup toolchain install stable --profile minimal \
+            --target x86_64-unknown-linux-musl --target aarch64-unknown-linux-musl
+          rustup default stable
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install --quiet ziglang==0.13.0
+          echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild --version 0.24.1
 
       - run: pnpm install --frozen-lockfile
 
       - name: Build the agent binaries
         working-directory: agent
         env:
-          CGO_ENABLED: "0"
-          GOOS: linux
+          # Stamped into the binary at compile time (see VERSION in src/main.rs).
+          KANAMED_VERSION: ${{ needs.version.outputs.version }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          for arch in amd64 arm64; do
-            GOARCH="$arch" go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
-              -o "bin/kanamed-linux-$arch" ./cmd/kanamed
-          done
+          mkdir -p bin
+          # rust-toolchain.toml pins the compiler inside agent/, so the musl
+          # targets are added to that toolchain, not to the default one.
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          cargo zigbuild --release --locked --target x86_64-unknown-linux-musl
+          cargo zigbuild --release --locked --target aarch64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/kanamed bin/kanamed-linux-amd64
+          cp target/aarch64-unknown-linux-musl/release/kanamed bin/kanamed-linux-arm64
+          file bin/kanamed-linux-amd64 | grep -q 'statically linked'
           # An agent that reports the wrong version makes every fleet
           # update end in needs_attention, so the stamp is checked here.
           ./bin/kanamed-linux-amd64 version | grep -F "kanamed $VERSION " ||

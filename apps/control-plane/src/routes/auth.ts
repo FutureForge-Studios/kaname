@@ -1,9 +1,12 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { eq, sql } from "@kaname/db";
+import { and, eq, sql } from "@kaname/db";
 import { sessions, users } from "@kaname/db/schema";
 import {
+  assessPassword,
   changePasswordInput,
   loginInput,
+  passwordContext,
+  password as newPassword,
   totpVerifyInput,
   updateUserPreferencesInput,
   userPreferences,
@@ -19,7 +22,7 @@ import {
   sessionCookieName,
 } from "../http/plugin.js";
 import { ApiException } from "../lib/errors.js";
-import { constantTimeEquals, generateToken, hmac } from "../lib/crypto.js";
+import { constantTimeEquals, generateToken, hashToken, hmac } from "../lib/crypto.js";
 import type { AuthService } from "../services/auth.js";
 import { loadSettings, serializeUser } from "./admin.js";
 
@@ -53,6 +56,11 @@ const totpChallengeInput = z.object({
 
 const totpDisableInput = z.object({ password: z.string().min(1).max(256) });
 
+const acceptInviteInput = z.object({
+  token: z.string().min(1).max(256),
+  password: newPassword,
+});
+
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   /* ------------------------------ login ----------------------------- */
 
@@ -73,13 +81,26 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const stored = user?.passwordHash ?? (await decoyHash(req.ctx.auth));
     const correct = await req.ctx.auth.verifyPassword(stored, body.password);
 
+    /*
+     * An invited account that has not accepted yet has no password, so no
+     * password can be right for it. Telling that caller "this invitation
+     * hasn't been accepted yet" would answer, for any address a stranger
+     * cares to type, whether it has been invited here — the same
+     * enumeration the decoy hash above exists to prevent. So it gets the
+     * generic answer, at the same cost as any other wrong password. The
+     * specific message is reserved for the one case where it reveals
+     * nothing new: the caller presented the account's correct password
+     * (an account an owner moved back to `invited`), so they already know
+     * it exists. See `accountNotActive` below.
+     */
     if (!user || !user.passwordHash || !correct) {
-      await recordFailure(req, email, user?.id ?? null, user ? "bad_password" : "unknown_email");
-      if (user && lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold);
+      const reason = !user ? "unknown_email" : !user.passwordHash ? "invite_not_accepted" : "bad_password";
+      await recordFailure(req, email, user?.id ?? null, reason);
+      if (user && lockout.enabled) await noteFailure(req, user.id, lockout);
       throw invalidCredentials();
     }
 
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
+    if (user.lockedUntil && user.lockedUntil.getTime() > req.ctx.auth.now()) {
       await recordFailure(req, email, user.id, "locked");
       throw accountLocked(user.lockedUntil);
     }
@@ -106,7 +127,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (user.totpEnabled && body.totp_code) {
       if (!(await req.ctx.auth.verifyTotp(user.id, body.totp_code))) {
         await recordFailure(req, email, user.id, "bad_totp");
-        if (lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold);
+        if (lockout.enabled) await noteFailure(req, user.id, lockout);
         throw invalidTotp();
       }
     }
@@ -126,16 +147,85 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     // indistinguishable from a forged one, and is treated as one.
     if (!user || !user.totpEnabled) throw expiredChallenge();
     if (user.status !== "active") throw accountNotActive(user.status);
-    if (user.lockedUntil && user.lockedUntil > new Date()) throw accountLocked(user.lockedUntil);
+    if (user.lockedUntil && user.lockedUntil.getTime() > req.ctx.auth.now()) {
+      throw accountLocked(user.lockedUntil);
+    }
 
     const lockout = (await loadSettings(req.ctx)).security.failed_login_lockout;
     if (!(await req.ctx.auth.verifyTotp(user.id, body.code))) {
       await recordFailure(req, user.email, user.id, "bad_totp");
-      if (lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold);
+      if (lockout.enabled) await noteFailure(req, user.id, lockout);
       throw invalidTotp();
     }
 
     return completeLogin(req, reply, user, remember);
+  });
+
+  /* -------------------------- accept invite ------------------------- */
+
+  /*
+   * POST /users mints an invitation link, but nothing ever redeemed it:
+   * an invited account could never set a password, so no one but the
+   * bootstrap owner could ever sign in. This is the other half of that
+   * link — the token proves the invitation, the password is chosen here
+   * by the invitee and never seen by the inviter, and the account becomes
+   * active with whatever roles it was invited with.
+   */
+  app.post("/auth/invite/accept", LOGIN_RATE_LIMIT, async (req, reply) => {
+    const body = parseBody(req, acceptInviteInput);
+    const rows = await req.ctx.db
+      .select()
+      .from(users)
+      .where(eq(users.inviteTokenHash, hashToken(body.token)))
+      .limit(1);
+    const user = rows[0];
+    if (
+      !user ||
+      user.status !== "invited" ||
+      !user.inviteExpiresAt ||
+      // The auth clock, so the seven-day expiry is testable (expiry.test.ts).
+      user.inviteExpiresAt.getTime() <= req.ctx.auth.now()
+    ) {
+      throw inviteNotValid();
+    }
+
+    // Chosen by the invitee, so held to the same bar as the owner's.
+    assertStrongPassword(body.password, user, "password");
+
+    const now = new Date();
+    const tokenHash = hashToken(body.token);
+    // Conditional on the invitation still being outstanding, so two
+    // concurrent accepts of one token cannot both win: the read above is
+    // a check, this is the claim. Whoever loses gets no row back.
+    const claimed = await req.ctx.db
+      .update(users)
+      .set({
+        passwordHash: await req.ctx.auth.hashPassword(body.password),
+        status: "active",
+        inviteTokenHash: null,
+        inviteExpiresAt: null,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(users.id, user.id),
+          eq(users.status, "invited"),
+          eq(users.inviteTokenHash, tokenHash),
+        ),
+      )
+      .returning({ id: users.id });
+    if (claimed.length === 0) throw inviteNotValid();
+
+    await req.ctx.audit.record({
+      actor: actorFor(req, user),
+      action: "user.invite_accepted",
+      targetType: "user",
+      targetId: user.id,
+      targetLabel: user.email,
+    });
+    req.ctx.events.publish("audit", "user.invite_accepted", { user_id: user.id });
+
+    return completeLogin(req, reply, { ...user, status: "active" }, false);
   });
 
   /* ----------------------------- logout ----------------------------- */
@@ -240,12 +330,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       await recordFailure(req, user.email, user.id, "bad_password_on_change");
       throw wrongCurrentPassword();
     }
+    // The same server-side strength check onboarding applies to the
+    // owner. Without it a strong first password could be "changed" to
+    // twelve of the same letter, and the README's promise that strength
+    // is enforced on the control plane held only until the first change.
+    assertStrongPassword(body.new_password, user, "new_password");
 
     await req.ctx.db
       .update(users)
       .set({
         passwordHash: await req.ctx.auth.hashPassword(body.new_password),
         failedLoginCount: 0,
+        failedLoginAt: [],
         lockedUntil: null,
         updatedAt: new Date(),
       })
@@ -316,7 +412,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     if (!(await req.ctx.auth.verifyTotp(user.id, body.code))) {
       await recordFailure(req, user.email, user.id, "bad_totp_on_enable");
-      throw invalidTotp();
+      throw wrongEnrolmentCode();
     }
 
     await req.ctx.auth.enableTotp(user.id);
@@ -351,7 +447,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
     if (!(await req.ctx.auth.verifyPassword(user.passwordHash, body.password))) {
       await recordFailure(req, user.email, user.id, "bad_password_on_totp_disable");
-      throw wrongCurrentPassword();
+      throw wrongCurrentPassword("password");
     }
 
     const settings = await loadSettings(req.ctx);
@@ -454,29 +550,84 @@ function clearSessionCookie(req: FastifyRequest, reply: FastifyReply): void {
  * ------------------------------------------------------------------ */
 
 function issueChallenge(req: FastifyRequest, userId: string, remember: boolean): string {
-  const payload = `${userId}.${Date.now() + CHALLENGE_TTL_MS}.${remember ? 1 : 0}.${generateToken()}`;
-  const body = Buffer.from(payload, "utf8").toString("base64url");
-  return `${body}.${hmac(req.ctx.config.masterKey, body, req.ip ?? "")}`;
+  return signChallenge(req.ctx.config.masterKey, req.ip ?? "", userId, remember, req.ctx.auth.now());
 }
 
 function readChallenge(
   req: FastifyRequest,
   challenge: string,
 ): { userId: string; remember: boolean } {
+  const opened = openChallenge(req.ctx.config.masterKey, req.ip ?? "", challenge, req.ctx.auth.now());
+  if (!opened) throw expiredChallenge();
+  return opened;
+}
+
+/**
+ * The challenge itself, as pure functions of key, address and clock, so
+ * the five-minute expiry can be proven without waiting five minutes.
+ */
+export function signChallenge(
+  masterKey: Buffer,
+  ip: string,
+  userId: string,
+  remember: boolean,
+  now: number,
+): string {
+  const payload = `${userId}.${now + CHALLENGE_TTL_MS}.${remember ? 1 : 0}.${generateToken()}`;
+  const body = Buffer.from(payload, "utf8").toString("base64url");
+  return `${body}.${hmac(masterKey, body, ip)}`;
+}
+
+/** The challenge's contents, or null when it is forged, rebound or expired. */
+export function openChallenge(
+  masterKey: Buffer,
+  ip: string,
+  challenge: string,
+  now: number,
+): { userId: string; remember: boolean } | null {
   const [body, signature] = challenge.split(".");
-  if (!body || !signature) throw expiredChallenge();
-  if (!constantTimeEquals(signature, hmac(req.ctx.config.masterKey, body, req.ip ?? ""))) {
-    throw expiredChallenge();
-  }
+  if (!body || !signature) return null;
+  if (!constantTimeEquals(signature, hmac(masterKey, body, ip))) return null;
 
   const [userId, expiresAt, remember] = Buffer.from(body, "base64url").toString("utf8").split(".");
-  if (!userId || !expiresAt || Number(expiresAt) < Date.now()) throw expiredChallenge();
+  // Expired at the instant itself, matching the other expiries.
+  if (!userId || !expiresAt || Number(expiresAt) <= now) return null;
   return { userId, remember: remember === "1" };
 }
+
+export { CHALLENGE_TTL_MS };
 
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
+
+/** Throws the onboarding wizard's strength refusal, on `field`. */
+function assertStrongPassword(
+  password: string,
+  user: { name: string; email: string },
+  field: string,
+): void {
+  const assessment = assessPassword(password, passwordContext(user.name, user.email));
+  if (assessment.ok) return;
+  throw new ApiException("validation_failed", "That password is not strong enough.", {
+    fields: { [field]: assessment.problems.join(" ") },
+    detail: { score: assessment.score, problems: assessment.problems },
+  });
+}
+
+/** Counts one failed attempt against Settings > Security > Failed sign-in lockout. */
+async function noteFailure(
+  req: FastifyRequest,
+  userId: string,
+  lockout: { threshold: number; lockout_minutes: number; window_minutes: number },
+): Promise<void> {
+  await req.ctx.auth.noteFailedLogin(
+    userId,
+    lockout.threshold,
+    lockout.lockout_minutes,
+    lockout.window_minutes,
+  );
+}
 
 let decoy: Promise<string> | null = null;
 
@@ -556,14 +707,16 @@ const accountLocked = (until: Date) =>
   new ApiException("rate_limited", "This account is locked after too many failed sign-ins.", {
     detail: { locked_until: until.toISOString() },
     remediation: {
-      summary: `The lock lifts at ${until.toISOString()}. An owner can clear it sooner by reactivating the account in Administration.`,
+      // "Unlock", not "reactivate": a locked account is still active, and
+      // Unlock is the row action Administration > Users offers for it.
+      summary: `The lock lifts at ${until.toISOString()}. An owner can lift it sooner with Unlock in Administration > Users.`,
       actions: [{ label: "Administration", href: "/administration/users" }],
     },
   });
 
 const accountNotActive = (status: UserStatus) =>
   status === "invited"
-    ? new ApiException("forbidden", "This invitation has not been accepted yet.", {
+    ? new ApiException("forbidden", "This invitation hasn't been accepted yet.", {
         remediation: {
           summary:
             "Open the invitation link to set a password, or ask an owner to reissue the invite.",
@@ -577,10 +730,35 @@ const accountNotActive = (status: UserStatus) =>
         },
       });
 
-const wrongCurrentPassword = () =>
-  new ApiException("unauthenticated", "Your current password is not correct.", {
-    fields: { current_password: "does not match" },
+const inviteNotValid = () =>
+  new ApiException("unauthenticated", "This invitation is not valid any more.", {
+    remediation: {
+      summary: "Invitations are single-use and expire. Ask an administrator to invite you again.",
+      actions: [{ label: "Sign in", href: "/login" }],
+    },
+  });
+
+/*
+ * 422, not 401. These answer a signed-in caller whose session is fine
+ * and who mistyped something on their own account page; a 401 is "your
+ * session is gone", so the panel's client did what it does with one and
+ * sent them to the sign-in form — a typo in "current password" or in the
+ * enrolment code signed the operator out of the page they were on.
+ */
+const wrongCurrentPassword = (field = "current_password") =>
+  new ApiException("validation_failed", "Your current password is not correct.", {
+    fields: { [field]: "does not match" },
     remediation: { summary: "Re-enter the password you use to sign in today.", actions: [] },
+  });
+
+const wrongEnrolmentCode = () =>
+  new ApiException("validation_failed", "That authentication code is not valid.", {
+    fields: { code: "That authentication code is not valid." },
+    remediation: {
+      summary:
+        "Codes last 30 seconds — enter the one your app shows now. If it keeps failing, check the device clock.",
+      actions: [],
+    },
   });
 
 const totpAlreadyEnabled = () =>

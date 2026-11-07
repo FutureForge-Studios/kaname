@@ -12,6 +12,7 @@ import type {
   DnsValidationResult,
   Domain,
   FileListing,
+  InstallCertificateInput,
   IssueCertificateInput,
   Job,
   LogRecordRow,
@@ -145,6 +146,28 @@ export function useDeleteSite() {
       }),
     invalidates: SITE_FAMILIES,
     describe: (vars) => `Remove ${vars.name}`,
+  });
+}
+
+export interface SiteToggleVars {
+  id: string;
+  name: string;
+}
+
+/** Disables the vhost on the host; the row stays, listed as suspended. */
+export function useSuspendSite() {
+  return useMutationWithJob<SiteToggleVars>({
+    mutationFn: ({ id }) => api.post<{ job: Job }>(`/sites/${id}/suspend`),
+    invalidates: SITE_FAMILIES,
+    describe: (vars) => `Suspend ${vars.name}`,
+  });
+}
+
+export function useResumeSite() {
+  return useMutationWithJob<SiteToggleVars>({
+    mutationFn: ({ id }) => api.post<{ job: Job }>(`/sites/${id}/resume`),
+    invalidates: SITE_FAMILIES,
+    describe: (vars) => `Resume ${vars.name}`,
   });
 }
 
@@ -316,7 +339,7 @@ export function useReconcileDnsRecords() {
   });
 }
 
-/** What `POST /dns/sync` answers with; the zone reconcile has no contract type. */
+/** What a `dns.sync` job returns; the zone reconcile has no contract type. */
 export interface DnsSyncResult {
   domain_id: string;
   domain_name: string;
@@ -330,27 +353,66 @@ export interface DnsSyncResult {
   drifted: number;
   removed: number;
   unsupported: { type: string; name: string }[];
-  records: DnsRecord[];
 }
 
 export interface SyncDnsVars {
   domainId: string;
+  domainName?: string;
   adoptUnmanaged?: boolean;
 }
 
-export function useSyncDns(onDone?: (result: DnsSyncResult) => void) {
-  return useResourceMutation<SyncDnsVars, DnsSyncResult>({
+/**
+ * A zone sync is a `dns.sync` job: it pages through the provider's zone
+ * for as long as that takes, so it is queued and watched rather than
+ * held open in a request. Its summary is the job's result.
+ */
+export function useSyncDns(onQueued?: (job: Job) => void) {
+  return useMutationWithJob<SyncDnsVars>({
     mutationFn: ({ domainId, adoptUnmanaged = false }) =>
-      api.post<DnsSyncResult>("/dns/sync", {
+      api.post<{ job: Job }>("/dns/sync", {
         domain_id: domainId,
         adopt_unmanaged: adoptUnmanaged,
       }),
     invalidates: DNS_FAMILIES,
-    successMessage: (result) =>
-      result.drifted > 0
-        ? `${result.domain_name} synced — ${result.drifted} record${result.drifted === 1 ? "" : "s"} had drifted.`
-        : `${result.domain_name} synced — the zone matches Kaname.`,
-    onDone: (result) => onDone?.(result),
+    describe: (vars) => `Sync ${vars.domainName ?? "zone"}`,
+    onQueued: (jobs) => jobs[0] && onQueued?.(jobs[0]),
+  });
+}
+
+/** What a `dns.apply` job returns. */
+export interface DnsApplyResult {
+  domain_id: string;
+  domain_name: string;
+  provider: DnsProvider;
+  applied_at: string;
+  created: number;
+  updated: number;
+  deleted: number;
+  restored: number;
+}
+
+/** Pushes every staged drift back to the provider as a `dns.apply` job. */
+export function useApplyDns(onQueued?: (job: Job) => void) {
+  return useMutationWithJob<SyncDnsVars>({
+    mutationFn: ({ domainId }) => api.post<{ job: Job }>("/dns/apply", { domain_id: domainId }),
+    invalidates: DNS_FAMILIES,
+    describe: (vars) => `Apply staged changes to ${vars.domainName ?? "zone"}`,
+    onQueued: (jobs) => jobs[0] && onQueued?.(jobs[0]),
+  });
+}
+
+export interface DnsTokenVars {
+  domainId: string;
+  domainName: string;
+  token: string;
+}
+
+/** Write-only: the token is sealed on the control plane and never read back. */
+export function useSaveDnsToken() {
+  return useResourceMutation<DnsTokenVars, void>({
+    mutationFn: ({ domainId, token }) => api.put<void>(`/domains/${domainId}/dns-token`, { token }),
+    invalidates: DNS_FAMILIES,
+    successMessage: (_result, vars) => `API token saved for ${vars.domainName}.`,
   });
 }
 
@@ -412,6 +474,15 @@ export function useIssueCertificate() {
   return useMutationWithJob<IssueCertificateInput>({
     mutationFn: (input) => api.post<{ job: Job }>("/certificates", input),
     invalidates: CERT_FAMILIES,
+  });
+}
+
+export function useInstallCertificate() {
+  return useMutationWithJob<InstallCertificateInput>({
+    mutationFn: (input) => api.post<{ job: Job }>("/certificates/install", input),
+    invalidates: CERT_FAMILIES,
+    // The form renders the field messages; a toast would only repeat them.
+    toastErrors: false,
   });
 }
 

@@ -2,6 +2,8 @@ node_modules/
 dist/
 build/
 .next/
+# Per-stack panel builds for parallel e2e runs (KANAME_E2E_NEXT_DIST_DIR).
+.next-*/
 out/
 .turbo/
 *.tsbuildinfo
@@ -15,8 +17,8 @@ out/
 
 # agent artifacts
 agent/bin/
+agent/target/
 agent/kanamed
-agent/kanamed.exe
 agent/.state/
 
 # os / editor
@@ -31,4 +33,6 @@ coverage/
 playwright-report/
 test-results/
 .artifacts/
+e2e/.artifacts-*/
 e2e/.state/
+apps/web/tsconfig.e2e-*.json

@@ -40,7 +40,7 @@ export async function loadConnectedServer(
 ): Promise<ServerRow> {
   const server = await loadServer(req, serverId, permission);
   if (!req.ctx.hub.isConnected(serverId)) {
-    throw agentOffline(server.name, server.lastSeenAt);
+    throw agentOffline(server);
   }
   return server;
 }
@@ -87,11 +87,19 @@ export async function enqueueServerJob(
     targetLabel?: string;
     params?: Record<string, unknown>;
     correlationId?: string;
+    /**
+     * Overrides JOB_SPECS[type].permission when one job type serves
+     * several permission sets. Every db.* spec names the MySQL set, so a
+     * PostgreSQL job was authorised against databases.mysql:* — a
+     * PostgreSQL-only role could do nothing, and its database row was
+     * already inserted when the enqueue refused.
+     */
+    permission?: Permission;
   },
 ): Promise<Job> {
   const h = helpers(req);
   const spec = JOB_SPECS[opts.type];
-  const principal = h.authorize(spec.permission, opts.server.id);
+  const principal = h.authorize(opts.permission ?? spec.permission, opts.server.id);
 
   const job = await req.ctx.queue.enqueue({
     type: opts.type,
@@ -103,6 +111,9 @@ export async function enqueueServerJob(
     correlationId: opts.correlationId,
     createdBy: principal.kind === "user" ? principal.id : null,
     createdByName: principal.name,
+    // Claimed only once the agent dials in, so say so from the start
+    // rather than letting the pill claim it is waiting for a worker.
+    blockedReason: req.ctx.hub.isConnected(opts.server.id) ? null : "agent_offline",
   });
 
   await req.ctx.audit.record({

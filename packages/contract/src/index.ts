@@ -8,6 +8,9 @@
  * registry in ./agent.
  * ------------------------------------------------------------------ */
 
+// First, so the plain-English error map is installed before any schema
+// in this package (or an importer's) is ever parsed.
+export * from "./messages.js";
 export * from "./primitives.js";
 export * from "./enums.js";
 export * from "./rbac.js";
@@ -42,6 +45,17 @@ export type {
   FileEntry,
   LogRecord,
   LogSource,
+  MailAliasEntry,
+  MailCertificateStatus,
+  MailCheck,
+  MailDeployResult,
+  MailDnsRecord,
+  MailDomainEntry,
+  MailInstallStep,
+  MailInstallStepStatus,
+  MailServerStatusInfo,
+  MailServiceState,
+  MailboxEntry,
   MetricsSample,
   ProcessInfo,
   ResolvedRecord,
@@ -174,8 +188,20 @@ export const NAVIGATION: readonly NavSection[] = [
   {
     label: "Email",
     icon: "Mail",
-    permission: "email.mailboxes:read",
+    permission: "email.servers:read",
     children: [
+      {
+        label: "Mail servers",
+        href: "/email",
+        icon: "MailCheck",
+        permission: "email.servers:read",
+      },
+      {
+        label: "Domains",
+        href: "/email/domains",
+        icon: "Globe",
+        permission: "email.mailboxes:read",
+      },
       {
         label: "Mailboxes",
         href: "/email/mailboxes",
@@ -190,16 +216,10 @@ export const NAVIGATION: readonly NavSection[] = [
         permission: "email.routing:read",
       },
       {
-        label: "Forwarders",
-        href: "/email/forwarders",
-        icon: "Forward",
-        permission: "email.routing:read",
-      },
-      {
-        label: "DNS Authentication",
-        href: "/email/authentication",
+        label: "Health",
+        href: "/email/health",
         icon: "BadgeCheck",
-        permission: "email.auth:read",
+        permission: "email.servers:read",
       },
       {
         label: "Mail Logs",

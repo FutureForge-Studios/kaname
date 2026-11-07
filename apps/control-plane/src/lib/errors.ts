@@ -74,15 +74,26 @@ export const unauthenticated = () =>
 export const conflict = (message: string, remediation?: Remediation) =>
   new ApiException("conflict", message, { remediation });
 
-export const agentOffline = (serverName: string, lastSeen: Date | null) =>
-  new ApiException("agent_offline", `The agent on ${serverName} is not connected.`, {
-    detail: { last_seen_at: lastSeen?.toISOString() ?? null },
+/*
+ * Takes the server, not just its name: the "Server details" action has to
+ * land on this host's page, and with only a name to go on it linked to the
+ * fleet list, leaving the operator to find the host again by hand.
+ */
+export const agentOffline = (
+  server: { id: string; name: string; lastSeenAt: Date | null },
+  message = `The agent on ${server.name} is not connected.`,
+) =>
+  new ApiException("agent_offline", message, {
+    detail: { last_seen_at: server.lastSeenAt?.toISOString() ?? null, server_id: server.id },
     remediation: {
-      summary: lastSeen
-        ? `Last seen ${lastSeen.toISOString()}. The job will run automatically when the agent reconnects.`
+      summary: server.lastSeenAt
+        ? // Thrown only by live reads and the terminal, which queue nothing,
+          // so promising that "the job will run" told the operator to wait
+          // for something that was never going to happen.
+          `Last seen ${server.lastSeenAt.toISOString()}. This reads the host live, so retry once the agent reconnects; jobs already queued for it run on their own then.`
         : "This server has never connected. Finish enrollment on the host.",
       actions: [
-        { label: "Server details", href: "/infrastructure/servers" },
+        { label: "Server details", href: `/infrastructure/servers/${server.id}` },
         { label: "Check agent", action: "servers.ping" },
       ],
     },

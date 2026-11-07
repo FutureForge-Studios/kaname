@@ -65,20 +65,25 @@ export async function processRoutes(app: FastifyInstance): Promise<void> {
       req.ctx.hub.call(
         server.id,
         "process.list",
-        { sort: q.sort, limit: q.limit, user: q.user },
+        // The host sorts and truncates; the search runs here. Asking for
+        // only `limit` rows first meant a search could never find a
+        // process outside the top N by CPU — `rsyslogd` was "no matches"
+        // on a host running it. With a term, read the whole table (the
+        // method's own ceiling) and truncate after filtering.
+        { sort: q.sort, limit: term ? 2000 : q.limit, user: q.user },
         { timeoutMs: READ_TIMEOUT_MS },
       ),
     );
     const rows: ProcessInfo[] = result.processes;
     const reported: number = result.total ?? rows.length;
-    const filtered = rows.filter(matches);
+    const matched = rows.filter(matches);
 
     return list(
       reply,
-      filtered.map((p) => toApi(server.id, p)),
+      matched.slice(0, q.limit).map((p) => toApi(server.id, p)),
       // `total` is the host's full count; once we filter locally, only the
       // rows we actually matched can be claimed.
-      paginate(term ? filtered.length : reported, 1, q.limit),
+      paginate(term ? matched.length : reported, 1, q.limit),
     );
   });
 
@@ -125,7 +130,7 @@ async function agentRead<T>(server: ServerRow, run: () => Promise<T>): Promise<T
     return await run();
   } catch (err) {
     if (err instanceof AgentRpcError) throw fromAgentError(server.name, err.agentError);
-    if (err instanceof AgentOfflineError) throw agentOffline(server.name, server.lastSeenAt);
+    if (err instanceof AgentOfflineError) throw agentOffline(server);
     throw err;
   }
 }

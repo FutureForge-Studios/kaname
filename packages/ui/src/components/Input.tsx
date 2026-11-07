@@ -196,6 +196,7 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
   function SearchInput(
     {
       className,
+      boxClassName,
       hint,
       onClear,
       size = "sm",
@@ -251,7 +252,11 @@ export const SearchInput = React.forwardRef<HTMLInputElement, SearchInputProps>(
           }
           onKeyDown?.(event);
         }}
-        className={cn("[&::-webkit-search-cancel-button]:hidden", className)}
+        // A caller's className sizes the field, so it goes on the box. On the
+        // inner <input> a width like w-48 leaves the box at w-full, which is
+        // what pushed list-page filters onto a second, clipped toolbar line.
+        className="[&::-webkit-search-cancel-button]:hidden"
+        boxClassName={cn(boxClassName, className)}
         trailing={
           <>
             {filled && !disabled && (

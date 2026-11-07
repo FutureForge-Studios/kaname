@@ -182,11 +182,17 @@ export const Dialog = React.forwardRef<HTMLDivElement, DialogProps>(function Dia
     }
   };
 
+  /*
+   * Layer order, lowest first: drawer 50, toasts 55, dialog 60, floating
+   * menus and tooltips 70. A dialog outranks a drawer that opened after it
+   * (a one-time credential must not hide under the job drawer), and toasts
+   * stay below dialogs so they never cover a dialog's buttons.
+   */
   return (
     <Portal>
       <div
         className={cn(
-          "fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4",
+          "fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto p-4",
           "bg-[var(--kn-overlay)] animate-[var(--animate-fade-in)]",
         )}
         onPointerDown={(event) => {
@@ -205,7 +211,7 @@ export const Dialog = React.forwardRef<HTMLDivElement, DialogProps>(function Dia
           onKeyDown={handleKeyDown}
           className={cn(
             "flex max-h-full w-full flex-col overflow-hidden outline-none",
-            "rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)]",
+            "rounded-[var(--kn-r-xl)] border border-[var(--kn-border)] bg-[var(--kn-surface)]",
             "text-base text-[var(--kn-text)] shadow-[var(--kn-shadow-lg)]",
             "animate-[var(--animate-scale-in)]",
             variant(SIZES, size, "md"),

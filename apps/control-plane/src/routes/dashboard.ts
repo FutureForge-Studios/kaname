@@ -1,29 +1,40 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from "@kaname/db";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "@kaname/db";
 import {
+  alertRules,
   alerts,
   auditEvents,
+  backupDestinations,
   backupRuns,
   backupSchedules,
   certificates,
+  dbDatabases,
   domains,
+  firewallState,
   jobs,
-  mailAuthChecks,
+  mailboxes,
   mailDomains,
+  mailServers,
+  notificationChannels,
   restorePoints,
   servers,
   services,
+  sites,
+  sshKeys,
   threatEvents,
+  users,
 } from "@kaname/db/schema";
 import {
   CERT_EXPIRY_SOON_DAYS,
   certificateUrgency,
   type AuditEvent,
   type CommandCenterSummary,
+  type OnboardingStep,
   type Permission,
 } from "@kaname/contract";
 import { helpers, item } from "../http/plugin.js";
 import { combine, scopeFilter, visibleServerIds } from "./_shared.js";
+import { domainScope } from "./domains.js";
 import { latestSamples, rollup } from "./monitoring.js";
 
 /* ------------------------------------------------------------------ *
@@ -98,7 +109,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
     /* -------------------------- disk pressure ------------------------ */
 
-    for (const server of fleetRows) {
+    /*
+     * A revoked host keeps its last synced rows, but nothing on it is the
+     * operator's to fix any more, so it raises no attention items.
+     */
+    const liveRows = fleetRows.filter((s) => s.connection !== "revoked");
+
+    for (const server of liveRows) {
       // Reuse the reconciler's own thresholds so this page and the
       // server's health badge can never disagree about what is full.
       for (const reason of server.healthReasons) {
@@ -133,6 +150,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         .where(
           combine(
             eq(services.activeState, "failed"),
+            ne(servers.connection, "revoked"),
             scopeFilter(req, "infra.services:read", services.serverId),
           ),
         )
@@ -177,6 +195,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
             scopeFilter(req, "websites.ssl:read", certificates.serverId),
             isNotNull(certificates.expiresAt),
             lte(certificates.expiresAt, horizon),
+            // Matches /certificates/expiring: a revoked certificate is done.
+            ne(certificates.status, "revoked"),
+            ne(servers.connection, "revoked"),
           ),
         )
         .orderBy(asc(certificates.expiresAt))
@@ -285,42 +306,85 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       };
     }
 
-    /* -------------------------- mail DNS auth ------------------------ */
+    /* ------------------------------ mail ------------------------------ */
 
-    if (holds(req, "email.auth:read")) {
-      const rows = await req.ctx.db
+    // Two separate facts from the mail module's cache (KD-012): a server
+    // whose last doctor run has failing checks, and a domain whose
+    // required DNS records are not published. Each links to where the
+    // fix is, not to a generic page.
+    if (holds(req, "email.servers:read")) {
+      const unhealthy = await req.ctx.db
         .select({
+          id: mailServers.id,
+          serverId: mailServers.serverId,
+          serverName: servers.name,
+          hostname: mailServers.hostname,
+          checks: mailServers.checks,
+          syncedAt: mailServers.lastSyncedAt,
+        })
+        .from(mailServers)
+        .innerJoin(servers, eq(mailServers.serverId, servers.id))
+        .where(
+          combine(
+            eq(mailServers.health, "fail"),
+            scopeFilter(req, "email.servers:read", mailServers.serverId),
+          ),
+        );
+
+      for (const row of unhealthy) {
+        const failing = row.checks.filter((c) => c.status === "fail");
+        const first = failing[0];
+        attention.push({
+          kind: "mail_server_unhealthy",
+          severity: "warning",
+          title: `Mail server ${row.hostname ?? row.serverName} has ${failing.length} failing check${failing.length === 1 ? "" : "s"}`,
+          detail: first
+            ? failing.length === 1
+              ? `${first.label}: ${first.detail}`
+              : `Starting with ${first.label}: ${first.detail}`
+            : "The last doctor run reported failures.",
+          server_id: row.serverId,
+          server_name: row.serverName,
+          href: `/email/health?server_id=${row.serverId}`,
+          since: isoOf(row.syncedAt),
+        });
+      }
+
+      const unpublished = await req.ctx.db
+        .select({
+          id: mailDomains.id,
           domainName: domains.name,
           serverId: mailDomains.serverId,
           serverName: servers.name,
-          failing: sql<number>`count(*)::int`,
-          sample: sql<string>`min(${mailAuthChecks.check})`,
-          checkedAt: sql<string>`max(${mailAuthChecks.checkedAt})`,
+          records: mailDomains.dnsRecords,
+          checkedAt: mailDomains.dnsCheckedAt,
         })
-        .from(mailAuthChecks)
-        .innerJoin(mailDomains, eq(mailAuthChecks.mailDomainId, mailDomains.id))
+        .from(mailDomains)
         .innerJoin(domains, eq(mailDomains.domainId, domains.id))
         .innerJoin(servers, eq(mailDomains.serverId, servers.id))
         .where(
           combine(
-            eq(mailAuthChecks.status, "fail"),
-            scopeFilter(req, "email.auth:read", mailDomains.serverId),
+            eq(mailDomains.dnsStatus, "fail"),
+            scopeFilter(req, "email.servers:read", mailDomains.serverId),
           ),
-        )
-        .groupBy(domains.name, mailDomains.serverId, servers.name);
+        );
 
-      for (const row of rows) {
+      for (const row of unpublished) {
+        const failing = row.records.filter((r) => r.required && r.status === "fail");
+        const names = failing.map((r) => r.type);
         attention.push({
           kind: "mail_auth_failing",
           severity: "warning",
-          title: `Mail authentication is failing for ${row.domainName}`,
+          title: `Mail DNS is incomplete for ${row.domainName}`,
           detail:
-            row.failing === 1
-              ? `The ${row.sample.toUpperCase()} check fails — mail from this domain will be treated as spam.`
-              : `${row.failing} checks fail, starting with ${row.sample.toUpperCase()}.`,
+            failing.length === 1
+              ? `The ${names[0]} record is not published; mail from this domain will be treated as spam.`
+              : failing.length > 1
+                ? `${failing.length} required records are not published (${names.join(", ")}).`
+                : "A required DNS record is not published.",
           server_id: row.serverId,
           server_name: row.serverName,
-          href: `/email/authentication?domain=${encodeURIComponent(row.domainName)}`,
+          href: `/email/domains?id=${row.id}`,
           since: isoOf(row.checkedAt),
         });
       }
@@ -443,7 +507,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
      * new panel features.
      */
     const panelVersion = process.env.npm_package_version ?? "0.1.0";
-    for (const server of fleetRows) {
+    for (const server of liveRows) {
       if (!server.agentVersion || !isOlder(server.agentVersion, panelVersion)) continue;
       attention.push({
         kind: "update_available",
@@ -488,10 +552,262 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       certificates_expiring: certificatesExpiring,
       backups,
       threats_24h: threats,
+      onboarding: await onboardingSteps(req, fleetRows),
     };
 
     return item(reply, summary);
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Getting Started.
+ *
+ * Every step is answered from a row the control plane already holds:
+ * nothing here is a flag the browser set, so the checklist can only
+ * claim progress the fleet actually has. A step the caller may not read
+ * is omitted — absent, not "undone" — so a scoped Developer is never
+ * told to finish something they cannot see.
+ * ------------------------------------------------------------------ */
+
+type ServerRowLite = Pick<typeof servers.$inferSelect, "enrolledAt" | "connection">;
+
+export async function onboardingSteps(
+  req: FastifyRequest,
+  fleetRows: readonly ServerRowLite[],
+): Promise<OnboardingStep[]> {
+  const db = req.ctx.db;
+  const steps: OnboardingStep[] = [];
+  const principal = helpers(req).requirePrincipal();
+
+  /** One-row existence probe; never a count over a large table. */
+  const exists = async (query: Promise<unknown[]>): Promise<boolean> => (await query).length > 0;
+
+  // Infrastructure. The fleet rows are already scoped to infra.servers:read.
+  const enrolled = fleetRows.filter((s) => s.enrolledAt && s.connection !== "revoked");
+  steps.push({ id: "server_paired", done: enrolled.length > 0 });
+  // "Every agent connected" says nothing until there is an agent: on a
+  // brand-new instance it read To do right under "Pair a server", which
+  // is the same task twice. So it is absent, not undone, until one is.
+  if (enrolled.length > 0) {
+    steps.push({
+      id: "agents_connected",
+      done: enrolled.every((s) => s.connection === "connected"),
+    });
+  }
+
+  // Websites.
+  if (holds(req, "websites.domains:read")) {
+    steps.push({
+      id: "domain_added",
+      done: await exists(
+        db
+          .select({ id: domains.id })
+          .from(domains)
+          .where(combine(domainScope(req, "websites.domains:read")))
+          .limit(1),
+      ),
+    });
+  }
+  if (holds(req, "websites.sites:read")) {
+    steps.push({
+      id: "site_created",
+      done: await exists(
+        db
+          .select({ id: sites.id })
+          .from(sites)
+          .where(combine(scopeFilter(req, "websites.sites:read", sites.serverId)))
+          .limit(1),
+      ),
+    });
+  }
+  if (holds(req, "websites.ssl:read")) {
+    steps.push({
+      id: "certificate_issued",
+      done: await exists(
+        db
+          .select({ id: certificates.id })
+          .from(certificates)
+          .where(
+            combine(
+              inArray(certificates.status, ["active", "expiring"]),
+              scopeFilter(req, "websites.ssl:read", certificates.serverId),
+            ),
+          )
+          .limit(1),
+      ),
+    });
+  }
+
+  // Email: a Yunori Mail Server that finished installing, then a mailbox on it.
+  if (holds(req, "email.servers:read")) {
+    steps.push({
+      id: "mail_server_installed",
+      done: await exists(
+        db
+          .select({ id: mailServers.id })
+          .from(mailServers)
+          .where(
+            combine(
+              eq(mailServers.status, "installed"),
+              scopeFilter(req, "email.servers:read", mailServers.serverId),
+            ),
+          )
+          .limit(1),
+      ),
+    });
+  }
+  if (holds(req, "email.mailboxes:read")) {
+    steps.push({
+      id: "mailbox_created",
+      done: await exists(
+        db
+          .select({ id: mailboxes.id })
+          .from(mailboxes)
+          .where(combine(scopeFilter(req, "email.mailboxes:read", mailboxes.serverId)))
+          .limit(1),
+      ),
+    });
+  }
+
+  // Databases: either engine family counts (MariaDB sits under MySQL).
+  const engineScopes = (
+    [
+      ["databases.mysql:read", ["mysql", "mariadb"]],
+      ["databases.postgres:read", ["postgres"]],
+    ] as const
+  )
+    .filter(([permission]) => holds(req, permission))
+    .map(([permission, engines]) =>
+      combine(
+        inArray(dbDatabases.engine, [...engines]),
+        scopeFilter(req, permission, dbDatabases.serverId),
+      ),
+    );
+  if (engineScopes.length > 0) {
+    steps.push({
+      id: "database_created",
+      done: await exists(
+        db
+          .select({ id: dbDatabases.id })
+          .from(dbDatabases)
+          .where(or(...engineScopes))
+          .limit(1),
+      ),
+    });
+  }
+
+  // Security: a rule set actually applied to a host, and a key Kaname writes.
+  if (holds(req, "security.firewall:read")) {
+    steps.push({
+      id: "firewall_applied",
+      done: await exists(
+        db
+          .select({ id: firewallState.serverId })
+          .from(firewallState)
+          .where(
+            combine(
+              eq(firewallState.enabled, true),
+              isNotNull(firewallState.lastAppliedAt),
+              scopeFilter(req, "security.firewall:read", firewallState.serverId),
+            ),
+          )
+          .limit(1),
+      ),
+    });
+  }
+  if (holds(req, "security.ssh:read")) {
+    const scope = visibleServerIds(req, "security.ssh:read");
+    steps.push({
+      id: "ssh_key_added",
+      done: await exists(
+        db
+          .select({ id: sshKeys.id })
+          .from(sshKeys)
+          .where(
+            scope === "global"
+              ? undefined
+              : scope.length === 0
+                ? sql`false`
+                : // A key is visible where it is trusted on a host the caller can see.
+                  sql`${sshKeys.serverIds} && ARRAY[${sql.join(
+                    scope.map((id) => sql`${id}`),
+                    sql`, `,
+                  )}]::uuid[]`,
+          )
+          .limit(1),
+      ),
+    });
+  }
+
+  // Backups: somewhere to write, then proof something was written.
+  if (holds(req, "backups.schedules:read")) {
+    steps.push({
+      id: "backup_destination_added",
+      done: await exists(db.select({ id: backupDestinations.id }).from(backupDestinations).limit(1)),
+    });
+    steps.push({
+      id: "backup_succeeded",
+      done: await exists(
+        db
+          .select({ id: backupRuns.id })
+          .from(backupRuns)
+          .where(
+            combine(
+              eq(backupRuns.status, "succeeded"),
+              scopeFilter(req, "backups.schedules:read", backupRuns.serverId),
+            ),
+          )
+          .limit(1),
+      ),
+    });
+  }
+
+  // Monitoring: a rule that can fire, and a channel it can reach someone on.
+  if (holds(req, "monitoring.alerts:read")) {
+    steps.push({
+      id: "alert_rule_created",
+      done: await exists(
+        db.select({ id: alertRules.id }).from(alertRules).where(eq(alertRules.enabled, true)).limit(1),
+      ),
+    });
+  }
+  if (holds(req, "admin.settings:read")) {
+    steps.push({
+      id: "notification_channel_added",
+      done: await exists(
+        db
+          .select({ id: notificationChannels.id })
+          .from(notificationChannels)
+          .where(eq(notificationChannels.enabled, true))
+          .limit(1),
+      ),
+    });
+  }
+
+  // Administration. An invited account counts: the invitation is the act.
+  if (holds(req, "admin.users:read") && principal.kind === "user") {
+    steps.push({
+      id: "teammate_invited",
+      done: await exists(
+        db
+          .select({ id: users.id })
+          .from(users)
+          .where(and(ne(users.id, principal.id), ne(users.status, "suspended")))
+          .limit(1),
+      ),
+    });
+  }
+  // Self-scoped: being signed in is the permission to secure your own account.
+  if (principal.kind === "user") {
+    const [me] = await db
+      .select({ totp: users.totpEnabled })
+      .from(users)
+      .where(eq(users.id, principal.id))
+      .limit(1);
+    steps.push({ id: "two_factor_enabled", done: me?.totp ?? false });
+  }
+
+  return steps;
 }
 
 /* ------------------------------------------------------------------ */

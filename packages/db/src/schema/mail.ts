@@ -1,23 +1,72 @@
-import { relations, sql } from "drizzle-orm";
+import { relations } from "drizzle-orm";
 import {
   bigint,
   boolean,
   index,
-  integer,
   jsonb,
   pgTable,
   text,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { CheckStatus, MailAuthCheck, Remediation } from "@kaname/contract";
+import type {
+  MailCertificateStatus,
+  MailCheck,
+  MailCheckStatus,
+  MailDnsRecord,
+  MailInstallStep,
+  MailRelayProvider,
+  MailSendingMode,
+  MailServerStatus,
+  MailServiceState,
+} from "@kaname/contract";
 import { pk, timestamps, ts } from "./common";
 import { servers } from "./fleet";
 import { domains } from "./web";
 
 /* ------------------------------------------------------------------ *
- * Mail domains, mailboxes, routing.
+ * Mail: Yunori Mail Server on a managed host (KD-023).
+ *
+ * The host is authoritative for everything below. These rows exist so
+ * the fleet view can list, count and search without fanning out to
+ * every host (KD-012), and `last_synced_at` says how stale they are. A
+ * sync re-reads the host and reconciles; nothing here is a source the
+ * host is written from.
+ *
+ * There is deliberately no column for a credential anywhere: mailbox
+ * passwords and relay secrets cross one response and are gone.
  * ------------------------------------------------------------------ */
+
+export const mailServers = pgTable(
+  "mail_servers",
+  {
+    id: pk(),
+    serverId: uuid("server_id")
+      .notNull()
+      .references(() => servers.id, { onDelete: "cascade" }),
+    /** Kaname's lifecycle; the host's own view is `install_complete` and `steps`. */
+    status: text("status").$type<MailServerStatus>().notNull().default("not_installed"),
+    version: text("version"),
+    installComplete: boolean("install_complete").notNull().default(false),
+    hostname: text("hostname"),
+    primaryDomain: text("primary_domain"),
+    adminEmail: text("admin_email"),
+    sendingMode: text("sending_mode").$type<MailSendingMode>(),
+    relayProvider: text("relay_provider").$type<MailRelayProvider>(),
+    consoleUrl: text("console_url"),
+    steps: jsonb("steps").$type<MailInstallStep[]>().notNull().default([]),
+    services: jsonb("services").$type<MailServiceState[]>().notNull().default([]),
+    /** The last `yunori-mail doctor` run, verbatim. */
+    checks: jsonb("checks").$type<MailCheck[]>().notNull().default([]),
+    /** Worst status across `checks`, denormalised so lists can filter on it. */
+    health: text("health").$type<MailCheckStatus>().notNull().default("unknown"),
+    certificate: jsonb("certificate").$type<MailCertificateStatus | null>(),
+    lastError: text("last_error"),
+    lastSyncedAt: ts("last_synced_at"),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("mail_servers_server_key").on(t.serverId)],
+);
 
 export const mailDomains = pgTable(
   "mail_domains",
@@ -29,19 +78,27 @@ export const mailDomains = pgTable(
     serverId: uuid("server_id")
       .notNull()
       .references(() => servers.id, { onDelete: "cascade" }),
-    /** The HELO / MX hostname, which is NOT the apex and needs its own SPF. */
-    mailHostname: text("mail_hostname").notNull(),
-    status: text("status", { enum: ["active", "provisioning", "error", "disabled"] })
+    mailServerId: uuid("mail_server_id")
+      .notNull()
+      .references(() => mailServers.id, { onDelete: "cascade" }),
+    /** The domain the server was installed with. */
+    isPrimary: boolean("is_primary").notNull().default(false),
+    status: text("status", { enum: ["active", "provisioning", "removing", "error"] })
       .notNull()
       .default("provisioning"),
-    dkimSelector: text("dkim_selector").notNull().default("default"),
-    dkimPublicKey: text("dkim_public_key"),
-    catchallTarget: text("catchall_target"),
-    quotaTotal: bigint("quota_total", { mode: "number" }).notNull().default(0),
-    lastAuthCheckAt: ts("last_auth_check_at"),
+    /** Worst status over the required records of the last DNS check. */
+    dnsStatus: text("dns_status").$type<MailCheckStatus>().notNull().default("unknown"),
+    dnsCheckedAt: ts("dns_checked_at"),
+    dnsRecords: jsonb("dns_records").$type<MailDnsRecord[]>().notNull().default([]),
+    /** BIND-style zone data from the host, for "copy all". */
+    zoneFile: text("zone_file").notNull().default(""),
+    lastSyncedAt: ts("last_synced_at"),
     ...timestamps,
   },
-  (t) => [uniqueIndex("mail_domains_domain_key").on(t.domainId)],
+  (t) => [
+    uniqueIndex("mail_domains_domain_key").on(t.domainId),
+    index("mail_domains_mail_server_idx").on(t.mailServerId),
+  ],
 );
 
 export const mailboxes = pgTable(
@@ -57,13 +114,11 @@ export const mailboxes = pgTable(
     address: text("address").notNull(),
     localPart: text("local_part").notNull(),
     displayName: text("display_name"),
+    /** 0 means unlimited. */
     quotaBytes: bigint("quota_bytes", { mode: "number" }).notNull().default(0),
-    usedBytes: bigint("used_bytes", { mode: "number" }).notNull().default(0),
-    messageCount: integer("message_count").notNull().default(0),
-    status: text("status", { enum: ["active", "suspended", "provisioning", "error"] })
+    status: text("status", { enum: ["active", "removing", "error"] })
       .notNull()
-      .default("provisioning"),
-    lastLoginAt: ts("last_login_at"),
+      .default("active"),
     lastSyncedAt: ts("last_synced_at"),
     ...timestamps,
   },
@@ -80,103 +135,52 @@ export const mailAliases = pgTable(
     mailDomainId: uuid("mail_domain_id")
       .notNull()
       .references(() => mailDomains.id, { onDelete: "cascade" }),
-    address: text("address").notNull(),
-    destinations: text("destinations")
-      .array()
-      .notNull()
-      .default(sql`'{}'::text[]`),
-    enabled: boolean("enabled").notNull().default(true),
-    comment: text("comment"),
-    ...timestamps,
-  },
-  (t) => [uniqueIndex("mail_aliases_address_key").on(t.address)],
-);
-
-export const mailForwarders = pgTable(
-  "mail_forwarders",
-  {
-    id: pk(),
-    mailDomainId: uuid("mail_domain_id")
-      .notNull()
-      .references(() => mailDomains.id, { onDelete: "cascade" }),
-    source: text("source").notNull(),
-    destination: text("destination").notNull(),
-    keepCopy: boolean("keep_copy").notNull().default(false),
-    enabled: boolean("enabled").notNull().default(true),
-    ...timestamps,
-  },
-  (t) => [uniqueIndex("mail_forwarders_key").on(t.source, t.destination)],
-);
-
-/* ------------------------------------------------------------------ *
- * DNS authentication.
- *
- * This is where real mail setups break, so each result carries a
- * human remediation rather than a raw record dump (PLAN.md section 7).
- * ------------------------------------------------------------------ */
-
-export const mailAuthChecks = pgTable(
-  "mail_auth_checks",
-  {
-    id: pk(),
-    mailDomainId: uuid("mail_domain_id")
-      .notNull()
-      .references(() => mailDomains.id, { onDelete: "cascade" }),
-    check: text("check").$type<MailAuthCheck>().notNull(),
-    status: text("status").$type<CheckStatus>().notNull().default("unknown"),
-    title: text("title").notNull(),
-    detail: text("detail").notNull().default(""),
-    expected: text("expected"),
-    actual: text("actual"),
-    remediation: jsonb("remediation").$type<Remediation | null>(),
-    resolverUsed: text("resolver_used"),
-    durationMs: integer("duration_ms"),
-    checkedAt: ts("checked_at").notNull().defaultNow(),
-    ...timestamps,
-  },
-  (t) => [uniqueIndex("mail_auth_checks_key").on(t.mailDomainId, t.check)],
-);
-
-export const mailLogEntries = pgTable(
-  "mail_log_entries",
-  {
-    id: pk(),
     serverId: uuid("server_id")
       .notNull()
       .references(() => servers.id, { onDelete: "cascade" }),
-    ts: ts("ts").notNull(),
-    queueId: text("queue_id"),
-    direction: text("direction", { enum: ["inbound", "outbound"] }).notNull(),
-    fromAddress: text("from_address").notNull(),
-    toAddresses: text("to_addresses")
-      .array()
+    address: text("address").notNull(),
+    /** Null when the target mailbox is one Kaname has no row for (yet). */
+    mailboxId: uuid("mailbox_id").references(() => mailboxes.id, { onDelete: "set null" }),
+    /** Kept beside the id so the alias still reads after a mailbox row goes. */
+    mailboxAddress: text("mailbox_address").notNull(),
+    status: text("status", { enum: ["active", "removing", "error"] })
       .notNull()
-      .default(sql`'{}'::text[]`),
-    subject: text("subject"),
-    status: text("status").notNull(),
-    relay: text("relay"),
-    delaySeconds: integer("delay_seconds"),
-    sizeBytes: bigint("size_bytes", { mode: "number" }),
-    dsn: text("dsn"),
-    message: text("message").notNull().default(""),
+      .default("active"),
+    ...timestamps,
   },
   (t) => [
-    index("mail_log_server_ts_idx").on(t.serverId, t.ts),
-    index("mail_log_queue_idx").on(t.queueId),
+    uniqueIndex("mail_aliases_address_key").on(t.address),
+    index("mail_aliases_domain_idx").on(t.mailDomainId),
   ],
 );
 
 /* ---------------------------- relations ---------------------------- */
 
+export const mailServersRelations = relations(mailServers, ({ one, many }) => ({
+  server: one(servers, { fields: [mailServers.serverId], references: [servers.id] }),
+  domains: many(mailDomains),
+}));
+
 export const mailDomainsRelations = relations(mailDomains, ({ one, many }) => ({
   domain: one(domains, { fields: [mailDomains.domainId], references: [domains.id] }),
   server: one(servers, { fields: [mailDomains.serverId], references: [servers.id] }),
+  mailServer: one(mailServers, {
+    fields: [mailDomains.mailServerId],
+    references: [mailServers.id],
+  }),
   mailboxes: many(mailboxes),
   aliases: many(mailAliases),
-  forwarders: many(mailForwarders),
-  checks: many(mailAuthChecks),
 }));
 
-export const mailboxesRelations = relations(mailboxes, ({ one }) => ({
+export const mailboxesRelations = relations(mailboxes, ({ one, many }) => ({
   mailDomain: one(mailDomains, { fields: [mailboxes.mailDomainId], references: [mailDomains.id] }),
+  aliases: many(mailAliases),
+}));
+
+export const mailAliasesRelations = relations(mailAliases, ({ one }) => ({
+  mailDomain: one(mailDomains, {
+    fields: [mailAliases.mailDomainId],
+    references: [mailDomains.id],
+  }),
+  mailbox: one(mailboxes, { fields: [mailAliases.mailboxId], references: [mailboxes.id] }),
 }));

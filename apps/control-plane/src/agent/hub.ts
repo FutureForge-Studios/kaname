@@ -75,6 +75,8 @@ export class AgentOfflineError extends Error {
 }
 
 const DEFAULT_DEADLINE_MS = 60_000;
+/** The agent's per-message read limit: one chunk plus its envelope (agent/src/conn.rs). */
+export const AGENT_FRAME_LIMIT = 2 * MAX_CHUNK_BYTES;
 /** Outbound: pause while the socket holds more than this unsent (1 MiB). */
 const SEND_HIGH_WATER_BYTES = 4 * MAX_CHUNK_BYTES;
 /** bufferedAmount has no event, so a blocked sender re-reads it on this cadence. */
@@ -386,6 +388,30 @@ class AgentConnection {
         return;
       }
 
+      const frame = JSON.stringify({
+        t: "req",
+        id,
+        method,
+        params,
+        deadline_ms: deadline,
+        ...(spec.stream === "bidirectional" ? { stream: true } : {}),
+      });
+      // The agent refuses any WebSocket message over AGENT_FRAME_LIMIT by
+      // dropping the whole connection (conn.rs READ_LIMIT), which took
+      // every other in-flight call on the host down with it — saving a
+      // ~400 KB file in the editor disconnected the agent. Refuse the one
+      // oversized request here instead, with a reason.
+      const size = Buffer.byteLength(frame);
+      if (size > AGENT_FRAME_LIMIT) {
+        reject(
+          new AgentRpcError({
+            code: "invalid_params",
+            message: `${method} request is ${size} bytes; the agent accepts at most ${AGENT_FRAME_LIMIT} bytes in one request.`,
+          }),
+        );
+        return;
+      }
+
       const timer = setTimeout(
         () =>
           this.abandon(id, {
@@ -418,14 +444,7 @@ class AgentConnection {
       }
       this.pending.set(id, call);
 
-      this.write({
-        t: "req",
-        id,
-        method,
-        params,
-        deadline_ms: deadline,
-        ...(spec.stream === "bidirectional" ? { stream: true } : {}),
-      });
+      if (!this.closed && this.socket.readyState === this.socket.OPEN) this.socket.send(frame);
     });
 
     return { id, promise };

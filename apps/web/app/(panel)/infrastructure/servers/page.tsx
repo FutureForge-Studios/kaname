@@ -16,7 +16,7 @@ import {
   cn,
   type DataTableColumn,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { useCan, useList } from "@/lib/queries";
 import { formatCount, formatPercent, formatUptime, humanize, percentOf } from "@/lib/format";
 import { AddServerDialog } from "../_components/AddServerDialog";
@@ -95,6 +95,7 @@ export default function ServersPage() {
   const router = useRouter();
   const can = useCan();
   const [adding, setAdding] = React.useState(false);
+  useOpenFromQuery("new", () => setAdding(true), can("infra.servers:write"));
 
   const state = useResourceListState({
     defaultSort: { id: "name", order: "asc" },
@@ -317,7 +318,7 @@ export default function ServersPage() {
         onRowClick={(server) => router.push(`/infrastructure/servers/${server.id}`)}
         emptyIcon={ServerIcon}
         emptyTitle="No servers yet"
-        emptyDescription="Kaname manages hosts through an agent that dials out. Add a server to get the one-line enrollment command."
+        emptyDescription="A server is a host Kaname manages through an agent that dials out, so nothing on it listens inbound. Add one to get its one-line pairing command."
         emptyAction={addButton}
         errorContext="Servers"
       />

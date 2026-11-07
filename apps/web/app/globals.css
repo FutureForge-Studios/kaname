@@ -14,7 +14,6 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource/jetbrains-mono/400.css";
 @import "@fontsource/jetbrains-mono/500.css";
-@import "@fontsource/jetbrains-mono/700.css";
 
 /*
  * Tailwind scans the project it lives in and skips node_modules, so the
@@ -24,17 +23,14 @@
 @source "../../../packages/ui/src";
 
 /*
- * @fontsource-variable publishes the family as "Inter Variable"; the
- * token stack names the rsms build ("InterVariable"). Same typeface,
- * different registration, so the app widens the stack rather than
- * silently falling through to system-ui.
+ * Faces. The interface is set in the Apple system face where there is one
+ * (SF Pro, SF Mono); elsewhere it falls back to the self-hosted Inter and
+ * JetBrains Mono below, never to Google Fonts. The token stack in
+ * @kaname/ui already names "Inter Variable", the @fontsource-variable
+ * registration, so nothing is widened here. Page titles use Geist Pixel
+ * Square, loaded by next/font in app/layout.tsx (OFL, from `geist`).
+ * Satoshi is licensed to the ffstudios site only and is not used.
  */
-:root,
-[data-theme="dark"],
-[data-theme="light"] {
-  --kn-font-sans: "Inter Variable", "InterVariable", "Inter", ui-sans-serif, system-ui,
-    -apple-system, "Segoe UI", sans-serif;
-}
 
 html,
 body {

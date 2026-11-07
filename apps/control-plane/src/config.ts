@@ -103,6 +103,12 @@ const schema = z.object({
   SESSION_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
 
   ACME_DIRECTORY_URL: z.string().default("https://acme-v02.api.letsencrypt.org/directory"),
+  /**
+   * Cloudflare's API root. Only ever changed to point the DNS provider at
+   * a stand-in (the e2e suite runs one on loopback); a production panel
+   * refuses anything but HTTPS, so a token can never be sent in clear.
+   */
+  KANAME_CLOUDFLARE_API_URL: z.string().url().default("https://api.cloudflare.com/client/v4"),
   ACME_EMAIL: z.string().optional(),
 
   /**
@@ -137,6 +143,18 @@ const schema = z.object({
   KANAME_COMPOSE_PROJECT: z.string().default("kaname"),
 
   KANAME_UPDATE_MANIFEST_URL: z.string().optional(),
+
+  /** Where yunori-mail releases are read from; defaults to yunori.email/server. */
+  KANAME_YUNORI_FEED: z.string().optional(),
+  /** Pins the yunori-mail release Kaname deploys instead of the newest one. */
+  KANAME_YUNORI_VERSION: z.string().optional(),
+  /**
+   * Which peers may set X-Forwarded-For, comma-separated (addresses, CIDR
+   * ranges, or loopback / linklocal / uniquelocal). Only these are believed
+   * about the client's address, so a client that reaches the control plane
+   * directly cannot pick its own address and dodge the per-address limits.
+   */
+  KANAME_TRUSTED_PROXIES: z.string().default("loopback,linklocal,uniquelocal"),
 });
 
 /** Where releases are published. One constant, mirrored in install.sh. */
@@ -174,6 +192,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const raw = parsed.data;
   const isProduction = raw.KANAME_ENV === "production";
+  if (isProduction && !raw.KANAME_CLOUDFLARE_API_URL.startsWith("https://")) {
+    throw new Error("KANAME_CLOUDFLARE_API_URL must be https:// in production.");
+  }
 
   let masterKey: Buffer;
   if (raw.KANAME_MASTER_KEY) {

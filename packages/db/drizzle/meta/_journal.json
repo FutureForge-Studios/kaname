@@ -22,6 +22,41 @@
       "when": 1787720185824,
       "tag": "0002_curly_nico_minoru",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793969384944,
+      "tag": "0003_absurd_spitfire",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794038148992,
+      "tag": "0004_totp_last_step",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794040609330,
+      "tag": "0005_failed_login_window",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794040829255,
+      "tag": "0006_threat_disposition_error",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794040872691,
+      "tag": "0007_terminal_container",
+      "breakpoints": true
     }
   ]
 }

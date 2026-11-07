@@ -1,0 +1,281 @@
+import { randomUUID } from "node:crypto";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { auditRows, endpoint, owner, server } from "../support/secops.js";
+
+/* ------------------------------------------------------------------ *
+ * Monitoring — charts over a chosen range, and alert rules that really
+ * fire and really resolve.
+ *
+ * The evaluator runs once a minute against raw samples the live agents
+ * push, so the fire/resolve journey waits on the alert's own state as
+ * the API reports it — up to a few ticks — never on a fixed delay.
+ * ------------------------------------------------------------------ */
+
+interface AlertRow {
+  id: string;
+  rule_name: string;
+  server_name: string | null;
+  state: string;
+  acknowledged_by: string | null;
+}
+
+const TICKS = 4 * 60_000;
+
+async function alertFor(rule: string): Promise<AlertRow | undefined> {
+  const rows = await (await owner()).get<AlertRow[]>(
+    `/monitoring/alerts?q=${encodeURIComponent(rule)}&per_page=20&sort=started_at&order=desc`,
+  );
+  return rows.find((row) => row.rule_name === rule);
+}
+
+interface ChannelRow {
+  id: string;
+  name: string;
+  kind: "email" | "webhook" | "slack";
+  target: string;
+  events: string[];
+  enabled: boolean;
+}
+
+async function channels(): Promise<ChannelRow[]> {
+  const settings = await (await owner()).get<{ notifications: { channels: ChannelRow[] } }>("/settings");
+  return settings.notifications.channels;
+}
+
+/** Writes the whole channel set: what is there now, minus `drop`, plus `add`. */
+async function writeChannels(add: ChannelRow[], drop: string[] = []): Promise<void> {
+  const keep = (await channels()).filter((c) => !drop.includes(c.name) && !add.some((a) => a.name === c.name));
+  await (await owner()).ok("PATCH", "/settings", {
+    notifications: {
+      channels: [...keep, ...add].map(({ id, name, kind, target, events, enabled }) => ({
+        id,
+        name,
+        kind,
+        target,
+        events,
+        enabled,
+      })),
+    },
+  });
+}
+
+async function rowMenu(page: Page, row: Locator, item: string): Promise<void> {
+  await row.getByRole("button", { name: "Row actions" }).focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("menuitem", { name: item, exact: true }).click();
+}
+
+test.describe("monitoring", () => {
+  test("charts follow the chosen range, and coarser ranges come from the rollup", async ({ page }) => {
+    await page.goto("/monitoring");
+    await expect(page.getByRole("heading", { level: 1, name: "Monitoring" })).toBeVisible();
+    await expect(page.getByText(/4\/4 agents connected/)).toBeVisible();
+    for (const title of ["CPU", "Memory used", "Disk, worst filesystem", "Network", "Load average, 1 minute"]) {
+      await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    }
+    await expect(page.getByRole("radio", { name: "Last 24 hours" })).toHaveAttribute("aria-checked", "true");
+
+    const hour = page.waitForResponse((r) => r.url().includes("/monitoring/series") && r.url().includes("range=1h"));
+    await page.getByRole("radio", { name: "Last hour" }).click();
+    const raw = (await (await hour).json()) as { data: { resolution: string; series: { points: unknown[] }[] } };
+    expect(raw.data.resolution).toBe("raw");
+    /* The last hour has live samples from the agents, not only seeded history. */
+    expect(raw.data.series.some((s) => s.points.length > 0)).toBe(true);
+    await expect(page).toHaveURL(/range=1h/);
+
+    const week = page.waitForResponse((r) => r.url().includes("/monitoring/series") && r.url().includes("range=7d"));
+    await page.getByRole("radio", { name: "Last 7 days" }).click();
+    expect(((await (await week).json()) as { data: { resolution: string } }).data.resolution).toBe("5m");
+
+    /* The range survives a reload, and the per-server table is there. */
+    await page.reload();
+    await expect(page.getByRole("radio", { name: "Last 7 days" })).toHaveAttribute("aria-checked", "true");
+    const perServer = page.getByRole("table", { name: "Per-server metrics" });
+    await expect(perServer.locator("tbody tr")).toHaveCount(4);
+
+    /* A range the API does not know is refused, not silently defaulted. */
+    const api = await owner();
+    const bad = await api.call("GET", "/monitoring/series?metric=cpu&range=2y");
+    expect(bad.status).toBe(422);
+    const metric = await api.call("GET", "/monitoring/series?metric=temperature&range=1h");
+    expect(metric.status).toBe(422);
+  });
+
+  test("an alert rule is validated before it is saved", async ({ page }) => {
+    await page.goto("/monitoring?tab=rules");
+    await page.getByRole("button", { name: "New rule" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "New alert rule" });
+    await dialog.getByRole("textbox", { name: /^Name/ }).fill("e2e invalid rule");
+    await dialog.getByLabel("Threshold").fill("90");
+    await dialog.getByLabel("Duration").fill("-60");
+    await dialog.getByRole("button", { name: "Create rule" }).click();
+    await expect(dialog.getByText("Must be at least 0.")).toBeVisible();
+    await expect(dialog).toBeVisible();
+
+    const api = await owner();
+    const noName = await api.call("POST", "/monitoring/alert-rules", {
+      name: "",
+      metric: "cpu",
+      comparator: "gt",
+      threshold: 90,
+      duration_seconds: 60,
+      severity: "warning",
+      scope: { kind: "fleet" },
+    });
+    expect(noName.status).toBe(422);
+    const noServers = await api.call("POST", "/monitoring/alert-rules", {
+      name: "x",
+      metric: "cpu",
+      comparator: "gt",
+      threshold: 90,
+      duration_seconds: 60,
+      severity: "warning",
+      scope: { kind: "servers", server_ids: ["not-a-uuid"] },
+    });
+    expect(noServers.status).toBe(422);
+    expect(Object.keys(noServers.error?.fields ?? {}).join(",")).toMatch(/scope/);
+  });
+
+  test("a rule fires on a sustained breach and resolves when it ends", async ({ page }) => {
+    test.setTimeout(TICKS * 2 + 60_000);
+    const forge = await server("forge-01");
+    const name = "e2e cpu floor";
+
+    /* Create it in the panel: CPU at or above 0% — always true — on one host. */
+    await page.goto("/monitoring?tab=rules");
+    await page.getByRole("button", { name: "New rule" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "New alert rule" });
+    await dialog.getByRole("textbox", { name: /^Name/ }).fill(name);
+    await dialog.getByLabel("Metric").selectOption("cpu");
+    await dialog.getByLabel("Comparator").selectOption("gte");
+    await dialog.getByLabel("Threshold").fill("0");
+    await dialog.getByLabel("Duration").fill("0");
+    await dialog.getByLabel("Severity").selectOption("critical");
+    await dialog.getByLabel("Apply to the whole fleet").uncheck();
+    await dialog.getByRole("combobox", { name: /^Servers/ }).click();
+    await page.getByRole("listbox").getByRole("option", { name: /forge-01/ }).click();
+    await page.keyboard.press("Escape");
+    await dialog.getByRole("button", { name: "Create rule" }).click();
+    await expect(dialog).toBeHidden();
+    const ruleRow = page.getByRole("table", { name: "Alert rules" }).locator("tbody tr").filter({ hasText: name });
+    await expect(ruleRow).toContainText("1 server");
+    await expect(ruleRow).not.toContainText("1 servers");
+
+    await expect
+      .poll(async () => (await alertFor(name))?.state ?? "none", { timeout: TICKS, intervals: [5000] })
+      .toBe("firing");
+    const fired = (await alertFor(name))!;
+    expect(fired.server_name).toBe("forge-01");
+
+    await page.goto("/monitoring?tab=alerts");
+    const alertRow = page.getByRole("table", { name: "Alerts" }).locator("tbody tr").filter({ hasText: name });
+    await expect(alertRow).toContainText(/firing/i);
+    await rowMenu(page, alertRow, "Acknowledge");
+    await expect
+      .poll(async () => (await alertFor(name))?.acknowledged_by ?? null)
+      .not.toBeNull();
+
+    /* Move the line out of reach: the next tick resolves it. */
+    await page.goto("/monitoring?tab=rules");
+    await rowMenu(page, ruleRow, "Edit");
+    const edit = page.getByRole("dialog", { name: `Edit ${name}` });
+    await edit.getByLabel("Threshold").fill("1000");
+    await edit.getByRole("button", { name: "Save changes" }).click();
+    await expect(edit).toBeHidden();
+
+    await expect
+      .poll(async () => (await alertFor(name))?.state, { timeout: TICKS, intervals: [5000] })
+      .toBe("resolved");
+
+    const actions = (await auditRows("alert_rule.", 5)).map((r) => r.action);
+    expect(actions.slice(0, 2)).toEqual(["alert_rule.updated", "alert_rule.created"]);
+    void forge;
+  });
+
+  test("a rule's channels are chosen in the form, and only those channels are told", async ({ page }) => {
+    test.setTimeout(TICKS + 120_000);
+    const hook = await endpoint();
+    const name = "e2e routed cpu";
+    const chosen: ChannelRow = {
+      id: randomUUID(),
+      name: "e2e alerts chosen",
+      kind: "webhook",
+      target: `${hook.url}/chosen`,
+      events: ["alert_firing"],
+      enabled: true,
+    };
+    const other: ChannelRow = { ...chosen, id: randomUUID(), name: "e2e alerts other", target: `${hook.url}/other` };
+    const jobsOnly: ChannelRow = {
+      ...chosen,
+      id: randomUUID(),
+      name: "e2e jobs only",
+      target: `${hook.url}/jobs`,
+      events: ["job_failed"],
+    };
+    await writeChannels([chosen, other, jobsOnly]);
+    const api = await owner();
+
+    try {
+      await page.goto("/monitoring?tab=rules");
+      await page.getByRole("button", { name: "New rule" }).first().click();
+      const dialog = page.getByRole("dialog", { name: "New alert rule" });
+      await dialog.getByRole("textbox", { name: /^Name/ }).fill(name);
+      await dialog.getByLabel("Metric").selectOption("cpu");
+      await dialog.getByLabel("Comparator").selectOption("gte");
+      await dialog.getByLabel("Threshold").fill("0");
+      await dialog.getByLabel("Duration").fill("0");
+      await dialog.getByLabel("Apply to the whole fleet").uncheck();
+      await dialog.getByRole("combobox", { name: /^Servers/ }).click();
+      await page.getByRole("listbox").getByRole("option", { name: /forge-01/ }).click();
+      await page.keyboard.press("Escape");
+
+      /* The channel list comes from the API; one that takes no alerts is offered but cannot be picked. */
+      await dialog.getByRole("combobox", { name: /^Notify/ }).click();
+      const options = page.getByRole("listbox");
+      await expect(options.getByRole("option", { name: /e2e jobs only/ })).toHaveAttribute("aria-disabled", "true");
+      await expect(options.getByRole("option", { name: /e2e jobs only/ })).toContainText("not subscribed to alerts");
+      await options.getByRole("option", { name: /e2e alerts chosen/ }).click();
+      await page.keyboard.press("Escape");
+      await expect(dialog).toContainText("to e2e alerts chosen.");
+      await dialog.getByRole("button", { name: "Create rule" }).click();
+      await expect(dialog).toBeHidden();
+
+      const row = page.getByRole("table", { name: "Alert rules" }).locator("tbody tr").filter({ hasText: name });
+      await expect(row).toContainText("e2e alerts chosen");
+      await expect(row).not.toContainText("e2e alerts other");
+      await expect(row).toContainText("1 server");
+      await expect(row).not.toContainText("1 servers");
+      const [rule] = (await api.get<{ id: string; name: string; channels: string[] }[]>(
+        `/monitoring/alert-rules?q=${encodeURIComponent(name)}`,
+      )).filter((r) => r.name === name);
+      expect(rule?.channels).toEqual([chosen.id]);
+
+      /* It fires, and the delivery goes to the chosen channel and nowhere else. */
+      const deliveredTo = (path: string) =>
+        hook.received.filter((r) => r.path === path && r.body.includes(name)).length;
+      await expect.poll(() => deliveredTo("/chosen"), { timeout: TICKS, intervals: [5000] }).toBeGreaterThan(0);
+      expect(deliveredTo("/other")).toBe(0);
+      expect(deliveredTo("/jobs")).toBe(0);
+
+      /* Reopened, the form shows the saved choice; an id that names no channel is refused by field. */
+      await rowMenu(page, row, "Edit");
+      const edit = page.getByRole("dialog", { name: `Edit ${name}` });
+      await expect(edit).toContainText("to e2e alerts chosen.");
+      await page.keyboard.press("Escape");
+      const unknown = await api.call("PATCH", `/monitoring/alert-rules/${rule!.id}`, { channels: [randomUUID()] });
+      expect(unknown.status).toBe(422);
+      expect(unknown.error?.fields?.["channels"]).toMatch(/^unknown channel: /);
+
+      /* Names and kinds only: where a channel points stays in Settings. */
+      const listed = await api.get<Record<string, unknown>[]>("/monitoring/alert-channels");
+      const entry = listed.find((c) => c["id"] === chosen.id);
+      expect(entry).toEqual({ id: chosen.id, name: chosen.name, kind: "webhook", enabled: true, receives_alerts: true });
+      expect(JSON.stringify(listed)).not.toContain(hook.url);
+
+      await api.ok("DELETE", `/monitoring/alert-rules/${rule!.id}`);
+    } finally {
+      await writeChannels([], [chosen.name, other.name, jobsOnly.name]);
+      await hook.close();
+    }
+  });
+});

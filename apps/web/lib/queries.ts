@@ -529,6 +529,12 @@ export interface JobMutationOptions<TVars> {
   describe?: (variables: TVars, jobs: Job[]) => string;
   onQueued?: (jobs: Job[], variables: TVars) => void;
   onFailed?: (error: ApiError, variables: TVars) => void;
+  /**
+   * False when the caller shows the refusal itself (a FormDialog renders
+   * it above the fields). Error toasts are sticky and sit over the
+   * dialog's submit button, so a second copy there blocks the retry.
+   */
+  toastErrors?: boolean;
 }
 
 /**
@@ -542,7 +548,14 @@ export function useMutationWithJob<TVars = void>(
 ): UseMutationResult<Job[], ApiError, TVars> {
   const drawer = useJobDrawer();
   const { toast } = useToast();
-  const { mutationFn, invalidates = [], describe, onQueued, onFailed } = options;
+  const {
+    mutationFn,
+    invalidates = [],
+    describe,
+    onQueued,
+    onFailed,
+    toastErrors = true,
+  } = options;
 
   return useMutation<Job[], ApiError, TVars>({
     mutationFn: async (variables) => jobsOf(await mutationFn(variables)),
@@ -562,11 +575,13 @@ export function useMutationWithJob<TVars = void>(
       onQueued?.(jobs, variables);
     },
     onError: (error, variables) => {
-      toast({
-        variant: "error",
-        title: error.message,
-        description: error.remediation?.summary,
-      });
+      if (toastErrors) {
+        toast({
+          variant: "error",
+          title: error.message,
+          description: error.remediation?.summary,
+        });
+      }
       onFailed?.(error, variables);
     },
   });
@@ -585,6 +600,8 @@ export interface ResourceMutationOptions<TVars, TResult> {
   successMessage?: (result: TResult, variables: TVars) => string;
   onDone?: (result: TResult, variables: TVars) => void;
   onFailed?: (error: ApiError, variables: TVars) => void;
+  /** As on JobMutationOptions: false when the caller renders the error in place. */
+  toastErrors?: boolean;
 }
 
 /**
@@ -598,7 +615,14 @@ export function useResourceMutation<TVars = void, TResult = unknown>(
 ): UseMutationResult<TResult, ApiError, TVars> {
   const client = useQueryClient();
   const { toast } = useToast();
-  const { mutationFn, invalidates = [], successMessage, onDone, onFailed } = options;
+  const {
+    mutationFn,
+    invalidates = [],
+    successMessage,
+    onDone,
+    onFailed,
+    toastErrors = true,
+  } = options;
 
   return useMutation<TResult, ApiError, TVars>({
     mutationFn: async (variables) => {
@@ -615,11 +639,13 @@ export function useResourceMutation<TVars = void, TResult = unknown>(
       onDone?.(result, variables);
     },
     onError: (error, variables) => {
-      toast({
-        variant: "error",
-        title: error.message,
-        description: error.remediation?.summary,
-      });
+      if (toastErrors) {
+        toast({
+          variant: "error",
+          title: error.message,
+          description: error.remediation?.summary,
+        });
+      }
       onFailed?.(error, variables);
     },
   });
@@ -660,11 +686,12 @@ const JOB_FAMILIES: readonly [string, readonly ResourceFamily[]][] = [
   ["cert.", ["certificates", "domains"]],
   ["dns.", ["dns", "domains"]],
   ["deployment.", ["deployments", "sites"]],
-  ["mail.mailbox.", ["mailboxes"]],
-  ["mail.alias.", ["mail-aliases"]],
-  ["mail.forwarder.", ["mail-forwarders"]],
-  ["mail.auth.", ["mail-auth"]],
-  ["mail.domain.", ["mail-domains", "mailboxes"]],
+  // A sync re-reads everything the host knows, so every mail list is stale after it.
+  ["mail.server.", ["mail-servers", "mail-domains", "mailboxes", "mail-aliases"]],
+  ["mail.certificate.", ["mail-servers"]],
+  ["mail.domain.", ["mail-domains", "mail-servers", "mailboxes"]],
+  ["mail.mailbox.", ["mailboxes", "mail-domains", "mail-servers"]],
+  ["mail.alias.", ["mail-aliases", "mailboxes", "mail-domains"]],
   ["db.database.", ["databases", "db-instances"]],
   ["db.user.", ["db-users"]],
   ["db.grant.", ["db-users", "databases"]],

@@ -35,6 +35,7 @@ import {
   scopeFilter,
   searchTerm,
   sortColumn,
+  type ServerRow,
 } from "./_shared.js";
 import { deploymentSelection, deploymentToApi } from "./deployments.js";
 
@@ -331,6 +332,8 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
         ...(row!.runtimeVersion ? { runtime_version: row!.runtimeVersion } : {}),
         ...(row!.upstream ? { upstream: row!.upstream } : {}),
         force_https: row!.forceHttps,
+        // An edit must not quietly bring a suspended site back online.
+        ...(before.status === "suspended" ? { enabled: false } : {}),
       },
     });
 
@@ -403,6 +406,48 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
     return accepted(reply, job);
   });
 
+  /* ------------------------- suspend / resume ----------------------- */
+
+  /*
+   * `suspended` used to exist only as a stored status and a list filter:
+   * nothing set it and site.update never sent `enabled`, so a site could
+   * not actually be taken offline. Suspending disables the vhost on the
+   * host (a 503 where the layout has no enable step) and keeps the row,
+   * its domains and its certificate, so it stays listed and resumes as it
+   * was. The row moves only once the host has done it (siteToggle).
+   */
+  app.post("/sites/:id/suspend", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const site = await loadSiteRow(req, id, "websites.sites:write");
+    const server = await loadServer(req, site.serverId, "websites.sites:write");
+    if (site.status === "suspended") {
+      throw conflict(`${site.name} is already suspended.`, {
+        summary: "Its vhost is disabled. Resume it to serve the site again.",
+        actions: [{ label: "Resume", action: "sites.resume" }],
+      });
+    }
+    if (site.status === "provisioning") {
+      throw conflict(`${site.name} is still being provisioned.`, {
+        summary: "Wait for its vhost to be written, then suspend it.",
+        actions: [{ label: "Open the site", href: `/websites/sites/${id}` }],
+      });
+    }
+    return accepted(reply, await toggleSite(req, site, server, "site.suspend"));
+  });
+
+  app.post("/sites/:id/resume", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const site = await loadSiteRow(req, id, "websites.sites:write");
+    const server = await loadServer(req, site.serverId, "websites.sites:write");
+    if (site.status !== "suspended" && site.status !== "error") {
+      throw conflict(`${site.name} is not suspended.`, {
+        summary: "It is already serving. Suspend it first if you meant to take it offline.",
+        actions: [{ label: "Open the site", href: `/websites/sites/${id}` }],
+      });
+    }
+    return accepted(reply, await toggleSite(req, site, server, "site.resume"));
+  });
+
   /* ----------------------------- reload ----------------------------- */
 
   app.post("/sites/:id/reload", async (req, reply) => {
@@ -423,7 +468,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       );
     } catch (err) {
       if (err instanceof AgentRpcError) throw fromAgentError(server.name, err.agentError);
-      if (err instanceof AgentOfflineError) throw agentOffline(server.name, server.lastSeenAt);
+      if (err instanceof AgentOfflineError) throw agentOffline(server);
       throw err;
     }
 
@@ -565,6 +610,40 @@ export function siteToApi(row: SiteApiRow): Site {
 }
 
 /* ---------------------------- internals ---------------------------- */
+
+async function toggleSite(
+  req: FastifyRequest,
+  site: typeof sites.$inferSelect,
+  server: ServerRow,
+  type: "site.suspend" | "site.resume",
+) {
+  const job = await enqueueServerJob(req, {
+    type,
+    server,
+    targetType: "site",
+    targetId: site.id,
+    targetLabel: site.name,
+    params: { site_id: site.id, name: site.name },
+  });
+  const verb = type === "site.suspend" ? "suspended" : "resumed";
+  await req.ctx.audit.record({
+    actor: helpers(req).actor(),
+    action: `site.${verb}`,
+    targetType: "site",
+    targetId: site.id,
+    targetLabel: site.name,
+    serverId: server.id,
+    jobId: job.id,
+    before: { status: site.status },
+  });
+  req.ctx.events.publish(
+    "servers",
+    `site.${type === "site.suspend" ? "suspend" : "resume"}_requested`,
+    { site_id: site.id, server_id: server.id, job_id: job.id },
+    server.id,
+  );
+  return job;
+}
 
 function siteConfig(row: typeof sites.$inferSelect): SiteConfig {
   return (row.config ?? {}) as SiteConfig;

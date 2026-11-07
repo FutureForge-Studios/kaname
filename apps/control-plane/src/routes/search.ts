@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { sql, type SQL } from "@kaname/db";
 import {
+  can,
   searchQuery,
+  type EffectiveGrants,
   type Permission,
   type SearchAction,
   type SearchResponse,
@@ -105,7 +107,8 @@ const SOURCES: readonly SourceSpec[] = [
     serverId: "s.id",
     serverName: "s.name",
     icon: "Link2",
-    context: "d.status",
+    // Whether the domain receives mail, so the palette offers the DNS check only where it applies.
+    context: "case when d.has_mail then 'mail' else 'none' end",
     search: ["d.name"],
     rankOn: "d.name",
   },
@@ -117,7 +120,7 @@ const SOURCES: readonly SourceSpec[] = [
     id: "mb.id",
     title: "mb.address",
     subtitle: "mb.status || coalesce(' · ' || mb.display_name, '')",
-    href: "'/email/mailboxes/' || mb.id::text",
+    href: "'/email/mailboxes?q=' || mb.address",
     serverId: "s.id",
     serverName: "s.name",
     icon: "Mail",
@@ -309,7 +312,10 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
         : [{ kind, label: GROUP_LABELS[kind], results: results.map(toResult) }];
     });
 
-    const response: SearchResponse = { groups, actions: buildActions(rows) };
+    const response: SearchResponse = {
+      groups,
+      actions: buildActions(rows, helpers(req).requirePrincipal().grants),
+    };
     return item(reply, response);
   });
 }
@@ -368,18 +374,26 @@ function scopeClause(column: string, scope: "global" | readonly string[]): SQL {
  * out what this caller cannot run; the endpoint behind each one checks
  * again, because a hidden button is not a security control.
  */
-function buildActions(rows: SearchRow[]): SearchAction[] {
+function buildActions(rows: SearchRow[], grants: EffectiveGrants): SearchAction[] {
   const actions: SearchAction[] = [];
   const seen = new Set<string>();
+  let current: SearchRow | null = null;
 
   const push = (action: SearchAction): void => {
     if (seen.has(action.id) || actions.length >= MAX_ACTIONS) return;
+    // The palette can only check a permission fleet-wide (an action
+    // carries no server id), so an operator scoped to one host was
+    // offered "Open terminal" and "Restart" on every host the search
+    // found. Checking here, against the row's own server, is the only
+    // place that knows which host each action is about.
+    if (!can(grants, action.permission, current?.server_id ?? null)) return;
     seen.add(action.id);
     actions.push(action);
   };
 
   for (const row of rows) {
     if (actions.length >= MAX_ACTIONS) break;
+    current = row;
 
     switch (row.kind) {
       case "server": {
@@ -394,7 +408,9 @@ function buildActions(rows: SearchRow[]): SearchAction[] {
             hint: "Reloads the web server as a tracked job",
             permission: "infra.services:exec",
             action: "services.restart",
-            href: `/infrastructure/services?server_id=${row.id}&unit=${webServer}`,
+            // `q` is the list's search parameter; `unit` was read by
+            // nothing, so the action landed on every unit on the host.
+            href: `/infrastructure/services?server_id=${row.id}&q=${webServer}`,
           });
         }
         push({
@@ -435,14 +451,16 @@ function buildActions(rows: SearchRow[]): SearchAction[] {
           action: "certificates.issue",
           href: `/websites/ssl?domain_id=${row.id}`,
         });
-        push({
-          id: `mail.auth.check:${row.id}`,
-          label: `Check mail DNS for ${row.title}`,
-          hint: "MX, SPF, DKIM, DMARC, PTR and proxy exposure",
-          permission: "email.auth:exec",
-          action: "mail.auth.check",
-          href: `/email/authentication?domain_id=${row.id}`,
-        });
+        if (row.context === "mail") {
+          push({
+            id: `mail.domain.dns_check:${row.id}`,
+            label: `Check mail DNS for ${row.title}`,
+            hint: "MX, SPF, DKIM, DMARC, MTA-STS and autoconfig, verified on public resolvers",
+            permission: "email.servers:exec",
+            action: "mail.domain.dns_check",
+            href: `/email/domains?domain_id=${row.id}`,
+          });
+        }
         break;
 
       case "container":

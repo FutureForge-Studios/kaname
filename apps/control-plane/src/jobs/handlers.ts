@@ -1,32 +1,32 @@
-import { and, eq, sql } from "@kaname/db";
+import { and, eq, notInArray, sql } from "@kaname/db";
 import {
   backupRuns,
+  backupSchedules,
   certificates,
   containers,
   dbDatabases,
   dbUsers,
-  deployments,
   firewallState,
-  ftpAccounts,
-  ipBlocks,
-  mailDomains,
-  mailboxes,
   restorePoints,
   servers,
   services,
   sites,
   sshConfigs,
+  storageSamples,
   updateRuns,
 } from "@kaname/db/schema";
 import type {
   AgentMethod,
+  CertStatus,
   JobType,
-  MailAuthCheck,
   MethodParams,
   MethodResult,
 } from "@kaname/contract";
 import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
-import { MailAuthChecker } from "../services/mail-auth.js";
+import { ftpJobHandlers } from "./ftp.js";
+import { mailJobHandlers } from "./mail.js";
+import { websiteJobHandlers } from "./websites.js";
+import { banHandler, unbanHandler } from "./threats.js";
 import type { JobContext, JobHandler, JobWorker } from "./worker.js";
 
 /* ------------------------------------------------------------------ *
@@ -45,6 +45,113 @@ function requireServer(ctx: JobContext): string {
 
 function params<T>(ctx: JobContext): T {
   return ctx.job.params as T;
+}
+
+/**
+ * Runs the vhost write for a site job. A site row is written as
+ * "provisioning" (create) before the job is queued; if the host refuses
+ * the vhost, nothing else ever moves it, so it sat in "provisioning" for
+ * ever with the reason only in the job log. The row is marked "error"
+ * with the reason instead. An offline agent is not a failure — the job
+ * waits for it (KD-008) — so that one is left alone.
+ */
+async function siteWrite<T>(ctx: JobContext, siteId: string, work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (err) {
+    if (!(err instanceof AgentOfflineError)) {
+      await ctx.db
+        .update(sites)
+        .set({
+          status: "error",
+          lastError: err instanceof Error ? err.message : String(err),
+          updatedAt: new Date(),
+        })
+        .where(eq(sites.id, siteId));
+    }
+    throw err;
+  }
+}
+
+/** Where a top-level path's bytes are reported in the storage breakdown. */
+const STORAGE_CATEGORIES: readonly { prefix: string; label: string; kind: string }[] = [
+  { prefix: "/var/www", label: "Websites", kind: "sites" },
+  { prefix: "/var/lib/postgresql", label: "Databases", kind: "databases" },
+  { prefix: "/var/lib/mysql", label: "Databases", kind: "databases" },
+  { prefix: "/var/vmail", label: "Mail", kind: "mail" },
+  { prefix: "/var/mail", label: "Mail", kind: "mail" },
+  { prefix: "/opt/stalwart", label: "Mail", kind: "mail" },
+  { prefix: "/var/lib/docker", label: "Containers", kind: "containers" },
+  { prefix: "/var/backups", label: "Backups", kind: "backups" },
+  { prefix: "/srv/backups", label: "Backups", kind: "backups" },
+  { prefix: "/var/log", label: "Logs", kind: "logs" },
+  { prefix: "/home", label: "Home directories", kind: "home" },
+];
+
+/**
+ * Turns one fs.usage walk into the cached breakdown GET /storage serves.
+ * Capacity comes from the host's mounts (system.metrics) because a walk
+ * of a subtree says nothing about the device it sits on; if the agent
+ * cannot report them the walk's own total stands in, rather than failing
+ * a sample that did succeed.
+ */
+async function recordStorageSample(
+  ctx: JobContext,
+  serverId: string,
+  usage: MethodResult<"fs.usage">,
+  durationMs: number,
+): Promise<void> {
+  const disks = await ctx.hub
+    .call(serverId, "system.metrics", {}, { signal: ctx.signal })
+    .then((sample) => sample.disks)
+    .catch(() => []);
+
+  const total = disks.length > 0 ? disks.reduce((sum, d) => sum + d.total, 0) : usage.total;
+  const used = disks.length > 0 ? disks.reduce((sum, d) => sum + d.used, 0) : usage.total;
+  const sampledAt = new Date();
+
+  const categories = new Map<
+    string,
+    { label: string; path: string; bytes: number; kind: string }
+  >();
+  for (const category of STORAGE_CATEGORIES) {
+    const entry = usage.entries.find((e) => e.path === category.prefix);
+    if (!entry) continue;
+    const existing = categories.get(category.label);
+    if (existing) existing.bytes += entry.bytes;
+    else
+      categories.set(category.label, {
+        label: category.label,
+        path: category.prefix,
+        bytes: entry.bytes,
+        kind: category.kind,
+      });
+  }
+
+  const largest = usage.entries
+    .filter((e) => e.kind !== "category")
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, 100)
+    .map((e) => ({
+      path: e.path,
+      bytes: e.bytes,
+      kind: "directory",
+      modified_at: sampledAt.toISOString(),
+    }));
+
+  await ctx.db.insert(storageSamples).values({
+    serverId,
+    sampledAt,
+    total,
+    used,
+    available: Math.max(0, total - used),
+    mounts: disks,
+    categories: [...categories.values()],
+    largest,
+    inodesTotal: disks.reduce((sum, d) => sum + (d.inodes_total ?? 0), 0) || null,
+    inodesUsed: disks.reduce((sum, d) => sum + (d.inodes_used ?? 0), 0) || null,
+    durationMs,
+  });
 }
 
 /** The agent answered with this error code, as opposed to being unreachable. */
@@ -338,54 +445,36 @@ export function registerJobHandlers(worker: JobWorker): void {
     "fs.extract": streaming("fs.extract"),
     "fs.usage": async (ctx) => {
       const serverId = requireServer(ctx);
+      const started = Date.now();
       const result = await ctx.hub.call(serverId, "fs.usage", params(ctx), {
         timeoutMs: ctx.job.timeoutMs,
         signal: ctx.signal,
       });
+      // GET /storage reads only storage_samples, and nothing used to
+      // write one: "Take a sample" succeeded and the page kept showing
+      // the old breakdown for ever. The walk is persisted here, beside
+      // the mounts the host reports right now.
+      await recordStorageSample(ctx, serverId, result, Date.now() - started);
       ctx.events.publish("servers", "storage.sampled", { server_id: serverId }, serverId);
       return result;
     },
 
-    /* ftp */
-    "ftp.create": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ ftp_account_id: string; username: string; home_dir: string }>(ctx);
-      await ctx.hub.call(
-        serverId,
-        "fs.mkdir",
-        { path: p.home_dir, parents: true },
-        { signal: ctx.signal },
-      );
-      await ctx.hub.call(
-        serverId,
-        "fs.chown",
-        { paths: [p.home_dir], owner: p.username, recursive: true },
-        { signal: ctx.signal },
-      );
-      await ctx.db
-        .update(ftpAccounts)
-        .set({ status: "active", lastSyncedAt: new Date(), updatedAt: new Date() })
-        .where(eq(ftpAccounts.id, p.ftp_account_id));
-      return { ok: true };
-    },
-    "ftp.update": async (ctx) => ({ ok: true, params: params<Record<string, unknown>>(ctx) }),
-    "ftp.delete": async (ctx) => {
-      const p = params<{ ftp_account_id: string }>(ctx);
-      await ctx.db.delete(ftpAccounts).where(eq(ftpAccounts.id, p.ftp_account_id));
-      return { ok: true };
-    },
-    "ftp.reset_password": async () => ({ ok: true }),
+    /* ftp: real POSIX users and daemon config on the host (jobs/ftp.ts) */
+    ...ftpJobHandlers(),
 
     /* sites */
     "site.create": async (ctx) => {
       const serverId = requireServer(ctx);
       const p = params<{ site_id: string } & MethodParams<"site.create">>(ctx);
       const { site_id, ...rest } = p;
-      const result = await ctx.hub.call(serverId, "site.create", rest, {
-        timeoutMs: ctx.job.timeoutMs,
-        signal: ctx.signal,
+      const result = await siteWrite(ctx, site_id, async () => {
+        const written = await ctx.hub.call(serverId, "site.create", rest, {
+          timeoutMs: ctx.job.timeoutMs,
+          signal: ctx.signal,
+        });
+        await ctx.hub.call(serverId, "site.reload", {}, { signal: ctx.signal });
+        return written;
       });
-      await ctx.hub.call(serverId, "site.reload", {}, { signal: ctx.signal });
       await ctx.db
         .update(sites)
         .set({
@@ -401,14 +490,24 @@ export function registerJobHandlers(worker: JobWorker): void {
       const serverId = requireServer(ctx);
       const p = params<{ site_id: string } & MethodParams<"site.update">>(ctx);
       const { site_id, ...rest } = p;
-      const result = await ctx.hub.call(serverId, "site.update", rest, {
-        timeoutMs: ctx.job.timeoutMs,
-        signal: ctx.signal,
+      const result = await siteWrite(ctx, site_id, async () => {
+        const written = await ctx.hub.call(serverId, "site.update", rest, {
+          timeoutMs: ctx.job.timeoutMs,
+          signal: ctx.signal,
+        });
+        await ctx.hub.call(serverId, "site.reload", {}, { signal: ctx.signal });
+        return written;
       });
-      await ctx.hub.call(serverId, "site.reload", {}, { signal: ctx.signal });
       await ctx.db
         .update(sites)
-        .set({ configPath: result.config_path, updatedAt: new Date() })
+        .set({
+          // Editing a suspended site keeps it suspended: the route sends
+          // `enabled: false` for one, and the row must say what the host does.
+          status: rest.enabled === false ? "suspended" : "active",
+          configPath: result.config_path,
+          lastError: null,
+          updatedAt: new Date(),
+        })
         .where(eq(sites.id, site_id));
       return result;
     },
@@ -483,18 +582,45 @@ export function registerJobHandlers(worker: JobWorker): void {
     },
     "cert.renew": async (ctx) => {
       const serverId = requireServer(ctx);
-      const p = params<{ certificate_id: string; subject: string; force: boolean }>(ctx);
-      const handle = ctx.hub.stream(
-        serverId,
-        "cert.renew",
-        { subject: p.subject, force: p.force },
-        (d) => void ctx.log_("info", d.trim()),
-        {
-          timeoutMs: ctx.job.timeoutMs,
-          signal: ctx.signal,
-        },
-      );
-      const result = await handle.done;
+      const p = params<{
+        certificate_id: string;
+        subject: string;
+        force: boolean;
+        previous_status?: CertStatus;
+      }>(ctx);
+      let result: MethodResult<"cert.renew">;
+      try {
+        const handle = ctx.hub.stream(
+          serverId,
+          "cert.renew",
+          { subject: p.subject, force: p.force },
+          (d) => void ctx.log_("info", d.trim()),
+          {
+            timeoutMs: ctx.job.timeoutMs,
+            signal: ctx.signal,
+          },
+        );
+        result = await handle.done;
+      } catch (err) {
+        // The route marks the row "pending" when it queues the renewal.
+        // A renewal that failed leaves the old certificate on disk and
+        // still serving, so the row goes back to what it was and keeps
+        // the reason — otherwise it reads "pending" forever and the
+        // failure never reaches the SSL page or the Command Center. An
+        // offline agent is a wait, not a failure (KD-008): the job is
+        // re-queued and the row stays pending until it runs.
+        if (!(err instanceof AgentOfflineError)) {
+          await ctx.db
+            .update(certificates)
+            .set({
+              status: p.previous_status ?? "active",
+              lastError: err instanceof Error ? err.message : String(err),
+              updatedAt: new Date(),
+            })
+            .where(eq(certificates.id, p.certificate_id));
+        }
+        throw err;
+      }
       await ctx.db
         .update(certificates)
         .set({
@@ -529,182 +655,11 @@ export function registerJobHandlers(worker: JobWorker): void {
       return result;
     },
 
-    /* dns */
-    "dns.sync": async (ctx) => params(ctx),
-    "dns.apply": async (ctx) => params(ctx),
+    /* suspend/resume, cert.install, dns and deployments: see ./websites.ts */
+    ...websiteJobHandlers(),
 
-    /* deployments */
-    "deployment.run": async (ctx) => {
-      const p = params<{ deployment_id: string }>(ctx);
-      await ctx.db
-        .update(deployments)
-        .set({ status: "building", startedAt: new Date(), updatedAt: new Date() })
-        .where(eq(deployments.id, p.deployment_id));
-      await ctx.log_("info", "deployment started");
-      await ctx.progress(10);
-      // The actual build/copy steps run as fs.* and site.* RPCs driven by
-      // the deployment service; this handler owns lifecycle and status.
-      await ctx.db
-        .update(deployments)
-        .set({ status: "succeeded", finishedAt: new Date(), updatedAt: new Date() })
-        .where(eq(deployments.id, p.deployment_id));
-      ctx.events.publish(
-        "deployments",
-        "deployment.finished",
-        { deployment_id: p.deployment_id },
-        ctx.job.serverId,
-      );
-      return { deployment_id: p.deployment_id };
-    },
-    "deployment.rollback": async (ctx) => params(ctx),
-
-    /* mail */
-    "mail.mailbox.create": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ mailbox_id: string } & MethodParams<"mail.mailbox.create">>(ctx);
-      const { mailbox_id, ...rest } = p;
-      try {
-        await ctx.hub.call(serverId, "mail.mailbox.create", rest, {
-          timeoutMs: ctx.job.timeoutMs,
-          signal: ctx.signal,
-        });
-      } catch (err) {
-        // The row was inserted as "provisioning" before this ran. Left
-        // there, it blocks the address for ever: a retry is refused as a
-        // duplicate and a delete has nothing on the host to remove.
-        if (agentSaid(err, "conflict")) {
-          await ctx.log_("warn", `${rest.address} already existed on the host; adopted it`);
-        } else {
-          if (err instanceof AgentOfflineError) throw err;
-          await ctx.db
-            .update(mailboxes)
-            .set({ status: "error", updatedAt: new Date() })
-            .where(eq(mailboxes.id, mailbox_id));
-          throw err;
-        }
-      }
-      await ctx.db
-        .update(mailboxes)
-        .set({ status: "active", lastSyncedAt: new Date(), updatedAt: new Date() })
-        .where(eq(mailboxes.id, mailbox_id));
-      return { ok: true };
-    },
-    "mail.mailbox.update": passthrough("mail.mailbox.update"),
-    "mail.mailbox.delete": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ mailbox_id: string; address: string; delete_maildir: boolean }>(ctx);
-      try {
-        await ctx.hub.call(
-          serverId,
-          "mail.mailbox.delete",
-          { address: p.address, delete_maildir: p.delete_maildir },
-          { signal: ctx.signal },
-        );
-      } catch (err) {
-        // A mailbox whose create never landed has no account to remove;
-        // the record is still the operator's to delete.
-        if (!agentSaid(err, "not_found")) throw err;
-        await ctx.log_("warn", `${p.address} is not present on the host; removed the record`);
-      }
-      await ctx.db.delete(mailboxes).where(eq(mailboxes.id, p.mailbox_id));
-      return { ok: true };
-    },
-    "mail.mailbox.reset_password": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<MethodParams<"mail.mailbox.password">>(ctx);
-      const revoke = p.revoke_sessions === true;
-      await ctx.hub.call(
-        serverId,
-        "mail.mailbox.password",
-        { address: p.address, password: p.password, revoke_sessions: revoke },
-        { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
-      );
-      // The log is where an operator resetting a compromised mailbox
-      // reads whether the attacker's open session was actually closed.
-      await ctx.log_(
-        "info",
-        revoke
-          ? `password set for ${p.address}; open IMAP and POP sessions revoked`
-          : `password set for ${p.address}; open sessions left open`,
-      );
-      return { ok: true, sessions_revoked: revoke };
-    },
-    "mail.alias.apply": passthrough("mail.alias.apply"),
-    "mail.forwarder.apply": passthrough("mail.forwarder.apply"),
-    "mail.auth.check": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ mail_domain_id: string; checks?: MailAuthCheck[]; resolver?: string }>(
-        ctx,
-      );
-      const checker = new MailAuthChecker({ db: ctx.db, hub: ctx.hub, log: ctx.log });
-      await ctx.log_("info", `checking ${p.mail_domain_id} via ${p.resolver ?? "the host"}`);
-      const report = await checker.run(p.mail_domain_id, {
-        checks: p.checks,
-        resolver: p.resolver,
-      });
-      for (const check of report.checks) {
-        const level = check.status === "fail" ? "error" : check.status === "warn" ? "warn" : "info";
-        await ctx.log_(level, `${check.check}: ${check.status} — ${check.detail}`);
-      }
-      ctx.events.publish(
-        "servers",
-        "mail.auth.checked",
-        { server_id: serverId, mail_domain_id: p.mail_domain_id, overall: report.overall },
-        serverId,
-      );
-      return { overall: report.overall, resolver_used: report.resolver_used };
-    },
-    "mail.domain.provision": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ mail_domain_id: string; domain: string }>(ctx);
-      // Nothing is written to the host yet (README, Status): what this
-      // job can honestly do is read the key the host already signs with
-      // and stop the row reading "provisioning" for ever.
-      let dkim: string | null = null;
-      try {
-        try {
-          const key = await ctx.hub.call(
-            serverId,
-            "mail.dkim.read",
-            { domain: p.domain },
-            { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
-          );
-          dkim = key.public_key || null;
-          await ctx.log_("info", `DKIM selector ${key.selector} read from the host`);
-        } catch (err) {
-          if (err instanceof AgentOfflineError) throw err;
-          await ctx.log_(
-            "warn",
-            `no DKIM key on the host yet: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-        // An operator who suspended the domain in the same edit keeps
-        // that; only an in-progress or failed row is settled here.
-        await ctx.db
-          .update(mailDomains)
-          .set({
-            status: sql`case when ${mailDomains.status} in ('provisioning', 'error') then 'active' else ${mailDomains.status} end`,
-            ...(dkim ? { dkimPublicKey: dkim } : {}),
-            updatedAt: new Date(),
-          })
-          .where(eq(mailDomains.id, p.mail_domain_id));
-      } catch (err) {
-        if (!(err instanceof AgentOfflineError)) {
-          await ctx.db
-            .update(mailDomains)
-            .set({ status: "error", updatedAt: new Date() })
-            .where(eq(mailDomains.id, p.mail_domain_id));
-        }
-        throw err;
-      }
-      ctx.events.publish(
-        "servers",
-        "mail_domain.provisioned",
-        { server_id: serverId, mail_domain_id: p.mail_domain_id, domain: p.domain },
-        serverId,
-      );
-      return { mail_domain_id: p.mail_domain_id, dkim_read: dkim !== null };
-    },
+    /* mail (Yunori Mail Server): see ./mail.ts */
+    ...mailJobHandlers(),
 
     /* databases */
     "db.database.create": async (ctx) => {
@@ -769,13 +724,35 @@ export function registerJobHandlers(worker: JobWorker): void {
       return result;
     },
     "db.grant.apply": passthrough("db.grant.apply"),
-    "db.dump": streaming("db.dump"),
+    "db.dump": async (ctx) => {
+      const result = await streaming("db.dump")(ctx);
+      // A dump is a backup of that database. Nothing ever wrote
+      // last_backup_at, so a database dumped a minute ago still read
+      // "never backed up". Only set once the agent says the dump is done.
+      if (ctx.job.targetType === "database" && ctx.job.targetId) {
+        await ctx.db
+          .update(dbDatabases)
+          .set({ lastBackupAt: new Date(), updatedAt: new Date() })
+          .where(eq(dbDatabases.id, ctx.job.targetId));
+        ctx.events.publish(
+          "servers",
+          "database.updated",
+          { database_id: ctx.job.targetId },
+          ctx.job.serverId,
+        );
+      }
+      return result;
+    },
     "db.restore": streaming("db.restore"),
 
     /* firewall & security */
     "fw.apply": async (ctx) => {
       const serverId = requireServer(ctx);
       const p = params<MethodParams<"fw.apply">>(ctx);
+      // The host arms its revert timer somewhere inside this call, so the
+      // window is dated from before it: the panel then never shows more
+      // time than the host will actually wait.
+      const calledAt = Date.now();
       const result = await ctx.hub.call(serverId, "fw.apply", p, {
         timeoutMs: ctx.job.timeoutMs,
         signal: ctx.signal,
@@ -791,7 +768,7 @@ export function registerJobHandlers(worker: JobWorker): void {
           lastAppliedAt: new Date(),
           pendingRollbackToken: result.rollback_token,
           pendingRollbackUntil: result.rollback_token
-            ? new Date(Date.now() + p.rollback_seconds * 1000)
+            ? new Date(calledAt + p.rollback_seconds * 1000)
             : null,
         })
         .onConflictDoUpdate({
@@ -803,7 +780,7 @@ export function registerJobHandlers(worker: JobWorker): void {
             lastAppliedAt: new Date(),
             pendingRollbackToken: result.rollback_token,
             pendingRollbackUntil: result.rollback_token
-              ? new Date(Date.now() + p.rollback_seconds * 1000)
+              ? new Date(calledAt + p.rollback_seconds * 1000)
               : null,
             updatedAt: new Date(),
           },
@@ -817,48 +794,43 @@ export function registerJobHandlers(worker: JobWorker): void {
       }
       return result;
     },
-    "fw.ban": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ target: string; duration_seconds: number; reason?: string }>(ctx);
-      const result = await ctx.hub.call(serverId, "fw.ban", p, { signal: ctx.signal });
-      await ctx.db
-        .insert(ipBlocks)
-        .values({
-          serverId,
-          cidr: p.target,
-          reason: p.reason ?? "",
-          source: "manual",
-          expiresAt: p.duration_seconds ? new Date(Date.now() + p.duration_seconds * 1000) : null,
-          createdBy: ctx.job.createdBy,
-        })
-        .onConflictDoNothing();
-      ctx.events.publish("threats", "ip.banned", { server_id: serverId, cidr: p.target }, serverId);
-      return result;
-    },
-    "fw.unban": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ target: string }>(ctx);
-      const result = await ctx.hub.call(serverId, "fw.unban", p, { signal: ctx.signal });
-      await ctx.db
-        .delete(ipBlocks)
-        .where(and(eq(ipBlocks.serverId, serverId), eq(ipBlocks.cidr, p.target)));
-      return result;
-    },
+    // The disposition of the threat rows a ban touches follows the job's
+    // outcome, so these two live with that bookkeeping in ./threats.ts.
+    "fw.ban": banHandler,
+    "fw.unban": unbanHandler,
     "ssh.keys.apply": passthrough("ssh.keys.apply"),
     "ssh.config.apply": async (ctx) => {
       const serverId = requireServer(ctx);
       const p = params<MethodParams<"ssh.config.apply">>(ctx);
+      // Dated from before the call, as for fw.apply.
+      const calledAt = Date.now();
       const result = await ctx.hub.call(serverId, "ssh.config.apply", p, {
         timeoutMs: ctx.job.timeoutMs,
         signal: ctx.signal,
       });
+      // The cache is what the panel shows as "applied state"; leaving it on
+      // the old values made a successful apply look like it did nothing.
       await ctx.db
         .update(sshConfigs)
         .set({
+          ...(p.port !== undefined ? { port: p.port } : {}),
+          ...(p.permit_root_login !== undefined ? { permitRootLogin: p.permit_root_login } : {}),
+          ...(p.password_authentication !== undefined
+            ? { passwordAuthentication: p.password_authentication }
+            : {}),
+          ...(p.pubkey_authentication !== undefined
+            ? { pubkeyAuthentication: p.pubkey_authentication }
+            : {}),
+          ...(p.max_auth_tries !== undefined ? { maxAuthTries: p.max_auth_tries } : {}),
+          // An empty list is "clear the directive" on the host now, so the
+          // cache follows it; only an omitted list leaves the value alone.
+          ...(p.allow_users !== undefined ? { allowUsers: p.allow_users } : {}),
+          ...(p.allow_groups !== undefined ? { allowGroups: p.allow_groups } : {}),
+          ...(p.x11_forwarding !== undefined ? { x11Forwarding: p.x11_forwarding } : {}),
           lastAppliedAt: new Date(),
           pendingRollbackToken: result.rollback_token,
           pendingRollbackUntil: result.rollback_token
-            ? new Date(Date.now() + (p.rollback_seconds ?? 60) * 1000)
+            ? new Date(calledAt + (p.rollback_seconds ?? 60) * 1000)
             : null,
           updatedAt: new Date(),
         })
@@ -876,6 +848,31 @@ export function registerJobHandlers(worker: JobWorker): void {
         .update(backupRuns)
         .set({ status: "running", startedAt: new Date() })
         .where(eq(backupRuns.id, run_id));
+
+      // The schedule's own last-run status is what the Schedules tab and
+      // its filter read. It was set to "queued" by the route and never
+      // touched again, so every manual run looked queued forever.
+      const [runRow] = await ctx.db
+        .select({ scheduleId: backupRuns.scheduleId })
+        .from(backupRuns)
+        .where(eq(backupRuns.id, run_id))
+        .limit(1);
+      const scheduleId = runRow?.scheduleId ?? null;
+      const [schedule] = scheduleId
+        ? await ctx.db
+            .select()
+            .from(backupSchedules)
+            .where(eq(backupSchedules.id, scheduleId))
+            .limit(1)
+        : [];
+      const settleSchedule = async (status: "queued" | "running" | "succeeded" | "failed") => {
+        if (!scheduleId) return;
+        await ctx.db
+          .update(backupSchedules)
+          .set({ lastRunStatus: status, updatedAt: new Date() })
+          .where(eq(backupSchedules.id, scheduleId));
+      };
+      await settleSchedule("running");
 
       let snapshot: MethodResult<"backup.run">;
       try {
@@ -900,6 +897,7 @@ export function registerJobHandlers(worker: JobWorker): void {
             .update(backupRuns)
             .set({ status: "queued", startedAt: null })
             .where(eq(backupRuns.id, run_id));
+          await settleSchedule("queued");
           throw err;
         }
         const message =
@@ -912,6 +910,7 @@ export function registerJobHandlers(worker: JobWorker): void {
           .update(backupRuns)
           .set({ status: "failed", error: message.slice(0, 2000), finishedAt: new Date() })
           .where(eq(backupRuns.id, run_id));
+        await settleSchedule("failed");
         ctx.events.publish(
           "backups",
           "backup.failed",
@@ -925,6 +924,11 @@ export function registerJobHandlers(worker: JobWorker): void {
         .insert(restorePoints)
         .values({
           runId: run_id,
+          // Without the schedule a restore point cannot be read back: the
+          // repository and its password live on the schedule, so restore
+          // and verify refused every snapshot a run had ever produced.
+          scheduleId,
+          scope: (schedule?.scope ?? []) as { kind: string; selectors: string[] }[],
           serverId,
           label: snapshot.id.slice(0, 8),
           snapshotId: snapshot.id,
@@ -945,16 +949,100 @@ export function registerJobHandlers(worker: JobWorker): void {
         })
         .where(eq(backupRuns.id, run_id));
 
+      await settleSchedule("succeeded");
+
+      // A database dumped into this snapshot is as backed up as one dumped
+      // by hand; without this a nightly-backed-up database read "never".
+      for (const database of rest.databases ?? []) {
+        await ctx.db
+          .update(dbDatabases)
+          .set({ lastBackupAt: new Date(), updatedAt: new Date() })
+          .where(
+            and(
+              eq(dbDatabases.serverId, serverId),
+              eq(dbDatabases.engine, database.engine as "mysql" | "mariadb" | "postgres"),
+              eq(dbDatabases.name, database.name),
+            ),
+          );
+      }
+
       ctx.events.publish(
         "backups",
         "backup.succeeded",
         { run_id, snapshot_id: snapshot.id },
         serverId,
       );
+
+      // Retention was stored on every schedule and shown on every form,
+      // but nothing ever applied it: the repository only grew. It is
+      // applied after each successful run, as `restic forget --prune`
+      // would be, and the restore points whose snapshots the repository
+      // no longer holds are removed so the panel never offers one.
+      if (schedule) {
+        const retention = schedule.retention as {
+          keep_last: number;
+          keep_daily: number;
+          keep_weekly: number;
+          keep_monthly: number;
+        };
+        const prune = ctx.hub.stream(
+          serverId,
+          "backup.prune",
+          {
+            repository: rest.repository,
+            password_ref: rest.password_ref,
+            keep_last: retention.keep_last,
+            keep_daily: retention.keep_daily,
+            keep_weekly: retention.keep_weekly,
+            keep_monthly: retention.keep_monthly,
+          },
+          (d) => void ctx.log_("info", d.trim()),
+          { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
+        );
+        const pruned = await prune.done;
+        const listed = await ctx.hub.call(
+          serverId,
+          "backup.list",
+          { repository: rest.repository, password_ref: rest.password_ref },
+          { signal: ctx.signal },
+        );
+        const kept = listed.snapshots.map((entry) => entry.id);
+        const gone = await ctx.db
+          .delete(restorePoints)
+          .where(
+            and(
+              eq(restorePoints.scheduleId, schedule.id),
+              eq(restorePoints.serverId, serverId),
+              kept.length > 0 ? notInArray(restorePoints.snapshotId, kept) : undefined,
+            ),
+          )
+          .returning({ id: restorePoints.id });
+        await ctx.log_(
+          "info",
+          `retention removed ${pruned.removed} snapshot(s) from the repository and ${gone.length} restore point(s) from Kaname`,
+        );
+      }
       return snapshot;
     },
     "backup.restore": streaming("backup.restore"),
-    "backup.verify": streaming("backup.verify"),
+    "backup.verify": async (ctx) => {
+      const result = (await streaming("backup.verify")(ctx)) as MethodResult<"backup.verify">;
+      // A verify that found damage answers ok: false rather than an RPC
+      // error. Filed as a success it read as a clean bill of health; and a
+      // clean one was never written down, so every point stayed unverified.
+      if (!result.ok) {
+        throw new Error(
+          `Snapshot verification found problems: ${result.errors.join("; ") || "unspecified"}`,
+        );
+      }
+      if (ctx.job.targetId) {
+        await ctx.db
+          .update(restorePoints)
+          .set({ verifiedAt: new Date(), updatedAt: new Date() })
+          .where(eq(restorePoints.id, ctx.job.targetId));
+      }
+      return result;
+    },
     "backup.prune": streaming("backup.prune"),
 
     /* lifecycle */

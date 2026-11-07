@@ -37,7 +37,7 @@ Browser ──HTTPS──▶ Control plane ──WSS + signed assertion──▶
 
 The control plane never executes anything on a managed host — it has no `child_process`, no SSH
 client and no container-socket dependency. The agent's 100 RPC methods are enumerated verbs that
-decode into typed parameter structs, and there is no `exec(command)` among them; a Go conformance
+decode into typed parameter structs, and there is no `exec(command)` among them; a Rust conformance
 test keeps that list honest against the contract. It binds no network port at all, because it
 dials out.
 
@@ -210,8 +210,8 @@ docker compose -p kaname logs control-plane | grep setup_token
 It lasts 24 hours. Because the installer writes it into `<data-dir>/.env`, restarting the control
 plane re-arms and re-logs that same token.
 
-Then six steps, driven by the server rather than by the browser, so closing the tab resumes in
-place:
+Then four required steps and six optional ones, driven by the server rather than by the browser,
+so closing the tab resumes in place:
 
 1. **Check the install** — live control-plane and agent status. On an all-in-one install this
    screen will not advance while the local agent is not connected.
@@ -220,8 +220,30 @@ place:
 3. **Name this instance** — one field.
 4. **Confirm your first server** — the paired host with its real facts, or a copyable pairing
    one-liner and a waiting state that resolves itself when the agent dials in.
-5. **Preferences** — update cadence, one notification channel, an ACME address. Skippable.
-6. **Done** — into the Command Center.
+5. **Panel address** — a domain for the panel over HTTPS (applied when you finish) and the ACME
+   contact address.
+6. **First website** — a static, PHP or reverse-proxied site on the paired server, or just the
+   domain.
+7. **Email** — deploy Yunori Mail Server on the paired server.
+8. **Backups** — a destination (S3-compatible, Backblaze B2 or a folder on the server) and a
+   nightly encrypted schedule.
+9. **Notifications** — where alerts go (email or a webhook), the outgoing mail server, and the
+   update policy.
+10. **Invite a teammate** — an invitation link with a role.
+11. **Done** — what was set up, read back from each module, with a link to each area, then into
+    the Command Center.
+
+Steps 5–10 are each skippable ("later" records a skip, so the wizard moves on and does not ask
+again). Each does its work through the same route the module's own page uses, and "done" is only
+accepted when what it claims exists.
+
+The **Email** step offers to deploy Yunori Mail Server on the server you just paired, through the
+same `POST /mail-servers` call the Email module makes. Before it starts it says what it needs: an A
+record for `mail.<domain>` pointed at the server, and outbound port 25 open (or a relay such as
+Amazon SES or Postmark). It follows the deploy job live and, when it succeeds, shows the console
+setup link and the first mailbox's password once — exactly as the Email page does. On a simulated
+server it says nothing is really installed; if the server already runs a mail server, it shows that
+instead of offering a second one. "Set up email later" skips it.
 
 Creating the owner retires the setup token and closes the account step. Completing the wizard
 closes the rest: after that `/setup` refuses outright, and anyone who navigates there lands on the
@@ -251,7 +273,7 @@ A fresh install answers on its IP over plain HTTP. There is no certificate, and
 alternative would be an install nobody can sign in to.
 
 Point an A record at the server, then set the domain from **Administration → Settings → Address**,
-or on the last step of onboarding. Ports 80 and 443 both have to be reachable for the certificate
+or on the **Panel address** step of onboarding (applied when you finish). Ports 80 and 443 both have to be reachable for the certificate
 to be issued.
 
 Setting a domain **adds** a site rather than moving one. Caddy's configuration is regenerated with
@@ -275,7 +297,7 @@ a failed unit, a certificate inside its last two weeks, a failed backup, a threa
 address, an alert, a failed deployment, a release becoming available, and an update finishing,
 being rolled back, or the check for one failing.
 
-Email needs an outgoing mail server, set in the same place (or on the last step of onboarding):
+Email needs an outgoing mail server, set in the same place (or on the **Notifications** step of onboarding):
 host, port, STARTTLS/TLS, credentials and a sender. The password is stored encrypted like every
 other credential Kaname holds and is never shown again; the settings only say whether one is set.
 **Send test email** and each channel's **Send test** try the real thing and report exactly what
@@ -357,7 +379,8 @@ way rather than left "running". Prerelease versions order the way semver says (`
 This is the path that works today. No Docker, no Postgres install — development runs on PGlite,
 real Postgres compiled to WASM, so it is identical on Windows, macOS and Linux.
 
-Requires **Node 22+**, **pnpm 10** and **Go 1.23+**.
+Requires **Node 22+**, **pnpm 10** and a stable **Rust** toolchain (1.85+, with `rustfmt` and
+`clippy`).
 
 ```bash
 git clone https://github.com/FutureForge-Studios/kaname.git   # once a first commit exists
@@ -388,33 +411,45 @@ that production does. Simulated servers are labelled unmistakably in the panel.
 ### Useful commands
 
 ```bash
-pnpm verify           # the gate: manifest + typechecks + go vet/build/cross-compile + suites
+pnpm verify           # the gate: manifest + typechecks + cargo fmt/clippy/build + suites
 pnpm test:e2e         # Playwright on a stack it boots itself, isolated on :3100/:4100
-pnpm typecheck        # every package (needs Go — the agent's typecheck is `go vet`)
-pnpm test             # unit + integration, including `go test ./...`
+pnpm typecheck        # every package (the agent's typecheck is `cargo clippy -D warnings`)
+pnpm test             # unit + integration, including `cargo test`
 pnpm db:reset         # drop, migrate, reseed
 pnpm db:generate      # regenerate migrations after a schema change
 pnpm agent:build      # build kanamed for the host platform
 pnpm format           # prettier
 ```
 
-`pnpm verify` is what has to be green. It emits the agent method manifest first, so the Go
+`pnpm verify` is what has to be green. It emits the agent method manifest first, so the Rust
 conformance test compares against current schemas rather than a stale copy, then typechecks five
-of the six TypeScript packages (everything but the e2e suite), vets and builds the agent for the
-host _and_ cross-compiles it for `linux/amd64`, and runs the contract, UI, control-plane and agent
-suites. It stops at the first category that fails and prints only that failure. It does not run
+of the six TypeScript packages (everything but the e2e suite), formats, lints and builds the
+agent, and runs the contract, UI, control-plane and agent suites. It stops at the first category that fails and prints only that failure. It does not run
 Playwright — `pnpm test:e2e` does.
 
 `pnpm test:e2e` boots a whole stack in `globalSetup`: it resets and reseeds a separate database,
 builds the agent, runs a full `next build`, starts the control plane, enrols four agents and
 serves the panel. It uses ports 3100/4100 and `.data/e2e`, so it will not take your dev database
-or dev ports — but it shares `apps/web/.next` with `next dev`, so stop `pnpm dev` first. The first
-run needs `pnpm exec playwright install`.
-
-Cross-compiling the agent:
+or dev ports. By default it builds into `apps/web/.next`, which `next dev` also uses, so either stop
+`pnpm dev` first or give the suite its own build directory. Every part of a stack can be moved, so
+several suites can run side by side:
 
 ```bash
-cd agent && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/kanamed-linux-amd64 ./cmd/kanamed
+KANAME_E2E_API_PORT=4201 KANAME_E2E_WEB_PORT=3201 \
+KANAME_E2E_DATABASE_URL=pglite://./.data/e2e-a \
+KANAME_E2E_ARTIFACTS_DIR=$PWD/e2e/.artifacts-a \
+KANAME_E2E_NEXT_DIST_DIR=.next-e2e-a \
+  pnpm test:e2e
+```
+
+The first run needs `pnpm exec playwright install`.
+
+Cross-compiling the agent (static musl, the way the release pipeline does it):
+
+```bash
+cargo install cargo-zigbuild && pip install ziglang
+cd agent && cargo zigbuild --release --target x86_64-unknown-linux-musl \
+  && cp target/x86_64-unknown-linux-musl/release/kanamed bin/kanamed-linux-amd64
 ```
 
 ---
@@ -427,7 +462,7 @@ apps/control-plane/    Fastify API, job worker, agent hub, internal CA
 packages/contract/     Zod: every REST payload and every agent RPC method
 packages/db/           Drizzle schema, migrations, demo seed
 packages/ui/           Design tokens and the shared component system
-agent/                 kanamed — Go, static binary, no listening socket
+agent/                 kanamed — Rust, static binary, no listening socket
 e2e/                   Playwright over a stack it boots from source
 infra/                 compose files, Dockerfiles, kaname-host.sh (the host-side helper)
 scripts/               verify.mjs, the dev-fleet launcher, the release-manifest builder
@@ -465,8 +500,8 @@ Further reading: [`docs/agent-protocol.md`](docs/agent-protocol.md) for the wire
   than erroring — so the chain, not the rule, is the real guarantee. **Security → Audit** shows the
   verification state and can re-verify on demand.
 - **Firewall changes apply behind a rollback window.** If you do not confirm within the timeout,
-  the host reverts. This is what stops you locking yourself out. (sshd changes arm the same window
-  on the agent, but the panel has no confirm path for them yet — see Status.)
+  the host reverts. This is what stops you locking yourself out. sshd changes arm the same window,
+  and both windows are part of the status reads, so a reload keeps the countdown and its Confirm.
 - **Terminal sessions are a separate permission** (`terminal.session:exec`), ticketed, IP-bound,
   audited on open and close, and recorded by default. Note this is not a privilege boundary on its
   own: `files.manager:write` reaches every path on the host through a root agent, so any role
@@ -484,29 +519,31 @@ Honest about what is and is not real.
 **Beta.** 0.x, no tag pushed yet, and the images are published by CI on the first `v*` tag rather
 than existing today.
 
-**Never run on a real host.** Every host-touching file in the Linux provider is behind
-`//go:build linux`; it compiles, cross-compiles, and its pure logic is unit-tested, but this was
-built on Windows and that code has never executed. Everything demonstrable today runs through the
+**Never run on a real host.** The Linux provider is compiled only on Linux (`#[cfg(target_os =
+"linux")]`); it builds, its pure logic (parsers, renderers, the path guard, the Yunori CLI
+readers) is unit-tested, but it has never managed a real server. Everything demonstrable today runs through the
 simulated provider. The installer likewise has no automated test beyond shellcheck.
 
 **Scaffolding — present in the UI, not wired to a host:**
 
 - Deployments record state but build, clone and copy nothing.
-- FTP is panel-side only. The agent has no FTP verb, so no account is ever created, changed or
-  removed on the host.
-- Adding a mail domain records it and marks it active after reading the host's DKIM key; no
-  Postfix or Dovecot configuration is written for it yet.
+- FTP accounts are real POSIX users (`ftp.account.*`): SFTP through an sshd `Match Group`
+  chroot, FTPS through vsftpd, quotas through `setquota` where the filesystem has user quotas.
+  Like the rest of the Linux provider, that path has only run against the simulator and unit
+  tests, never a real host.
+- Email is Yunori Mail Server ([KD-034](DECISIONS.md#kd-034)): deploying, adopting, domains,
+  mailboxes, aliases, the DNS checklist and health all go through the `yunori-mail` CLI on the
+  host. The parsers are pinned to yunori-mail 0.1.0's print formats; a `--json` flag on its list
+  commands is the planned follow-up in that repository.
 - DNS is implemented for Cloudflare and manual zones only, despite the wider provider list.
-- sshd configuration changes arm a rollback timer on the agent with no way to confirm them, so a
-  change made with the default window silently reverts.
 - Agent certificates are valid 90 days and do not auto-rotate.
 - Terminal recordings are never pruned. (Finished jobs and their logs, expired sessions and spent
   tokens are — after `JOB_RETENTION_DAYS` and `SESSION_RETENTION_DAYS`.)
 
 **What is real**, and covered by the test suites plus an end-to-end Playwright run over four live
 simulated agents: the three-tier boundary, enrollment and the RPC protocol, the job queue and its
-worker, RBAC with per-server scoping, the audit chain, the mail DNS-authentication engine, the
-terminal, onboarding, notification delivery (email, signed webhooks and Slack, with the throttling
+worker, RBAC with per-server scoping, the audit chain, the Yunori mail integration against the
+simulated host, the terminal, onboarding, notification delivery (email, signed webhooks and Slack, with the throttling
 that keeps them readable), stream flow control in both directions, and the update system's
 decision logic.
 

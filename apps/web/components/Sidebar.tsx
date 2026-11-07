@@ -68,7 +68,7 @@ export function Sidebar({
   return (
     <div
       className={cn(
-        "flex h-full min-h-0 flex-col bg-[var(--kn-bg-inset)]",
+        "kn-material flex h-full min-h-0 flex-col",
         !drawer && "border-r border-[var(--kn-border)]",
       )}
     >

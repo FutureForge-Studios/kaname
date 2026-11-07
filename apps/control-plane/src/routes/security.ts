@@ -5,6 +5,8 @@ import {
   auditEvents,
   firewallRules,
   firewallState,
+  ipBlocks,
+  jobs as jobRows,
   servers,
   sshConfigs,
   sshKeys,
@@ -19,7 +21,9 @@ import {
   createSshKeyInput,
   firewallRuleListQuery,
   idParam,
+  cidr,
   ipAddress,
+  ipBlockListQuery,
   sshKeyListQuery,
   threatEventListQuery,
   threatSummaryQuery,
@@ -30,13 +34,16 @@ import {
   type AuditVerification,
   type FirewallRule,
   type FirewallStatus,
+  type IpBlock,
   type Job,
+  type PendingRollback,
   type SshConfig,
   type SshKey,
   type SshSession,
   type ThreatEvent,
   type ThreatSummary,
   type TimeRange,
+  queryBoolean,
 } from "@kaname/contract";
 import { z } from "zod";
 import {
@@ -54,7 +61,6 @@ import {
 import { ApiException, badRequest, conflict, notFound } from "../lib/errors.js";
 import {
   combine,
-  enqueueFanOut,
   enqueueServerJob,
   loadConnectedServer,
   loadServer,
@@ -65,6 +71,7 @@ import {
   type ServerRow,
 } from "./_shared.js";
 import { rangeMs } from "./servers.js";
+import { markPending, restorePending, type DispositionRevert } from "../jobs/threats.js";
 
 /* ------------------------------------------------------------------ *
  * Security — firewall, threat protection, SSH and audit.
@@ -105,6 +112,13 @@ const SORTABLE_KEYS = {
   created_at: sshKeys.createdAt,
 } as const;
 
+const SORTABLE_BANS = {
+  created_at: ipBlocks.createdAt,
+  expires_at: ipBlocks.expiresAt,
+  cidr: ipBlocks.cidr,
+  server: servers.name,
+} as const;
+
 const SORTABLE_AUDIT = {
   ts: auditEvents.ts,
   action: auditEvents.action,
@@ -115,6 +129,8 @@ const SORTABLE_AUDIT = {
 
 const serverBody = z.object({ server_id: uuid });
 const ipParam = z.object({ ip: ipAddress });
+/** Ban and unban take a range as well as an address, as createIpBlockInput always said. */
+const banParam = z.object({ ip: cidr.or(ipAddress) });
 const fleetTargetBody = z.object({ server_id: uuid.nullable().default(null) });
 
 export async function securityRoutes(app: FastifyInstance): Promise<void> {
@@ -166,7 +182,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     const serverId = requireServerId(q.server_id);
     const server = await loadServer(req, serverId, "security.firewall:read");
 
-    const state = await firewallStateRow(req, serverId);
+    const state = await settleLapsedWindow(req, server, await firewallStateRow(req, serverId));
     const [total] = await req.ctx.db
       .select({ n: sql<number>`count(*)::int` })
       .from(firewallRules)
@@ -185,7 +201,10 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         ),
       );
 
-    return item(reply, toStatus(server, state, total?.n ?? 0, pending?.n ?? 0));
+    return item(
+      reply,
+      toStatus(server, state, total?.n ?? 0, pending?.n ?? 0, await firewallWindow(req, server, state)),
+    );
   });
 
   app.post("/firewall", async (req, reply) => {
@@ -386,7 +405,11 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         default_inbound: body.default_inbound,
         default_outbound: body.default_outbound,
         rollback_seconds: body.rollback_seconds,
-        rules: proposed.map((rule) => ({
+        // Only enabled rules reach the host. fw.apply has no per-rule
+        // enabled flag, so sending a disabled rule installed it as active —
+        // and the lockout check above (which skips disabled rules) had
+        // judged a different rule set from the one the host then ran.
+        rules: proposed.filter((rule) => rule.enabled).map((rule) => ({
           priority: rule.priority,
           action: rule.action,
           direction: rule.direction,
@@ -407,10 +430,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
           seconds: body.rollback_seconds,
           confirm_action: "firewall.confirm",
           confirm_href: `/api/v1/firewall/confirm`,
-          summary:
-            body.rollback_seconds > 0
-              ? `${server.name} reverts to its previous rule set in ${body.rollback_seconds} seconds unless you confirm. Check that you can still reach the host first — if you cannot, do nothing and it comes back on its own.`
-              : "No rollback window was requested. These rules stay in place even if they lock you out.",
+          summary: firewallRollbackSummary(server.name, body.rollback_seconds),
         },
       },
     });
@@ -481,6 +501,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         { ...state, pendingRollbackToken: null, pendingRollbackUntil: null, lastAppliedAt: now },
         counts?.n ?? 0,
         0,
+        null,
       ),
     );
   });
@@ -617,24 +638,23 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     return item(reply, summary);
   });
 
+  /**
+   * The disposition is not decided here. Each matching row is marked
+   * "pending", and the fw.ban job settles it: "banned" once the host has
+   * done it, or back to what it was (with the host's reason) when the
+   * host refuses. See ../jobs/threats.ts.
+   */
   app.post("/threats/:ip/ban", async (req, reply) => {
-    const { ip } = parseParams(req, ipParam);
+    const { ip } = parseParams(req, banParam);
     const body = parseBody(req, createIpBlockInput.omit({ target: true }));
     const target = normalizeCidr(ip);
     const targets = await banTargets(req, body.server_id);
 
-    const fan = await enqueueFanOut(
-      req,
-      "fw.ban",
-      targets.map((server) => ({
-        server,
-        targetId: server.id,
-        targetLabel: `${target} on ${server.name}`,
-        params: { target, duration_seconds: body.duration_seconds, reason: body.reason },
-      })),
-    );
-
-    await markDisposition(req, ip, targets, "banned");
+    const fan = await enqueueDispositionJobs(req, "fw.ban", target, targets, {
+      target,
+      duration_seconds: body.duration_seconds,
+      reason: body.reason,
+    });
     req.ctx.events.publish("threats", "ip.ban_requested", {
       cidr: target,
       servers: targets.map((s) => s.id),
@@ -644,29 +664,62 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/threats/:ip/unban", async (req, reply) => {
-    const { ip } = parseParams(req, ipParam);
+    const { ip } = parseParams(req, banParam);
     const body = parseBody(req, fleetTargetBody);
     const target = normalizeCidr(ip);
     const targets = await banTargets(req, body.server_id);
 
-    const fan = await enqueueFanOut(
-      req,
-      "fw.unban",
-      targets.map((server) => ({
-        server,
-        targetId: server.id,
-        targetLabel: `${target} on ${server.name}`,
-        params: { target },
-      })),
-    );
-
-    await markDisposition(req, ip, targets, "observed");
+    const fan = await enqueueDispositionJobs(req, "fw.unban", target, targets, { target });
     req.ctx.events.publish("threats", "ip.unban_requested", {
       cidr: target,
       servers: targets.map((s) => s.id),
     });
 
     return fanOutReply(reply, fan);
+  });
+
+  /**
+   * Addresses and ranges the hosts are blocking because Kaname asked them
+   * to. Read from the control plane's record of succeeded fw.ban jobs
+   * (KD-012), so a ban that is still queued, or that failed, is not
+   * listed as if it were in force.
+   */
+  app.get("/threats/bans", async (req, reply) => {
+    const q = parseQuery(req, ipBlockListQuery);
+    helpers(req).authorize("security.threats:read");
+
+    const term = searchTerm(q.q);
+    const where = combine(
+      scopeFilter(req, "security.threats:read", ipBlocks.serverId),
+      q.server_id ? eq(ipBlocks.serverId, q.server_id) : null,
+      q.source ? eq(ipBlocks.source, q.source) : null,
+      q.include_expired ? null : or(isNull(ipBlocks.expiresAt), gt(ipBlocks.expiresAt, new Date())),
+      term
+        ? sql`(lower(${ipBlocks.cidr}) like ${term} or lower(${ipBlocks.reason}) like ${term})`
+        : null,
+    );
+
+    const column = sortColumn(SORTABLE_BANS, q.sort, "created_at");
+    const rows = await req.ctx.db
+      .select({ block: ipBlocks, serverName: servers.name })
+      .from(ipBlocks)
+      .leftJoin(servers, eq(ipBlocks.serverId, servers.id))
+      .where(where)
+      .orderBy(q.order === "asc" ? asc(column) : desc(column))
+      .limit(q.per_page)
+      .offset(offset(q.page, q.per_page));
+
+    const [total] = await req.ctx.db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(ipBlocks)
+      .leftJoin(servers, eq(ipBlocks.serverId, servers.id))
+      .where(where);
+
+    return list(
+      reply,
+      rows.map((r) => toIpBlock(r.block, r.serverName)),
+      paginate(total?.n ?? 0, q.page, q.per_page),
+    );
   });
 
   /**
@@ -769,6 +822,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         type: parsed.type,
         comment: parsed.comment,
         userId: body.user_id,
+        posixUser: body.posix_user,
         serverIds: body.server_ids,
       })
       .returning();
@@ -782,6 +836,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       after: {
         name: body.name,
         fingerprint: parsed.fingerprint,
+        posix_user: body.posix_user,
         servers: targets.map((s) => s.name),
       },
     });
@@ -827,9 +882,12 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
     if (targets.length === 0) return noContent(reply);
 
     // The key is gone from Kaname, but it is still in authorized_keys
-    // until the host is rewritten — so that rewrite is the real work.
+    // until the host is rewritten — so that rewrite is the real work. Its
+    // own account is named, because if that was its last key the account
+    // no longer appears among the keys that remain and would otherwise
+    // never be rewritten at all.
     const correlationId = crypto.randomUUID();
-    const jobs = await pushAuthorizedKeys(req, targets, correlationId);
+    const jobs = await pushAuthorizedKeys(req, targets, correlationId, [key.posixUser]);
     return reply.status(202).send({
       data: { job: jobs[0] ?? null, jobs, correlation_id: correlationId },
     });
@@ -838,13 +896,23 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
   app.get("/ssh/config", async (req, reply) => {
     const q = parseQuery(
       req,
-      z.object({ server_id: uuid.optional(), refresh: z.coerce.boolean().default(false) }),
+      z.object({ server_id: uuid.optional(), refresh: queryBoolean.default(false) }),
     );
     const serverId = requireServerId(q.server_id);
     const server = await loadServer(req, serverId, "security.ssh:read");
 
     const cached = await sshConfigRow(req, serverId);
-    if (cached && !q.refresh) return item(reply, toSshConfig(server, cached));
+    // An unconfirmed window that has closed means sshd on the host is back
+    // on its previous configuration, so the cached copy of the applied one
+    // is no longer true. Read the host instead of serving it.
+    const lapsed = Boolean(
+      cached?.pendingRollbackToken &&
+        cached.pendingRollbackUntil &&
+        cached.pendingRollbackUntil.getTime() <= Date.now(),
+    );
+    if (cached && !q.refresh && !lapsed) {
+      return item(reply, toSshConfig(server, cached, await sshWindow(req, server, cached)));
+    }
 
     // Reading sshd's effective config has no side effect, so it passes
     // through rather than becoming a job (KD-008).
@@ -879,11 +947,69 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
           x11Forwarding: live.x11_forwarding,
           lastSyncedAt: now,
           updatedAt: now,
+          ...(lapsed ? { pendingRollbackToken: null, pendingRollbackUntil: null } : {}),
         },
       })
       .returning();
 
-    return item(reply, toSshConfig(server, row!));
+    return item(reply, toSshConfig(server, row!, await sshWindow(req, server, row!)));
+  });
+
+  /**
+   * Keeps an sshd configuration applied with a rollback window. Without
+   * this there was no way to keep one at all: the host armed its revert,
+   * nothing could cancel it, and every change silently undid itself when
+   * the window closed. The agent's rollback guard is shared by the
+   * firewall and sshd, so fw.confirm with the sshd token is the cancel.
+   * Not a job, for the same reason as /firewall/confirm.
+   */
+  app.post("/ssh/config/confirm", async (req, reply) => {
+    const body = parseBody(req, serverBody);
+    const server = await loadConnectedServer(req, body.server_id, "security.ssh:write");
+    const h = helpers(req);
+
+    const current = await sshConfigRow(req, server.id);
+    if (!current?.pendingRollbackToken) {
+      throw conflict(`sshd on ${server.name} has no configuration waiting to be confirmed.`, {
+        summary: "Either it was already confirmed, or the window closed and the host reverted.",
+        actions: [{ label: "sshd configuration", href: `/security/ssh?panel=config&server_id=${server.id}` }],
+      });
+    }
+    if (current.pendingRollbackUntil && current.pendingRollbackUntil.getTime() < Date.now()) {
+      throw conflict(
+        `The rollback window on ${server.name} closed at ${current.pendingRollbackUntil.toISOString()}.`,
+        {
+          summary:
+            "sshd has already gone back to its previous configuration. Apply the change again, then confirm inside the window.",
+          actions: [{ label: "Re-read from host", href: `/security/ssh?panel=config&server_id=${server.id}` }],
+        },
+      );
+    }
+
+    await req.ctx.hub.call(
+      server.id,
+      "fw.confirm",
+      { rollback_token: current.pendingRollbackToken },
+      { timeoutMs: 10_000 },
+    );
+
+    const [row] = await req.ctx.db
+      .update(sshConfigs)
+      .set({ pendingRollbackToken: null, pendingRollbackUntil: null, updatedAt: new Date() })
+      .where(eq(sshConfigs.serverId, server.id))
+      .returning();
+
+    await req.ctx.audit.record({
+      actor: h.actor(),
+      action: "ssh.config_confirmed",
+      targetType: "server",
+      targetId: server.id,
+      targetLabel: server.name,
+      serverId: server.id,
+    });
+    req.ctx.events.publish("servers", "ssh.config_confirmed", { server_id: server.id }, server.id);
+
+    return item(reply, toSshConfig(server, row!, null));
   });
 
   /**
@@ -899,6 +1025,26 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
 
     const current = await sshConfigRow(req, serverId);
     const warnings = await assessSshLockout(req, server, current, body);
+
+    // Same rule as the firewall: a configuration that ends the way in AND
+    // has no window to undo itself is an outage, not a warning. sshd used
+    // to accept it and let the host lock itself out for good.
+    if (warnings.locks_out && body.rollback_seconds === 0) {
+      throw new ApiException(
+        "precondition_failed",
+        `This sshd configuration would end SSH access to ${server.name} and you asked for no rollback window.`,
+        {
+          detail: warnings,
+          remediation: {
+            summary:
+              "Set rollback_seconds to at least 30 so sshd reverts on its own if you lose access, or fix what the checks below name first.",
+            actions: [
+              { label: "sshd configuration", href: `/security/ssh?panel=config&server_id=${server.id}` },
+            ],
+          },
+        },
+      );
+    }
 
     const { rollback_seconds, ...desired } = body;
     const params = Object.fromEntries(
@@ -921,7 +1067,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       targetId: server.id,
       targetLabel: server.name,
       serverId: server.id,
-      before: current ? toSshConfig(server, current) : null,
+      before: current ? toSshConfig(server, current, null) : null,
       after: { ...params, rollback_seconds },
       metadata: { warnings: warnings.checks.map((c) => c.code) },
     });
@@ -941,10 +1087,9 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
         lockout: warnings,
         rollback: {
           seconds: rollback_seconds,
-          summary:
-            rollback_seconds > 0
-              ? `sshd on ${server.name} reverts to its current configuration in ${rollback_seconds} seconds unless the new one holds. Open a second SSH session before you close this one.`
-              : "No rollback window was requested. If the new sshd configuration locks you out, it stays that way.",
+          confirm_action: "ssh.config_confirm",
+          confirm_href: `/api/v1/ssh/config/confirm`,
+          summary: sshRollbackSummary(server.name, rollback_seconds),
         },
       },
     });
@@ -1114,6 +1259,54 @@ async function firewallStateRow(req: FastifyRequest, serverId: string): Promise<
   return rows[0] ?? null;
 }
 
+/**
+ * A window that closed without a confirm means the host has put its
+ * previous rule set back on its own timer. Kaname still holds the rules
+ * that were applied, so unless that is recorded the status would go on
+ * reporting them as live — the one lie this page must never tell. The
+ * applied marker is cleared, which makes every rule read as staged again
+ * (true: the host does not have them), and the revert is audited because
+ * the host changed without anyone pressing a button.
+ */
+async function settleLapsedWindow(
+  req: FastifyRequest,
+  server: ServerRow,
+  state: StateRow | null,
+): Promise<StateRow | null> {
+  if (!state?.pendingRollbackToken || !state.pendingRollbackUntil) return state;
+  if (state.pendingRollbackUntil.getTime() > Date.now()) return state;
+
+  const lapsedAt = state.pendingRollbackUntil;
+  const [row] = await req.ctx.db
+    .update(firewallState)
+    .set({
+      pendingRollbackToken: null,
+      pendingRollbackUntil: null,
+      lastAppliedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(firewallState.serverId, server.id),
+        eq(firewallState.pendingRollbackToken, state.pendingRollbackToken),
+      ),
+    )
+    .returning();
+  if (!row) return (await firewallStateRow(req, server.id)) ?? state;
+
+  await req.ctx.audit.record({
+    actor: { type: "system", id: null, name: "rollback window", ip: null, userAgent: null },
+    action: "firewall.reverted",
+    targetType: "server",
+    targetId: server.id,
+    targetLabel: server.name,
+    serverId: server.id,
+    metadata: { window_closed_at: lapsedAt.toISOString() },
+  });
+  req.ctx.events.publish("servers", "firewall.reverted", { server_id: server.id }, server.id);
+  return row;
+}
+
 async function sshConfigRow(req: FastifyRequest, serverId: string): Promise<SshConfigRow | null> {
   const rows = await req.ctx.db
     .select()
@@ -1175,18 +1368,20 @@ async function banTargets(req: FastifyRequest, serverId: string | null): Promise
   return rows;
 }
 
+/** Ignore only: a ban or unban is settled by its job instead (../jobs/threats.ts). */
 async function markDisposition(
   req: FastifyRequest,
   ip: string,
   targets: ServerRow[],
-  disposition: "banned" | "observed" | "ignored",
+  disposition: "ignored",
 ): Promise<number> {
   const rows = await req.ctx.db
     .update(threatEvents)
     .set({ disposition, updatedAt: new Date() })
     .where(
       and(
-        eq(threatEvents.sourceIp, ip),
+        // A range marks every observed address inside it.
+        ip.includes("/") ? sql`${threatEvents.sourceIp} <<= ${ip}::inet` : eq(threatEvents.sourceIp, ip),
         inArray(
           threatEvents.serverId,
           targets.map((s) => s.id),
@@ -1195,6 +1390,175 @@ async function markDisposition(
     )
     .returning({ id: threatEvents.id });
   return rows.length;
+}
+
+/**
+ * One fw.ban or fw.unban per server, each carrying what the threat rows
+ * on that server said before, so its handler can put them back if the
+ * host refuses. The rows are marked "pending" before the job exists,
+ * because a fast worker could otherwise settle them first and then have
+ * "pending" written over its result.
+ */
+async function enqueueDispositionJobs(
+  req: FastifyRequest,
+  type: "fw.ban" | "fw.unban",
+  target: string,
+  targets: ServerRow[],
+  params: Record<string, unknown>,
+): Promise<{ correlation_id: string; jobs: Job[] }> {
+  const correlationId = crypto.randomUUID();
+  const queued: Job[] = [];
+  for (const server of targets) {
+    const revert: DispositionRevert[] = await markPending(req.ctx.db, server.id, target);
+    try {
+      queued.push(
+        await enqueueServerJob(req, {
+          type,
+          server,
+          targetId: server.id,
+          targetLabel: `${target} on ${server.name}`,
+          correlationId,
+          params: { ...params, revert },
+        }),
+      );
+    } catch (err) {
+      // No job means nothing will ever settle these rows.
+      await restorePending(req.ctx.db, revert);
+      throw err;
+    }
+  }
+  return { correlation_id: correlationId, jobs: queued };
+}
+
+/* ------------------------------------------------------------------ *
+ * Rollback windows
+ *
+ * The window is part of the status reads, not only of the apply
+ * response, because a reload used to lose it: the banner went with the
+ * tab, and with it the only Confirm, so the change reverted on its own.
+ * What is pending is read back from the apply job that armed the window.
+ * ------------------------------------------------------------------ */
+
+function firewallRollbackSummary(serverName: string, seconds: number): string {
+  return seconds > 0
+    ? `${serverName} reverts to its previous rule set in ${seconds} seconds unless you confirm. Check that you can still reach the host first — if you cannot, do nothing and it comes back on its own.`
+    : "No rollback window was requested. These rules stay in place even if they lock you out.";
+}
+
+function sshRollbackSummary(serverName: string, seconds: number): string {
+  return seconds > 0
+    ? `sshd on ${serverName} reverts to its current configuration in ${seconds} seconds unless you confirm. Open a second SSH session and check it works before you confirm.`
+    : "No rollback window was requested. If the new sshd configuration locks you out, it stays that way.";
+}
+
+/** The most recent apply that succeeded: the one whose token the row holds. */
+async function lastApplied(
+  req: FastifyRequest,
+  serverId: string,
+  type: "fw.apply" | "ssh.config.apply",
+): Promise<{ id: string; params: Record<string, unknown> } | null> {
+  const rows = await req.ctx.db
+    .select({ id: jobRows.id, params: jobRows.params })
+    .from(jobRows)
+    .where(
+      and(eq(jobRows.serverId, serverId), eq(jobRows.type, type), eq(jobRows.status, "succeeded")),
+    )
+    .orderBy(desc(jobRows.finishedAt))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+/** An open window, or null when none is armed or it has already closed. */
+function openUntil(token: string | null, until: Date | null): Date | null {
+  if (!token || !until) return null;
+  return until.getTime() > Date.now() ? until : null;
+}
+
+function windowSeconds(job: { params: Record<string, unknown> } | null, until: Date, from: Date | null): number {
+  const asked = Number(job?.params.rollback_seconds);
+  if (Number.isInteger(asked) && asked > 0) return asked;
+  return Math.max(1, Math.round((until.getTime() - (from?.getTime() ?? Date.now())) / 1000));
+}
+
+async function firewallWindow(
+  req: FastifyRequest,
+  server: ServerRow,
+  state: StateRow | null,
+): Promise<PendingRollback | null> {
+  const until = openUntil(state?.pendingRollbackToken ?? null, state?.pendingRollbackUntil ?? null);
+  if (!until) return null;
+
+  const job = await lastApplied(req, server.id, "fw.apply");
+  const seconds = windowSeconds(job, until, state?.lastAppliedAt ?? null);
+  const rules = Array.isArray(job?.params.rules)
+    ? (job.params.rules as {
+        action: string;
+        direction: string;
+        protocol: string;
+        port_spec: string | null;
+        source: string | null;
+      }[])
+    : [];
+  const changes = job
+    ? [
+        `default inbound ${String(job.params.default_inbound)} / outbound ${String(job.params.default_outbound)}`,
+        ...rules.map(
+          (rule) =>
+            `${rule.action} ${rule.direction} ${rule.protocol}${rule.port_spec ? ` ${rule.port_spec}` : ""}${rule.source ? ` from ${rule.source}` : ""}`,
+        ),
+      ]
+    : [];
+
+  return {
+    expires_at: until.toISOString(),
+    seconds,
+    job_id: job?.id ?? null,
+    changes,
+    summary: firewallRollbackSummary(server.name, seconds),
+  };
+}
+
+const SSH_DIRECTIVES: readonly [string, string][] = [
+  ["port", "Port"],
+  ["permit_root_login", "PermitRootLogin"],
+  ["password_authentication", "PasswordAuthentication"],
+  ["pubkey_authentication", "PubkeyAuthentication"],
+  ["max_auth_tries", "MaxAuthTries"],
+  ["allow_users", "AllowUsers"],
+  ["allow_groups", "AllowGroups"],
+  ["x11_forwarding", "X11Forwarding"],
+];
+
+async function sshWindow(
+  req: FastifyRequest,
+  server: ServerRow,
+  row: SshConfigRow,
+): Promise<PendingRollback | null> {
+  const until = openUntil(row.pendingRollbackToken, row.pendingRollbackUntil);
+  if (!until) return null;
+
+  const job = await lastApplied(req, server.id, "ssh.config.apply");
+  const seconds = windowSeconds(job, until, row.lastAppliedAt);
+  const changes: string[] = [];
+  for (const [key, directive] of SSH_DIRECTIVES) {
+    const value = job?.params[key];
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      changes.push(value.length > 0 ? `${directive} ${value.join(" ")}` : `${directive} (cleared)`);
+    } else if (typeof value === "boolean") {
+      changes.push(`${directive} ${value ? "yes" : "no"}`);
+    } else {
+      changes.push(`${directive} ${String(value)}`);
+    }
+  }
+
+  return {
+    expires_at: until.toISOString(),
+    seconds,
+    job_id: job?.id ?? null,
+    changes,
+    summary: sshRollbackSummary(server.name, seconds),
+  };
 }
 
 /** 202 shaped like `accepted`, widened so a fan-out can name all its children. */
@@ -1209,6 +1573,7 @@ function fanOutReply(
 
 /** Single addresses become /32 or /128, so one column covers both forms. */
 function normalizeCidr(ip: string): string {
+  if (ip.includes("/")) return ip;
   return ip.includes(":") ? `${ip}/128` : `${ip}/32`;
 }
 
@@ -1224,6 +1589,8 @@ async function pushAuthorizedKeys(
   req: FastifyRequest,
   targets: ServerRow[],
   correlationId: string,
+  /** Accounts to rewrite even when no remaining key names them. */
+  alsoUsers: readonly string[] = [],
 ): Promise<Job[]> {
   const jobs: Job[] = [];
   for (const server of targets) {
@@ -1238,7 +1605,9 @@ async function pushAuthorizedKeys(
       bucket.push({ public_key: key.publicKey, comment: key.comment });
       byUser.set(key.posixUser, bucket);
     }
-    // A server that just lost its last key still needs the empty set pushed.
+    // An account that just lost its last key still needs the empty set
+    // pushed, or the removed key stays in its authorized_keys.
+    for (const user of alsoUsers) if (!byUser.has(user)) byUser.set(user, []);
     if (byUser.size === 0) byUser.set("root", []);
 
     for (const [user, keys] of byUser) {
@@ -1618,6 +1987,7 @@ function toStatus(
   state: StateRow | null,
   ruleCount: number,
   pending: number,
+  window: PendingRollback | null,
 ): FirewallStatus {
   return {
     server_id: server.id,
@@ -1629,7 +1999,22 @@ function toStatus(
     rule_count: ruleCount,
     last_applied_at: state?.lastAppliedAt?.toISOString() ?? null,
     pending_changes: pending,
+    pending_rollback: window,
     last_synced_at: (state?.updatedAt ?? new Date()).toISOString(),
+  };
+}
+
+function toIpBlock(row: typeof ipBlocks.$inferSelect, serverName: string | null): IpBlock {
+  return {
+    id: row.id,
+    server_id: row.serverId,
+    server_name: serverName,
+    cidr: row.cidr,
+    reason: row.reason,
+    source: row.source,
+    expires_at: row.expiresAt?.toISOString() ?? null,
+    created_by: row.createdBy,
+    created_at: row.createdAt.toISOString(),
   };
 }
 
@@ -1647,6 +2032,7 @@ function toThreat(row: typeof threatEvents.$inferSelect, serverName: string): Th
     first_seen: row.firstSeen.toISOString(),
     last_seen: row.lastSeen.toISOString(),
     disposition: row.disposition,
+    disposition_error: row.dispositionError,
     sample: row.sample,
     last_synced_at: row.updatedAt.toISOString(),
     created_at: row.createdAt.toISOString(),
@@ -1663,6 +2049,7 @@ function toSshKey(row: typeof sshKeys.$inferSelect): SshKey {
     type: row.type as SshKey["type"],
     comment: row.comment || null,
     user_id: row.userId,
+    posix_user: row.posixUser,
     server_ids: row.serverIds,
     last_used_at: row.lastUsedAt?.toISOString() ?? null,
     created_at: row.createdAt.toISOString(),
@@ -1670,7 +2057,11 @@ function toSshKey(row: typeof sshKeys.$inferSelect): SshKey {
   };
 }
 
-function toSshConfig(server: ServerRow, row: SshConfigRow): SshConfig {
+function toSshConfig(
+  server: ServerRow,
+  row: SshConfigRow,
+  window: PendingRollback | null,
+): SshConfig {
   return {
     server_id: server.id,
     server_name: server.name,
@@ -1683,6 +2074,7 @@ function toSshConfig(server: ServerRow, row: SshConfigRow): SshConfig {
     allow_groups: row.allowGroups,
     x11_forwarding: row.x11Forwarding,
     last_applied_at: row.lastAppliedAt?.toISOString() ?? null,
+    pending_rollback: window,
     last_synced_at: (row.lastSyncedAt ?? row.updatedAt).toISOString(),
   };
 }

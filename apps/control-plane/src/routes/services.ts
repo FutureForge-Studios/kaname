@@ -4,6 +4,7 @@ import { servers, services } from "@kaname/db/schema";
 import {
   idParam,
   isoDate,
+  queryBoolean,
   serverIdQuery,
   serviceAction,
   serviceListQuery,
@@ -76,7 +77,8 @@ const KEEPALIVE_MS = 20_000;
 
 const logsQuery = z.object({
   lines: z.coerce.number().int().min(1).max(10000).default(200),
-  follow: z.coerce.boolean().default(false),
+  // queryBoolean, not z.coerce.boolean(): the latter reads "false" as true.
+  follow: queryBoolean.default(false),
   since: isoDate.optional(),
 });
 
@@ -332,7 +334,7 @@ async function agentRead<T>(server: ServerRow, run: () => Promise<T>): Promise<T
     return await run();
   } catch (err) {
     if (err instanceof AgentRpcError) throw fromAgentError(server.name, err.agentError);
-    if (err instanceof AgentOfflineError) throw agentOffline(server.name, server.lastSeenAt);
+    if (err instanceof AgentOfflineError) throw agentOffline(server);
     throw err;
   }
 }
@@ -411,7 +413,7 @@ function streamError(server: ServerRow, err: unknown): unknown {
   if (err instanceof AgentRpcError)
     return fromAgentError(server.name, err.agentError).toJSON().error;
   if (err instanceof AgentOfflineError)
-    return agentOffline(server.name, server.lastSeenAt).toJSON().error;
+    return agentOffline(server).toJSON().error;
   return {
     code: "internal_error",
     message: `The log stream from ${server.name} ended unexpectedly.`,

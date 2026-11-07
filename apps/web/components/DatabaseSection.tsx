@@ -37,7 +37,6 @@ import {
   DialogBody,
   DialogFooter,
   DialogHeader,
-  EmptyState,
   FormField,
   HealthBadge,
   Input,
@@ -54,7 +53,13 @@ import {
   type DataTableRowAction,
   type Tone,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import {
+  ResourcePage,
+  serverPrerequisite,
+  useOpenFromQuery,
+  useResourceListState,
+  type ResourcePrerequisite,
+} from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { PageError } from "@/components/PageError";
 import { ViewTabs } from "@/components/ViewTabs";
@@ -429,6 +434,27 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
   const mayWrite = can(meta.write, serverId);
   const mayDelete = can(meta.delete, serverId);
 
+  useOpenFromQuery("new", () => setCreateDatabaseOpen(true), mayWrite && Boolean(instance));
+
+  /* The list is empty for a different reason on a fresh install: no host
+   * yet, or a host with no engine on it. Say which, once, in the table. */
+  const prerequisite: ResourcePrerequisite | null =
+    serverPrerequisite(
+      selection,
+      `${meta.title} databases are created on a host Kaname manages.`,
+    ) ??
+    (!instances.isLoading && !instances.isError && !instance
+      ? {
+          icon: DatabaseIcon,
+          title: selection.server
+            ? `No ${meta.title} instance on ${selection.server.name}`
+            : `No ${meta.title} instance`,
+          description: selection.server
+            ? `The agent reports no ${meta.engines.join(" or ")} listening on this host. Install the engine there, then re-sync the server so it re-advertises its capabilities.`
+            : "Pick a server that runs this engine.",
+        }
+      : null);
+
   const newDatabase = (
     <Button
       variant="primary"
@@ -649,7 +675,8 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
         id: "dump",
         label: "Dump to file",
         icon: Download,
-        disabled: !can(meta.read, row.server_id),
+        // A dump writes a file on the host, so it needs write (routes/databases.ts).
+        disabled: !can(meta.write, row.server_id),
         onSelect: () => setDumping(row),
       },
       {
@@ -757,21 +784,6 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
 
       {instances.isLoading && <InstanceSkeleton />}
 
-      {!instances.isLoading && !instances.isError && !instance && (
-        <SectionCard>
-          <EmptyState
-            icon={DatabaseIcon}
-            title={`No ${meta.title} instance on this server`}
-            description={
-              selection.server
-                ? `The agent on ${selection.server.name} reports no ${meta.engines.join(" or ")} listening. Install the engine on the host, then re-sync the server so it re-advertises its capabilities.`
-                : "Pick a server that runs this engine."
-            }
-            size="sm"
-          />
-        </SectionCard>
-      )}
-
       {instance && (
         <InstanceHeader
           instance={instance}
@@ -847,6 +859,7 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
           emptyTitle="No databases on this instance"
           emptyDescription="A database is created with its own user and password, never on a shared superuser connection."
           emptyAction={newDatabase}
+          prerequisite={prerequisite}
           errorContext="Databases"
         />
       ) : (
@@ -897,6 +910,7 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
           emptyTitle="No users on this instance"
           emptyDescription="Every database should have a dedicated user, granted only the databases it needs."
           emptyAction={newUser}
+          prerequisite={prerequisite}
           errorContext="Database users"
         />
       )}
@@ -1726,9 +1740,9 @@ function GrantsDialog({ user, databases, loading, pending, onClose, onSubmit }: 
 
 /* -------------------------- dump and restore ------------------------ */
 
-function defaultDumpPath(database: Database, extension: string, compress: boolean): string {
+function defaultDumpPath(name: string, extension: string, compress: boolean): string {
   const stamp = new Date().toISOString().slice(0, 10);
-  return `/var/backups/kaname/${database.name}-${stamp}.${extension}${compress ? ".gz" : ""}`;
+  return `/var/backups/kaname/${name}-${stamp}.${extension}${compress ? ".gz" : ""}`;
 }
 
 export interface DumpDialogProps {
@@ -1744,14 +1758,20 @@ export function DumpDialog({ database, meta, pending, onClose, onSubmit }: DumpD
   const [destination, setDestination] = React.useState("");
   const [edited, setEdited] = React.useState(false);
 
+  /*
+   * Keyed on the database's identity, not the row object: the row is
+   * refetched whenever any job lands, and resetting on every new object
+   * wiped a path the operator had already typed.
+   */
+  const databaseName = database?.name ?? null;
   React.useEffect(() => {
-    if (!database) {
+    if (databaseName === null) {
       setEdited(false);
       return;
     }
     setCompress(true);
-    setDestination(defaultDumpPath(database, meta.dumpExtension, true));
-  }, [database, meta.dumpExtension]);
+    setDestination(defaultDumpPath(databaseName, meta.dumpExtension, true));
+  }, [database?.id, databaseName, meta.dumpExtension]);
 
   const valid = isAbsolutePath(destination);
 
@@ -1803,7 +1823,7 @@ export function DumpDialog({ database, meta, pending, onClose, onSubmit }: DumpD
                 const next = event.target.checked;
                 setCompress(next);
                 if (!edited && database) {
-                  setDestination(defaultDumpPath(database, meta.dumpExtension, next));
+                  setDestination(defaultDumpPath(database.name, meta.dumpExtension, next));
                 }
               }}
               label="Compress with gzip"
@@ -1842,12 +1862,15 @@ export function RestoreDialog({ database, meta, pending, onClose, onSubmit }: Re
   const [dropExisting, setDropExisting] = React.useState(false);
   const [typed, setTyped] = React.useState("");
 
+  /* By identity, for the same reason as DumpDialog: a refetch must not
+   * clear the source and the typed confirmation mid-form. */
+  const databaseName = database?.name ?? null;
   React.useEffect(() => {
-    if (!database) return;
-    setSource(defaultDumpPath(database, meta.dumpExtension, true));
+    if (databaseName === null) return;
+    setSource(defaultDumpPath(databaseName, meta.dumpExtension, true));
     setDropExisting(false);
     setTyped("");
-  }, [database, meta.dumpExtension]);
+  }, [database?.id, databaseName, meta.dumpExtension]);
 
   const pathValid = isAbsolutePath(source);
   const armed = pathValid && database !== null && typed.trim() === database.name;

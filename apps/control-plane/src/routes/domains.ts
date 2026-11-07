@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { and, asc, desc, eq, isNull, or, sql, type Database, type SQL } from "@kaname/db";
-import { certificates, domains, servers, sites } from "@kaname/db/schema";
+import { certificates, dnsRecords, domains, secrets, servers, sites } from "@kaname/db/schema";
 import {
   createDomainInput,
   domainListQuery,
+  domainVerificationMethod,
   idParam,
   updateDomainInput,
   type Domain,
@@ -25,7 +27,7 @@ import {
 } from "../http/plugin.js";
 import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
 import { ApiException, agentOffline, conflict, fromAgentError, notFound } from "../lib/errors.js";
-import { hmac } from "../lib/crypto.js";
+import { hmac, seal } from "../lib/crypto.js";
 import { combine, loadConnectedServer, scopeFilter, searchTerm, sortColumn } from "./_shared.js";
 
 /* ------------------------------------------------------------------ *
@@ -329,6 +331,7 @@ export async function domainRoutes(app: FastifyInstance): Promise<void> {
     let nsValues: string[];
     let resolver: string | null;
     try {
+      await publishToSimulatedResolver(req, server.id, domain);
       const [txt, ns]: [ResolveAnswer, ResolveAnswer] = await Promise.all([
         req.ctx.hub.call(
           server.id,
@@ -348,7 +351,7 @@ export async function domainRoutes(app: FastifyInstance): Promise<void> {
       resolver = txt.records[0]?.resolver ?? ns.records[0]?.resolver ?? null;
     } catch (err) {
       if (err instanceof AgentRpcError) throw fromAgentError(server.name, err.agentError);
-      if (err instanceof AgentOfflineError) throw agentOffline(server.name, server.lastSeenAt);
+      if (err instanceof AgentOfflineError) throw agentOffline(server);
       throw err;
     }
 
@@ -411,9 +414,113 @@ export async function domainRoutes(app: FastifyInstance): Promise<void> {
 
     return item(reply, await domainApi(req.ctx.db, id));
   });
+
+  /* -------------------------- provider token ------------------------- */
+
+  /*
+   * The Cloudflare token for one zone. dns-provider.ts has always looked
+   * for `dns.cloudflare:<domain_id>`, but nothing could save one, so an
+   * API-driven zone could never actually be synced or applied. Sealed
+   * with a per-row data key under the master key; write-only — no route
+   * reads it back, and it never reaches the audit trail.
+   */
+  app.put("/domains/:id/dns-token", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const body = parseBody(req, dnsTokenInput);
+    const domain = await loadDomainRow(req, id, "websites.dns:write");
+    if (domain.dnsProvider === "manual") {
+      throw new ApiException(
+        "precondition_failed",
+        `${domain.name} uses manual DNS, so there is no provider to authenticate against.`,
+        {
+          remediation: {
+            summary: "Move the zone to Cloudflare first, then save its API token.",
+            actions: [{ label: "Edit the domain", href: `/websites/domains/${id}` }],
+          },
+        },
+      );
+    }
+    const sealed = seal(body.token, req.ctx.config.masterKey);
+    const ref = `dns.${domain.dnsProvider}:${domain.id}`;
+    await req.ctx.db
+      .insert(secrets)
+      .values({ ref, ownerType: "domain", ownerId: domain.id, ...sealed })
+      .onConflictDoUpdate({
+        target: secrets.ref,
+        set: { ...sealed, updatedAt: new Date() },
+      });
+    await req.ctx.audit.record({
+      actor: helpers(req).actor(),
+      action: "domain.dns_token.saved",
+      targetType: "domain",
+      targetId: domain.id,
+      targetLabel: domain.name,
+      serverId: domain.serverId,
+      metadata: { provider: domain.dnsProvider },
+    });
+    return noContent(reply);
+  });
+
+  app.delete("/domains/:id/dns-token", async (req, reply) => {
+    const { id } = parseParams(req, idParam);
+    const domain = await loadDomainRow(req, id, "websites.dns:write");
+    await req.ctx.db
+      .delete(secrets)
+      .where(eq(secrets.ref, `dns.${domain.dnsProvider}:${domain.id}`));
+    await req.ctx.audit.record({
+      actor: helpers(req).actor(),
+      action: "domain.dns_token.removed",
+      targetType: "domain",
+      targetId: domain.id,
+      targetLabel: domain.name,
+      serverId: domain.serverId,
+    });
+    return noContent(reply);
+  });
 }
 
+const dnsTokenInput = z.object({
+  token: z
+    .string()
+    .trim()
+    .min(20, "An API token is at least 20 characters.")
+    .max(512, "An API token is at most 512 characters."),
+});
+
 /* ------------------------------------------------------------------ */
+
+/**
+ * A simulated host has no internet: its resolver stands in for public
+ * DNS, and used to serve a fixed zone, so the `_kaname` proof this route
+ * asks for could never be seen there and verification on the sim could
+ * only fail. Before resolving from a simulated host, the zone Kaname
+ * manages for the domain is handed to it — what the world would serve
+ * once those records are published. A real host is never told what to
+ * answer: `dns.publish` requires the `simulated` capability, which only
+ * the simulator advertises.
+ */
+async function publishToSimulatedResolver(
+  req: FastifyRequest,
+  serverId: string,
+  domain: typeof domains.$inferSelect,
+): Promise<void> {
+  if (!req.ctx.hub.capabilities(serverId).includes("simulated")) return;
+  const rows = await req.ctx.db
+    .select({
+      name: dnsRecords.name,
+      type: dnsRecords.type,
+      content: dnsRecords.content,
+      ttl: dnsRecords.ttl,
+    })
+    .from(dnsRecords)
+    .where(eq(dnsRecords.domainId, domain.id));
+  await req.ctx.hub.call(
+    serverId,
+    "dns.publish",
+    { zone: domain.name, records: rows },
+    { timeoutMs: RESOLVE_TIMEOUT_MS },
+  );
+}
 
 /** Loads a domain and asserts the caller holds `permission` on its host. */
 export async function loadDomainRow(
@@ -469,7 +576,7 @@ export function domainToApi(row: DomainApiRow): Domain {
     record_count: row.record_count,
     verified: {
       ok: d.verified,
-      method: (d.verificationMethod as DomainVerificationMethod | null) ?? "none",
+      method: verificationMethodOf(d.verificationMethod),
       checked_at: d.verifiedAt?.toISOString() ?? null,
     },
     has_mail: d.hasMail,
@@ -479,6 +586,19 @@ export function domainToApi(row: DomainApiRow): Domain {
 }
 
 /* ---------------------------- internals ---------------------------- */
+
+/**
+ * `verification_method` is free text in the schema, and rows written
+ * before the enum settled carry "dns" for a TXT proof. Casting it let
+ * that value through the contract, and the panel's verification badge
+ * had no label for it and threw, taking the whole domains list down
+ * (KD-021: raw rows are mapped, never cast).
+ */
+function verificationMethodOf(stored: string | null): DomainVerificationMethod {
+  if (stored === "dns") return "dns_txt";
+  const parsed = domainVerificationMethod.safeParse(stored);
+  return parsed.success ? parsed.data : "none";
+}
 
 /**
  * The stored lifecycle has four states; the API has five, because the

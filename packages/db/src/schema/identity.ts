@@ -9,6 +9,7 @@ import {
   pgTable,
   primaryKey,
   text,
+  timestamp,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -30,6 +31,11 @@ export const users = pgTable(
     /** Envelope-encrypted TOTP secret; never readable in a query result. */
     totpSecretEnc: text("totp_secret_enc"),
     totpEnabled: boolean("totp_enabled").notNull().default(false),
+    /**
+     * The 30-second step of the last accepted code. A code is refused unless
+     * its step is newer, so one code cannot be replayed inside its window.
+     */
+    totpLastStep: integer("totp_last_step"),
     recoveryCodesEnc: text("recovery_codes_enc"),
     status: text("status", { enum: ["active", "invited", "suspended"] })
       .notNull()
@@ -39,6 +45,16 @@ export const users = pgTable(
     lastLoginAt: ts("last_login_at"),
     lastLoginIp: inet("last_login_ip"),
     failedLoginCount: integer("failed_login_count").notNull().default(0),
+    /**
+     * When each failed sign-in still inside Settings > Security > counting
+     * window happened. A count alone cannot age out, so failures spread
+     * over weeks used to add up to a lockout; with the timestamps, only
+     * failures newer than `window_minutes` count. Capped at the threshold.
+     */
+    failedLoginAt: timestamp("failed_login_at", { withTimezone: true, mode: "date" })
+      .array()
+      .notNull()
+      .default(sql`'{}'::timestamptz[]`),
     lockedUntil: ts("locked_until"),
     preferences: jsonb("preferences").$type<Record<string, unknown>>().notNull().default({}),
     ...timestamps,

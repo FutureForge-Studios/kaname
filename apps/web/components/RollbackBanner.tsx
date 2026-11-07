@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { AlertTriangle, ShieldAlert, ShieldCheck, TimerReset, X } from "lucide-react";
+import type { PendingRollback } from "@kaname/contract";
 import { Badge, Button, CopyableCode, IconButton, cn } from "@kaname/ui";
 
 /* ------------------------------------------------------------------ *
@@ -117,13 +118,42 @@ export interface RollbackWindow {
   /** The control plane's own sentence about what happens next. */
   summary: string;
   lockout: LockoutAssessment | null;
+  /**
+   * What reverts, one line each, as the status read reports it. A window
+   * restored after a reload has no apply response to describe it, so this
+   * is how the operator still sees what they would be confirming.
+   */
+  changes?: readonly string[];
+}
+
+/**
+ * The banner's window from a status read's `pending_rollback`. Status is
+ * what survives a reload; the apply response only lives in the tab that
+ * sent it.
+ */
+export function windowFromStatus(
+  pending: PendingRollback,
+  server: { id: string; name: string },
+  subject: string,
+): RollbackWindow {
+  return {
+    serverId: server.id,
+    serverName: server.name,
+    subject,
+    seconds: pending.seconds,
+    expiresAt: Date.parse(pending.expires_at),
+    summary: pending.summary,
+    lockout: null,
+    changes: pending.changes,
+  };
 }
 
 export interface RollbackBannerProps {
   window: RollbackWindow;
   /**
-   * Cancels the pending revert. Omit for sshd, where the host verifies
-   * the new configuration itself and there is nothing to confirm.
+   * Cancels the pending revert. The firewall and sshd both need it: the
+   * host's revert timer runs until a confirm arrives, whatever it thinks
+   * of the new configuration.
    */
   onConfirm?: () => void;
   confirming?: boolean;
@@ -213,6 +243,16 @@ export function RollbackBanner({
                 ? `If you did not confirm inside the window, the previous ${state.subject} is already back. Refresh the status to see which set is live.`
                 : `If the new ${state.subject} did not hold, the host has already reverted it. Refresh to see what is live.`}
           </p>
+
+          {open && state.changes && state.changes.length > 0 && (
+            <ul aria-label="Waiting to be confirmed" className="mt-2 flex flex-col gap-0.5">
+              {state.changes.map((change, index) => (
+                <li key={`${index}:${change}`} className="kn-mono text-xs text-[var(--kn-text-2)]">
+                  {change}
+                </li>
+              ))}
+            </ul>
+          )}
 
           {open && onConfirm && (
             <div className="mt-3 flex flex-wrap items-center gap-2">

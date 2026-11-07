@@ -1,7 +1,14 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { and, desc, eq, sql, type Database } from "@kaname/db";
 import { roles, servers, settings, setupTokens, userRoles, users } from "@kaname/db/schema";
-import type { SetupHealth, SetupState, SetupStep } from "@kaname/contract";
+import {
+  OPTIONAL_SETUP_STEPS,
+  type OptionalSetupStep,
+  type SetupHealth,
+  type SetupState,
+  type SetupStep,
+  type SetupStepOutcome,
+} from "@kaname/contract";
 import { constantTimeEquals, hashToken, hmac } from "../lib/crypto.js";
 import { ApiException } from "../lib/errors.js";
 import { readCookie, secureCookie } from "../http/plugin.js";
@@ -52,8 +59,22 @@ export interface SetupProgress {
    */
   instance_named: boolean;
   server_ack: boolean;
+  /**
+   * The single "preferences" screen of earlier releases. Kept so a setup
+   * that got past it before the optional steps existed is not walked
+   * back through six screens it has, in effect, already answered.
+   */
   preferences_done: boolean;
-  /** A domain chosen on the preferences step, applied on the last one. */
+  /**
+   * The answer to each optional step. Recorded rather than derived: a
+   * skipped step leaves no trace to derive from, and "there happens to
+   * be a site already" is not the same as the operator having seen the
+   * screen.
+   */
+  outcomes: Partial<Record<OptionalSetupStep, SetupStepOutcome>>;
+  /** The Yunori deploy queued from the email step, until that step is answered. */
+  email_deploy: { job_id: string; server_id: string } | null;
+  /** A domain chosen on the address step, applied on the last one. */
   pending_domain: string | null;
   completed_at: string | null;
 }
@@ -63,6 +84,8 @@ const EMPTY_PROGRESS: SetupProgress = {
   instance_named: false,
   server_ack: false,
   preferences_done: false,
+  outcomes: {},
+  email_deploy: null,
   pending_domain: null,
   completed_at: null,
 };
@@ -71,7 +94,19 @@ export async function loadProgress(ctx: AppContext): Promise<SetupProgress> {
   const rows = await ctx.db.select().from(settings).where(eq(settings.key, "setup")).limit(1);
   const stored = rows[0]?.value;
   if (!stored || typeof stored !== "object") return { ...EMPTY_PROGRESS };
-  return { ...EMPTY_PROGRESS, ...(stored as Partial<SetupProgress>) };
+  const merged = { ...EMPTY_PROGRESS, ...(stored as Partial<SetupProgress>) };
+  return { ...merged, outcomes: { ...(merged.outcomes ?? {}) } };
+}
+
+/** Records one optional step's answer without disturbing the others. */
+export async function recordOutcome(
+  ctx: AppContext,
+  step: OptionalSetupStep,
+  outcome: SetupStepOutcome,
+  patch: Partial<SetupProgress> = {},
+): Promise<SetupProgress> {
+  const current = await loadProgress(ctx);
+  return saveProgress(ctx, { ...patch, outcomes: { ...current.outcomes, [step]: outcome } });
 }
 
 export async function saveProgress(
@@ -126,7 +161,15 @@ export async function readSetupState(
     token_required: !owner,
     token_live: !owner && pendingToken,
     pending_domain: progress.pending_domain,
+    outcomes: Object.fromEntries(
+      OPTIONAL_SETUP_STEPS.map((step) => [step, outcomeOf(progress, step)]),
+    ) as SetupState["outcomes"],
+    email_deploy: progress.email_deploy,
   };
+}
+
+function outcomeOf(progress: SetupProgress, step: OptionalSetupStep): SetupStepOutcome | null {
+  return progress.outcomes[step] ?? null;
 }
 
 /** The first step that is not yet satisfied. */
@@ -143,7 +186,13 @@ function deriveStep(
   // existed; the flag is what stops "Kaname" looping the step.
   if (!progress.instance_named && !instanceName) return "instance";
   if (!progress.server_ack || counts.registered === 0) return "server";
-  if (!progress.preferences_done) return "preferences";
+  // Everything after the server is optional: the first one without an
+  // answer is where a resumed session lands. A setup that finished the
+  // old single preferences screen has answered all of them.
+  if (progress.preferences_done) return "done";
+  for (const step of OPTIONAL_SETUP_STEPS) {
+    if (!progress.outcomes[step]) return step;
+  }
   return "done";
 }
 
@@ -255,7 +304,9 @@ export async function claimSetupToken(
 
   const row = rows[0];
   if (!row || row.usedAt) throw badSetupToken();
-  if (row.expiresAt && row.expiresAt.getTime() < Date.now()) throw expiredSetupToken();
+  // The auth clock rather than Date.now(), so the 24-hour expiry can be
+  // tested by moving the clock instead of waiting a day (expiry.test.ts).
+  if (row.expiresAt && row.expiresAt.getTime() <= ctx.auth.now()) throw expiredSetupToken();
 
   // Not burned here. The token stands in for "I am the person who ran
   // the installer" until an owner exists, and retiring it on the first

@@ -251,7 +251,9 @@ trade.
 **Decision.** `POST /terminal/sessions` checks `terminal.session:exec` for the target server and
 returns a single-use, 30-second, IP-bound ticket. The WebSocket upgrade accepts only that
 ticket. Every session writes an audit event on open and close, and the full I/O stream is
-recorded to `job_logs`-style storage with a retention setting.
+recorded to `job_logs`-style storage with a retention setting. A container's Exec tab is the same
+path: the request names a `container_id`, the socket opens `container.exec` instead of
+`pty.open`, and the ticket additionally needs `infra.containers:exec` on that host.
 
 **Why.** The terminal is the one place where the "no shell strings" rule cannot hold, so it gets
 compensating controls instead: it is explicitly a separate permission (a Developer role can
@@ -331,9 +333,10 @@ of thing that looks like "PGlite is broken on Windows" the second time someone h
 
 ## KD-018 — The method registry is contract-checked at build time, but structs are not generated
 
-**Decision.** `packages/contract` emits `agent/internal/rpc/methods.json`; the Go agent embeds
-it and a test asserts the live registry matches — same method names, same stream modes, same
-capability requirements, same protocol constants. Go structs stay hand-written.
+**Decision.** `packages/contract` emits `agent/methods.json`; the agent embeds it and a test
+asserts the live registry matches — same method names, same stream modes, same capability
+requirements, same protocol constants. Payload structs stay hand-written (Go then, Rust now:
+KD-033).
 
 **Why not full codegen.** KD-007 anticipated generating Go structs from JSON Schema. Having
 built both sides, the payoff was not there: the payload structs are stable and read better
@@ -632,3 +635,152 @@ channel, shown in Settings — it never throws into the publisher and never disa
 did for release manifests and ACME. `nodemailer` is a new runtime dependency, kept external in the
 bundle like the other native-adjacent ones; its `sendmail` transport, which spawns a process, is
 not used and must not be — the control plane still has no `child_process`.
+
+---
+
+## KD-033 — The agent is Rust; KD-001 is superseded
+
+**Decision.** `kanamed` is a single statically-linked Rust binary (musl, cross-linked with zig,
+the same recipe Yunori Mail Server ships with). The Go module is gone. The wire protocol, the
+state directory, enrollment, the asset names and the systemd unit are unchanged, so a fleet
+updates in place.
+
+**Alternatives.** Keep Go (KD-001 still argued for it on velocity); rewrite only the mail
+provider in Rust as a sidecar and keep the Go agent for everything else.
+
+**Why.** FutureForge's infrastructure products are converging on one language: Yunori Mail Server
+is Rust, and the mail module now drives it (KD-034). One toolchain, one set of release recipes,
+one static-binary story, and the parsers that read Yunori's CLI can be shared verbatim between
+the two products. Rust also closes the class of bugs the Go agent had to guard against by
+convention: a stream that writes after cancellation, a child process that outlives its request,
+a path check skipped on one verb. Ownership and `Drop` make those structural. The surface is the
+same 109 verbs behind the same conformance test, so the port was a translation, not a redesign.
+
+**What was kept, deliberately.** The provider seam (KD-010) with a Linux and a simulated
+implementation; argv-only execution with no shell anywhere; the path guard that denies the
+agent's own key material; the 32-chunk stream window and half-window acks; the raw `r||s` P-256
+challenge signature WebCrypto verifies; the 6-hour deadline clamp; the `unsupported`-before-exec
+capability gate. The sidecar alternative lost because it would have left two agents on one host
+sharing one identity.
+
+**Cost accepted.** A longer compile than `go build`, and a cross-link step for arm64. Both are
+confined to CI and the control-plane image.
+
+---
+
+## KD-034 — Mail is Yunori Mail Server; Kaname does not own a mail stack
+
+**Decision.** Kaname no longer writes Postfix or Dovecot configuration. A managed host runs
+Yunori Mail Server (`yunori-mail`, which drives an unmodified Stalwart), and Kaname deploys it,
+shows what it reports and sends it the mutations an operator asks for. The host advertises the
+`yunori` capability when the binary is present; the `mail`, `postfix` and `dovecot` capabilities
+are gone. The agent talks to Yunori through exactly one interface: the `yunori-mail` CLI with an
+argv slice, which is the root interface that product sanctions and the one place its invariants
+(vault-sealed secrets, hash-chained audit, DNS verified against public resolvers) are enforced.
+The agent never reads Yunori's database or vault and never talks to Stalwart's API.
+
+**Alternatives.** Keep the Postfix/Dovecot map-file provider; talk to Stalwart's JMAP management
+API directly with the admin credential from Yunori's vault; add a loopback machine API to
+`yunori-mail` first.
+
+**Why.** The map-file provider was Kaname re-implementing a mail server's control plane
+(deliverability checks, DKIM, queue parsing) that Yunori already does better, from the host's
+vantage point, with verification instead of self-attestation. Reaching into the vault would make
+Kaname a second administrator the audit ledger does not know about. A machine API in Yunori is
+the right long-term answer and is the follow-up this decision leaves open: until then the CLI's
+`--json` output is used where it exists (`preflight`, `doctor`) and its list formats are parsed
+with tests pinned to the exact print statements of the version this ships against.
+
+**What changed in the model.** Forwarders are gone (Yunori aliases deliver to a mailbox on the
+same server; an external destination is a client-side rule, not a transport one). Mail DNS
+authentication is Yunori's record checklist, not Kaname's checker, so `mail_auth_checks` and the
+checker service were deleted rather than adapted. Mail logs are a live journal tail, not rows.
+Deploying Yunori is a job that downloads a release archive the control plane resolved from the
+Yunori feed, verifies its SHA-256 on the host, installs the binary and runs the unattended
+installer; the one-time console setup link it prints is handed to the operator once and redacted
+from the job log.
+
+---
+
+## KD-035 — A mailbox credential crosses one response and is never persisted
+
+**Decision.** Creating a mailbox and resetting its password are the two host-touching mutations
+that are **not** jobs. The route calls the agent synchronously, returns the generated password in
+that one HTTPS response, and never writes it anywhere: not the row, not the job table, not the
+audit record, not the log.
+
+**Alternatives.** A job whose result carries the password; the operator chooses the password in
+the form (the Postfix-era design); an invite link.
+
+**Why.** Yunori generates mailbox passwords on the host and prints each once; there is no CLI path
+for a chosen password, and that is a good property, not a gap. A job result is a persisted row
+that outlives the moment, visible to anyone who can read jobs, which is a wider audience than the
+person who created the mailbox. KD-008 exists so that a host mutation survives a control-plane
+restart and reports honestly; a credential handoff that must not survive anything is the one
+mutation where that guarantee is the wrong one. Invite links are Yunori's own self-service portal
+and remain available there.
+
+**The same rule for deployment.** The console setup link and the first mailbox's password from
+a Yunori deployment live in an in-memory, once-only, fifteen-minute handoff in the control plane
+and are redacted from the job log; the job log says where to find them.
+
+---
+
+## KD-036 — The panel wears the FF Studios design, with an Apple UI layer
+
+**Decision.** The token sheet carries the FutureForge Studios design: the ink canvas
+(`#0A0A0C`, surfaces `#131316` / `#1A1A1F`, recess `#060608`), white-alpha hairlines, three
+text tiers, and brand purple `#7A4FF4` as the only accent. Semantic colour comes from its
+secondary hues (teal, yellow, red; info is a derived blue). Dark is the default and the design
+target; light is built from the ffstudios paper palette. On top sits an Apple-style UI layer:
+continuous rounded corners (6 / 8 / 10 / 14 / 16px), translucent vibrancy materials on the
+sidebar and top bar, soft layered shadows on floating surfaces and cards, the
+`cubic-bezier(0.32, 0.72, 0, 1)` ease at 140 / 240 / 360 ms, and a 3px focus halo. The
+interface face is SF Pro (Inter off Apple platforms), mono is SF Mono (JetBrains Mono
+elsewhere), and page titles are Geist Pixel Square at 26.32px. Every `--kn-*` token name is
+unchanged, so the component kit and the pages did not move. This replaces the earlier Yunori
+skin.
+
+**Why.** The owner asked for the FF Studios design with an Apple UI. FF Studios supplies
+identity (palette, accent discipline, the pixel display face); the Apple layer supplies the
+feel of a native operator tool. The design-system rules that matter for an infrastructure panel
+(status colour means status, two status axes never collapsed, monospace for anything you would
+grep, density) are unchanged.
+
+**Deliberate deviations from the ffstudios system.** Its "radius 0 everywhere, no shadows, no
+glows" rule is overridden by the Apple layer: corners are rounded, cards and overlays carry
+soft neutral shadows (still no coloured glows). Satoshi is not used, because it is licensed to
+the ffstudios site and this repository is public. Geist Pixel ships under the OFL in the
+`geist` npm package and is redistributable.
+
+**Cost accepted.** Light paper needs its own accent text value (`primary-ink #6A3EE8`), since
+ffstudios' accent-fg is 2.4:1 there. The light focus halo is 75% rather than 60% to stay above
+3:1. White on the dark danger fill is 3.2:1. Backdrop blur costs GPU time on the two chrome
+surfaces; `prefers-reduced-transparency` turns it off.
+
+---
+
+## KD-037 — A job's creator may cancel it; revoking is `infra.servers:delete`
+
+**Decision.** `POST /jobs/:id/cancel` is allowed for the user who created the job, and otherwise
+needs `infra.servers:write` on the job's server, as before. `POST /servers/:id/revoke` needs
+`infra.servers:delete`, the permission whose description already said it is what revokes. The job
+drawer only offers Cancel to someone the API would accept, and the revoke controls follow
+`infra.servers:delete`.
+
+**Alternatives.** Cancel with the permission of the job's own spec (`JOB_SPECS[type].permission`);
+leave cancel on `infra.servers:write`; change the description of `infra.servers:delete` instead
+of the code.
+
+**Why.** Cancelling never does more than the job would have done, so the person who started it
+needs no fresher grant than the one that enqueued it — and a Developer who could restart a unit
+but not take the restart back had the two verbs the wrong way round. The spec's permission was
+the closer runner-up, but one spec can serve several permission sets: every `db.*` spec names
+the MySQL set and the route overrides it for PostgreSQL, so a PostgreSQL-only role would have been
+refused its own job. Revoking cuts a host off until it is enrolled again; it belongs with removal,
+not with renaming, and the sentence an owner reads in the role editor must be the rule the API
+applies.
+
+**Cost accepted.** A user cannot cancel a colleague's job without `infra.servers:write`, even one
+of a kind they could start themselves. API keys have no creator identity on a job, so they cancel
+only with `infra.servers:write`.

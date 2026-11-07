@@ -6,6 +6,7 @@ import {
   certificateListQuery,
   certificateUrgency,
   idParam,
+  installCertificateInput,
   issueCertificateInput,
   renewCertificateInput,
   updateCertificateInput,
@@ -26,7 +27,9 @@ import {
   parseParams,
   parseQuery,
 } from "../http/plugin.js";
+import { seal } from "../lib/crypto.js";
 import { ApiException, conflict, notFound } from "../lib/errors.js";
+import { checkCertificatePair } from "../services/certificate-pem.js";
 import {
   combine,
   enqueueServerJob,
@@ -299,6 +302,129 @@ export async function certificateRoutes(app: FastifyInstance): Promise<void> {
     return accepted(reply, job);
   });
 
+  /* ----------------------------- install ---------------------------- */
+
+  /*
+   * A certificate issued somewhere else. The agent always had
+   * `cert.install`; nothing reached it. The pair is checked here first —
+   * parses, key matches, not expired, covers the domain — so a bad paste
+   * is a field message in the dialog, never a vhost nginx refuses to
+   * load. The private key is sealed with the master key for the one job
+   * that writes it to the host, redacted from that job when it ends, and
+   * never logged, audited or returned.
+   */
+  app.post("/certificates/install", async (req, reply) => {
+    const body = parseBody(req, installCertificateInput);
+    const server = await loadServer(req, body.server_id, "websites.ssl:write");
+    const domain = await loadDomainRow(req, body.domain_id, "websites.ssl:write");
+    const h = helpers(req);
+
+    const checked = checkCertificatePair(body.certificate_pem, body.key_pem, domain.name);
+
+    if (domain.siteId) {
+      const site = (
+        await req.ctx.db.select().from(sites).where(eq(sites.id, domain.siteId)).limit(1)
+      )[0];
+      if (site && site.serverId !== server.id) {
+        throw new ApiException(
+          "precondition_failed",
+          `${domain.name} is served by a different host than the one the certificate would be installed on.`,
+          {
+            detail: { site_server_id: site.serverId, certificate_server_id: server.id },
+            remediation: {
+              summary: `A certificate only serves ${domain.name} from the host whose vhost answers for it. Install it on the site's own server.`,
+              actions: [{ label: "Open the site", href: `/websites/sites/${site.id}` }],
+            },
+          },
+        );
+      }
+    }
+
+    const subject = domain.name;
+    const existing = (
+      await req.ctx.db
+        .select({ id: certificates.id, status: certificates.status })
+        .from(certificates)
+        .where(and(eq(certificates.serverId, server.id), eq(certificates.subject, subject)))
+        .limit(1)
+    )[0];
+    if (existing?.status === "pending") {
+      throw conflict(`A certificate job for ${subject} is already running on ${server.name}.`, {
+        summary: "Wait for it to finish, then install this one in its place.",
+        actions: [{ label: "Open it", href: `/websites/ssl/${existing.id}` }],
+      });
+    }
+
+    // One certificate per name per host: an installed one replaces what
+    // was there. Certbot cannot renew it, so auto-renew is off.
+    const values = {
+      domainId: domain.id,
+      serverId: server.id,
+      subject,
+      sans: checked.sans.filter((name) => name !== subject),
+      issuer: checked.issuer,
+      keyType: checked.keyType,
+      status: "pending" as const,
+      issuedAt: checked.notBefore,
+      expiresAt: checked.notAfter,
+      autoRenew: false,
+      lastError: null,
+      updatedAt: new Date(),
+    };
+    const [row] = existing
+      ? await req.ctx.db
+          .update(certificates)
+          .set(values)
+          .where(eq(certificates.id, existing.id))
+          .returning()
+      : await req.ctx.db.insert(certificates).values(values).returning();
+
+    const job = await enqueueServerJob(req, {
+      type: "cert.install",
+      server,
+      targetType: "certificate",
+      targetId: row!.id,
+      targetLabel: subject,
+      params: {
+        certificate_id: row!.id,
+        domain_id: domain.id,
+        subject,
+        certificate_pem: checked.chainPem,
+        key_sealed: seal(body.key_pem, req.ctx.config.masterKey),
+      },
+    });
+
+    await req.ctx.db
+      .update(certificates)
+      .set({ lastRenewalJobId: job.id, updatedAt: new Date() })
+      .where(eq(certificates.id, row!.id));
+
+    await req.ctx.audit.record({
+      actor: h.actor(),
+      action: "certificate.install_requested",
+      targetType: "certificate",
+      targetId: row!.id,
+      targetLabel: subject,
+      serverId: server.id,
+      jobId: job.id,
+      after: {
+        subject,
+        sans: values.sans,
+        issuer: checked.issuer,
+        expires_at: checked.notAfter.toISOString(),
+        replaced: Boolean(existing),
+      },
+    });
+    req.ctx.events.publish(
+      "certificates",
+      "certificate.install_requested",
+      { certificate_id: row!.id, subject, job_id: job.id },
+      server.id,
+    );
+
+    return accepted(reply, job);
+  });
+
   /* ----------------------------- renew ------------------------------ */
 
   app.post("/certificates/:id/renew", async (req, reply) => {
@@ -314,6 +440,21 @@ export async function certificateRoutes(app: FastifyInstance): Promise<void> {
           "A revoked certificate is dead to every client that checks OCSP. Issue a new one for the same name.",
         actions: [{ label: "Issue a certificate", action: "certificates.issue" }],
       });
+    }
+    // An installed certificate came from another CA; certbot has no
+    // lineage for it, so a renewal could only fail on the host.
+    if (cert.installedPath?.startsWith("/etc/ssl/kaname/")) {
+      throw new ApiException(
+        "precondition_failed",
+        `${cert.subject} was installed from a certificate issued elsewhere, so Kaname cannot renew it.`,
+        {
+          remediation: {
+            summary:
+              "Renew it with the certificate authority that issued it and install the new chain and key, or issue a Let's Encrypt certificate in its place.",
+            actions: [{ label: "Install certificate", action: "certificates.install" }],
+          },
+        },
+      );
     }
     if (cert.status === "none" || !cert.issuedAt) {
       throw new ApiException(
@@ -335,7 +476,13 @@ export async function certificateRoutes(app: FastifyInstance): Promise<void> {
       targetType: "certificate",
       targetId: id,
       targetLabel: cert.subject,
-      params: { certificate_id: id, subject: cert.subject, force: body.force },
+      // The row is marked pending below; a failed renewal restores this.
+      params: {
+        certificate_id: id,
+        subject: cert.subject,
+        force: body.force,
+        previous_status: cert.status,
+      },
     });
 
     await req.ctx.db
