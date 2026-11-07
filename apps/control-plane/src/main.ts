@@ -6,6 +6,7 @@ import { createContext } from "./context.js";
 import { buildServer } from "./server.js";
 import { Reconciler } from "./services/reconciler.js";
 import { AlertEvaluator } from "./services/alerts.js";
+import { BackupScheduler } from "./services/backup-scheduler.js";
 import { registerJobHandlers } from "./jobs/handlers.js";
 import { bootstrap } from "./bootstrap.js";
 
@@ -59,6 +60,11 @@ async function main(): Promise<void> {
   const alerts = new AlertEvaluator(ctx);
   alerts.start();
 
+  // Likewise backup schedules: without this a cron was only a label and
+  // nothing but "Run now" ever backed anything up.
+  const backupScheduler = new BackupScheduler(ctx);
+  backupScheduler.start();
+
   const app = await buildServer(ctx);
   await app.listen({ port: config.PORT, host: config.HOST });
   log.info({ port: config.PORT }, "control plane listening");
@@ -85,6 +91,7 @@ async function main(): Promise<void> {
 
     reconciler.stop();
     alerts.stop();
+    backupScheduler.stop();
     ctx.updates.stop();
     ctx.notifications.stop();
     // Jobs first, while their agent sockets are still up: a handler that

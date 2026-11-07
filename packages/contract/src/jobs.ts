@@ -74,10 +74,13 @@ export const JOB_TYPES = [
   "site.update",
   "site.remove",
   "site.reload",
+  "site.suspend",
+  "site.resume",
   // certificates
   "cert.issue",
   "cert.renew",
   "cert.revoke",
+  "cert.install",
   // dns
   "dns.sync",
   "dns.apply",
@@ -387,6 +390,20 @@ export const JOB_SPECS: Record<JobType, JobTypeSpec> = {
     maxAttempts: 2,
     timeoutMs: 60 * S,
   },
+  "site.suspend": {
+    label: "Suspend site",
+    permission: "websites.sites:write",
+    idempotent: true,
+    maxAttempts: 1,
+    timeoutMs: 2 * M,
+  },
+  "site.resume": {
+    label: "Resume site",
+    permission: "websites.sites:write",
+    idempotent: true,
+    maxAttempts: 1,
+    timeoutMs: 2 * M,
+  },
 
   "cert.issue": {
     label: "Issue certificate",
@@ -409,6 +426,15 @@ export const JOB_SPECS: Record<JobType, JobTypeSpec> = {
     maxAttempts: 1,
     timeoutMs: 5 * M,
     destructive: true,
+  },
+  "cert.install": {
+    label: "Install certificate",
+    permission: "websites.ssl:write",
+    idempotent: true,
+    // One attempt: the sealed private key rides the job params only until
+    // the job can no longer run, and a retry would keep it there longer.
+    maxAttempts: 1,
+    timeoutMs: 2 * M,
   },
 
   "dns.sync": {

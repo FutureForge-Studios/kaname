@@ -81,13 +81,26 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const stored = user?.passwordHash ?? (await decoyHash(req.ctx.auth));
     const correct = await req.ctx.auth.verifyPassword(stored, body.password);
 
+    /*
+     * An invited account that has not accepted yet has no password, so no
+     * password can be right for it. Telling that caller "this invitation
+     * hasn't been accepted yet" would answer, for any address a stranger
+     * cares to type, whether it has been invited here — the same
+     * enumeration the decoy hash above exists to prevent. So it gets the
+     * generic answer, at the same cost as any other wrong password. The
+     * specific message is reserved for the one case where it reveals
+     * nothing new: the caller presented the account's correct password
+     * (an account an owner moved back to `invited`), so they already know
+     * it exists. See `accountNotActive` below.
+     */
     if (!user || !user.passwordHash || !correct) {
-      await recordFailure(req, email, user?.id ?? null, user ? "bad_password" : "unknown_email");
-      if (user && lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold, lockout.lockout_minutes);
+      const reason = !user ? "unknown_email" : !user.passwordHash ? "invite_not_accepted" : "bad_password";
+      await recordFailure(req, email, user?.id ?? null, reason);
+      if (user && lockout.enabled) await noteFailure(req, user.id, lockout);
       throw invalidCredentials();
     }
 
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
+    if (user.lockedUntil && user.lockedUntil.getTime() > req.ctx.auth.now()) {
       await recordFailure(req, email, user.id, "locked");
       throw accountLocked(user.lockedUntil);
     }
@@ -114,7 +127,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (user.totpEnabled && body.totp_code) {
       if (!(await req.ctx.auth.verifyTotp(user.id, body.totp_code))) {
         await recordFailure(req, email, user.id, "bad_totp");
-        if (lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold, lockout.lockout_minutes);
+        if (lockout.enabled) await noteFailure(req, user.id, lockout);
         throw invalidTotp();
       }
     }
@@ -134,12 +147,14 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     // indistinguishable from a forged one, and is treated as one.
     if (!user || !user.totpEnabled) throw expiredChallenge();
     if (user.status !== "active") throw accountNotActive(user.status);
-    if (user.lockedUntil && user.lockedUntil > new Date()) throw accountLocked(user.lockedUntil);
+    if (user.lockedUntil && user.lockedUntil.getTime() > req.ctx.auth.now()) {
+      throw accountLocked(user.lockedUntil);
+    }
 
     const lockout = (await loadSettings(req.ctx)).security.failed_login_lockout;
     if (!(await req.ctx.auth.verifyTotp(user.id, body.code))) {
       await recordFailure(req, user.email, user.id, "bad_totp");
-      if (lockout.enabled) await req.ctx.auth.noteFailedLogin(user.id, lockout.threshold, lockout.lockout_minutes);
+      if (lockout.enabled) await noteFailure(req, user.id, lockout);
       throw invalidTotp();
     }
 
@@ -168,7 +183,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       !user ||
       user.status !== "invited" ||
       !user.inviteExpiresAt ||
-      user.inviteExpiresAt.getTime() < Date.now()
+      // The auth clock, so the seven-day expiry is testable (expiry.test.ts).
+      user.inviteExpiresAt.getTime() <= req.ctx.auth.now()
     ) {
       throw inviteNotValid();
     }
@@ -325,6 +341,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       .set({
         passwordHash: await req.ctx.auth.hashPassword(body.new_password),
         failedLoginCount: 0,
+        failedLoginAt: [],
         lockedUntil: null,
         updatedAt: new Date(),
       })
@@ -533,25 +550,52 @@ function clearSessionCookie(req: FastifyRequest, reply: FastifyReply): void {
  * ------------------------------------------------------------------ */
 
 function issueChallenge(req: FastifyRequest, userId: string, remember: boolean): string {
-  const payload = `${userId}.${Date.now() + CHALLENGE_TTL_MS}.${remember ? 1 : 0}.${generateToken()}`;
-  const body = Buffer.from(payload, "utf8").toString("base64url");
-  return `${body}.${hmac(req.ctx.config.masterKey, body, req.ip ?? "")}`;
+  return signChallenge(req.ctx.config.masterKey, req.ip ?? "", userId, remember, req.ctx.auth.now());
 }
 
 function readChallenge(
   req: FastifyRequest,
   challenge: string,
 ): { userId: string; remember: boolean } {
+  const opened = openChallenge(req.ctx.config.masterKey, req.ip ?? "", challenge, req.ctx.auth.now());
+  if (!opened) throw expiredChallenge();
+  return opened;
+}
+
+/**
+ * The challenge itself, as pure functions of key, address and clock, so
+ * the five-minute expiry can be proven without waiting five minutes.
+ */
+export function signChallenge(
+  masterKey: Buffer,
+  ip: string,
+  userId: string,
+  remember: boolean,
+  now: number,
+): string {
+  const payload = `${userId}.${now + CHALLENGE_TTL_MS}.${remember ? 1 : 0}.${generateToken()}`;
+  const body = Buffer.from(payload, "utf8").toString("base64url");
+  return `${body}.${hmac(masterKey, body, ip)}`;
+}
+
+/** The challenge's contents, or null when it is forged, rebound or expired. */
+export function openChallenge(
+  masterKey: Buffer,
+  ip: string,
+  challenge: string,
+  now: number,
+): { userId: string; remember: boolean } | null {
   const [body, signature] = challenge.split(".");
-  if (!body || !signature) throw expiredChallenge();
-  if (!constantTimeEquals(signature, hmac(req.ctx.config.masterKey, body, req.ip ?? ""))) {
-    throw expiredChallenge();
-  }
+  if (!body || !signature) return null;
+  if (!constantTimeEquals(signature, hmac(masterKey, body, ip))) return null;
 
   const [userId, expiresAt, remember] = Buffer.from(body, "base64url").toString("utf8").split(".");
-  if (!userId || !expiresAt || Number(expiresAt) < Date.now()) throw expiredChallenge();
+  // Expired at the instant itself, matching the other expiries.
+  if (!userId || !expiresAt || Number(expiresAt) <= now) return null;
   return { userId, remember: remember === "1" };
 }
+
+export { CHALLENGE_TTL_MS };
 
 /* ------------------------------------------------------------------ *
  * Helpers
@@ -569,6 +613,20 @@ function assertStrongPassword(
     fields: { [field]: assessment.problems.join(" ") },
     detail: { score: assessment.score, problems: assessment.problems },
   });
+}
+
+/** Counts one failed attempt against Settings > Security > Failed sign-in lockout. */
+async function noteFailure(
+  req: FastifyRequest,
+  userId: string,
+  lockout: { threshold: number; lockout_minutes: number; window_minutes: number },
+): Promise<void> {
+  await req.ctx.auth.noteFailedLogin(
+    userId,
+    lockout.threshold,
+    lockout.lockout_minutes,
+    lockout.window_minutes,
+  );
 }
 
 let decoy: Promise<string> | null = null;
@@ -649,14 +707,16 @@ const accountLocked = (until: Date) =>
   new ApiException("rate_limited", "This account is locked after too many failed sign-ins.", {
     detail: { locked_until: until.toISOString() },
     remediation: {
-      summary: `The lock lifts at ${until.toISOString()}. An owner can clear it sooner by reactivating the account in Administration.`,
+      // "Unlock", not "reactivate": a locked account is still active, and
+      // Unlock is the row action Administration > Users offers for it.
+      summary: `The lock lifts at ${until.toISOString()}. An owner can lift it sooner with Unlock in Administration > Users.`,
       actions: [{ label: "Administration", href: "/administration/users" }],
     },
   });
 
 const accountNotActive = (status: UserStatus) =>
   status === "invited"
-    ? new ApiException("forbidden", "This invitation has not been accepted yet.", {
+    ? new ApiException("forbidden", "This invitation hasn't been accepted yet.", {
         remediation: {
           summary:
             "Open the invitation link to set a password, or ask an owner to reissue the invite.",

@@ -174,7 +174,7 @@ test("the deploy form refuses bad input field by field, and the control plane re
   await firstMailbox.fill("a".repeat(65));
   await expect(deploy).toBeEnabled();
   await deploy.click();
-  await expect(dialog.getByText("String must contain at most 64 character(s)")).toBeVisible();
+  await expect(dialog.getByText("Must be 64 characters or fewer.")).toBeVisible();
   expect(await mailServerOn(await owner(), DIRECT_HOST)).toBeUndefined();
   await firstMailbox.fill("postbox");
 

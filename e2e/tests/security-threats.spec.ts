@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { owner, server, settled, type JobRow } from "../support/secops.js";
+import { owner, server, settled, startAgent, stopAgent, type JobRow } from "../support/secops.js";
 import { jobStatusPill } from "../support/ui.js";
 
 /* ------------------------------------------------------------------ *
@@ -15,6 +15,38 @@ interface Threat {
   source_ip: string;
   server_name: string;
   disposition: string;
+  disposition_error: string | null;
+}
+
+interface BanRow {
+  id: string;
+  cidr: string;
+  server_id: string | null;
+  server_name: string | null;
+  reason: string;
+  expires_at: string | null;
+}
+
+async function bans(query = ""): Promise<BanRow[]> {
+  return (await owner()).get<BanRow[]>(`/threats/bans?per_page=100${query}`);
+}
+
+/** Waits for the agent's own feed to have put an observed source on a host. */
+async function observedOn(serverId: string): Promise<Threat> {
+  let found: Threat | undefined;
+  await expect
+    .poll(
+      async () => {
+        const rows = await (await owner()).get<Threat[]>(
+          `/threats?server_id=${serverId}&disposition=observed&per_page=50`,
+        );
+        found = rows[0];
+        return Boolean(found);
+      },
+      { timeout: 120_000, message: "the simulated agent never reported a threat on this host" },
+    )
+    .toBe(true);
+  return found!;
 }
 
 async function threatRow(page: Page, ip: string) {
@@ -108,10 +140,10 @@ test.describe("threat protection", () => {
     await expect(row).toContainText("banned");
 
     const api = await owner();
-    // The disposition flips when the ban is requested, so the job is what
-    // proves the host did it.
-    const bans = await api.get<JobRow[]>(`/jobs?server_id=${forge.id}&type=fw.ban&per_page=1`);
-    const banned = await settled(bans[0]!.id);
+    // "banned" is only written by the succeeded job, so the job and the
+    // disposition must agree.
+    const banJobs = await api.get<JobRow[]>(`/jobs?server_id=${forge.id}&type=fw.ban&per_page=1`);
+    const banned = await settled(banJobs[0]!.id);
     expect(banned.status, JSON.stringify(banned.error)).toBe("succeeded");
 
     await rowAction(page, row, "Unban this address");
@@ -140,6 +172,8 @@ test.describe("threat protection", () => {
     expect(fan).toHaveLength(4);
     for (const job of fan) expect((await settled(job.id)).status).toBe("succeeded");
     await expect.poll(() => disposition(ip, "mail-01")).toBe("banned");
+    /* One active ban per host, as the Bans view will list them. */
+    expect((await bans(`&q=${ip}`)).filter((b) => b.cidr === `${ip}/32`)).toHaveLength(4);
 
     /* And back, fleet-wide. */
     const unban = await api.call<{ jobs: JobRow[] }>("POST", `/threats/${ip}/unban`, {});
@@ -149,6 +183,145 @@ test.describe("threat protection", () => {
       const done = await settled(job.id);
       expect(done.status, JSON.stringify(done.error)).toBe("succeeded");
     }
+    expect((await bans(`&q=${ip}`)).filter((b) => b.cidr === `${ip}/32`)).toHaveLength(0);
+  });
+
+  test("a ban is pending while its job waits for the host, and banned once it has run", async ({ page }) => {
+    const db = await server("db-01");
+    const target = await observedOn(db.id);
+    const ip = target.source_ip;
+    const api = await owner();
+
+    await stopAgent("db-01");
+    try {
+      await page.goto(`/security/threats?server_id=${db.id}`);
+      const row = await threatRow(page, ip);
+      await rowAction(page, row, "Ban this address");
+      const dialog = page.getByRole("dialog", { name: `Ban ${ip}` });
+      await dialog.getByLabel("Reason").fill("e2e: pending while queued");
+      await dialog.getByRole("button", { name: "Ban" }).click();
+      await expect(page.getByRole("dialog", { name: "Job activity" })).toBeVisible();
+      await page.keyboard.press("Escape");
+
+      /* The host has not done anything yet, and the row says exactly that. */
+      const jobs = await api.get<JobRow[]>(`/jobs?server_id=${db.id}&type=fw.ban&per_page=1&sort=created_at&order=desc`);
+      await expect
+        .poll(async () => {
+          const job = await api.get<JobRow>(`/jobs/${jobs[0]!.id}`);
+          return `${job.status}:${job.blocked_reason ?? ""}`;
+        })
+        .toBe("queued:agent_offline");
+      expect(await disposition(ip, "db-01")).toBe("pending");
+      await expect(await threatRow(page, ip)).toContainText("pending");
+      /* A pending ban is not an active one. */
+      expect((await bans(`&server_id=${db.id}`)).map((b) => b.cidr)).not.toContain(`${ip}/32`);
+    } finally {
+      await startAgent("db-01");
+    }
+
+    const jobs = await api.get<JobRow[]>(`/jobs?server_id=${db.id}&type=fw.ban&per_page=1&sort=created_at&order=desc`);
+    expect((await settled(jobs[0]!.id, 90_000)).status).toBe("succeeded");
+    await expect.poll(() => disposition(ip, "db-01")).toBe("banned");
+    expect((await bans(`&server_id=${db.id}`)).map((b) => b.cidr)).toContain(`${ip}/32`);
+
+    const unban = await api.call<{ jobs: JobRow[] }>("POST", `/threats/${ip}/unban`, { server_id: db.id });
+    expect((await settled(unban.data.jobs[0]!.id)).status).toBe("succeeded");
+    await expect.poll(() => disposition(ip, "db-01")).toBe("observed");
+  });
+
+  test("the Ban address dialog validates, and a ban the host refuses goes back with its reason", async ({
+    page,
+  }) => {
+    const db = await server("db-01");
+    const target = await observedOn(db.id);
+    await page.goto(`/security/threats?server_id=${db.id}`);
+    await page.getByRole("button", { name: "Ban address" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Ban an address" });
+    const submit = dialog.getByRole("button", { name: "Ban" });
+    const message = "must be an IP address like 203.0.113.7, or a CIDR range like 198.51.100.0/24";
+
+    for (const bad of ["not-an-ip", "10.0.0.0/33", "300.1.2.3", "203.0.113.7/", "2001:db8::/129"]) {
+      await dialog.getByLabel("Address or range").fill(bad);
+      await expect(dialog.getByText(message)).toBeVisible();
+      await expect(submit).toBeDisabled();
+    }
+    for (const good of ["203.0.113.9", "198.51.100.0/24", "2001:db8::1", "2001:db8::/32"]) {
+      await dialog.getByLabel("Address or range").fill(good);
+      await expect(dialog.getByText(message)).toBeHidden();
+    }
+    /* No reason, no ban: the reason is the audit record. */
+    await expect(submit).toBeDisabled();
+    await expect(dialog.getByLabel("Where")).toHaveValue(db.id);
+
+    /* Every address there is: the host refuses that outright. */
+    await dialog.getByLabel("Address or range").fill("0.0.0.0/0");
+    await dialog.getByLabel("Reason").fill("e2e: the host must refuse this");
+    await submit.click();
+    const drawer = page.getByRole("dialog", { name: "Job activity" });
+    await expect(drawer).toBeVisible();
+    await expect(jobStatusPill(drawer.getByRole("listitem").filter({ hasText: "0.0.0.0/0" }).first())).toHaveText(
+      "Failed",
+      { timeout: 60_000 },
+    );
+    await page.keyboard.press("Escape");
+
+    /* Every row it touched is back to what it was, saying why. */
+    await expect.poll(() => disposition(target.source_ip, "db-01")).toBe("observed");
+    const rows = await (await owner()).get<Threat[]>(`/threats?server_id=${db.id}&per_page=100`);
+    expect(rows.filter((r) => r.disposition === "pending")).toHaveLength(0);
+    const after = rows.find((r) => r.id === target.id)!;
+    expect(after.disposition_error).toMatch(/^0\.0\.0\.0\/0 covers every address/);
+    const row = await threatRow(page, target.source_ip);
+    await expect(row).toContainText("observed");
+    await expect(row).toContainText("Last change failed: 0.0.0.0/0 covers every address");
+    expect((await bans(`&server_id=${db.id}`)).map((b) => b.cidr)).not.toContain("0.0.0.0/0");
+  });
+
+  test("the Bans view lists what the hosts are blocking, and unbans from there", async ({ page }) => {
+    const edge = await server("edge-01");
+    const range = "192.0.2.128/25";
+
+    /* An address nothing has observed: only the dialog could ban it. */
+    await page.goto(`/security/threats?server_id=${edge.id}&panel=bans`);
+    await expect(page.getByRole("link", { name: "Bans" })).toHaveAttribute("aria-current", "page");
+    await page.getByRole("button", { name: "Ban address" }).first().click();
+    const dialog = page.getByRole("dialog", { name: "Ban an address" });
+    await dialog.getByLabel("Address or range").fill(range);
+    await dialog.getByLabel("Reason").fill("e2e: bans view");
+    await dialog.getByLabel("Duration").selectOption("0");
+    await dialog.getByRole("button", { name: "Ban" }).click();
+    const drawer = page.getByRole("dialog", { name: "Job activity" });
+    await expect(jobStatusPill(drawer.getByRole("listitem").filter({ hasText: range }).first())).toHaveText(
+      "Succeeded",
+      { timeout: 60_000 },
+    );
+    await page.keyboard.press("Escape");
+
+    const table = page.getByRole("table", { name: "Active bans" });
+    const row = table.locator("tbody tr").filter({ hasText: range });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("edge-01");
+    await expect(row).toContainText("e2e: bans view");
+    await expect(row).toContainText("until unbanned");
+
+    await row.getByRole("button", { name: "Row actions" }).focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "Unban", exact: true }).click();
+    const confirm = page.getByRole("dialog", { name: `Unban ${range}` });
+    await expect(confirm).toContainText("edge-01 stops blocking it");
+    await confirm.getByRole("button", { name: "Unban" }).click();
+    await expect(jobStatusPill(drawer.getByRole("listitem").filter({ hasText: range }).first())).toHaveText(
+      "Succeeded",
+      { timeout: 60_000 },
+    );
+    await page.keyboard.press("Escape");
+    await expect(row).toHaveCount(0);
+    expect((await bans(`&server_id=${edge.id}`)).map((b) => b.cidr)).not.toContain(range);
+
+    /* The tab back keeps the host. */
+    await page.getByRole("link", { name: "Events" }).click();
+    await expect(page).toHaveURL(new RegExp(`server_id=${edge.id}`));
+    await expect(page.getByRole("table", { name: "Threat events" })).toBeVisible();
   });
 
   test("a range can be banned and unbanned, and malformed targets are refused", async () => {

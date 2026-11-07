@@ -103,6 +103,12 @@ const schema = z.object({
   SESSION_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
 
   ACME_DIRECTORY_URL: z.string().default("https://acme-v02.api.letsencrypt.org/directory"),
+  /**
+   * Cloudflare's API root. Only ever changed to point the DNS provider at
+   * a stand-in (the e2e suite runs one on loopback); a production panel
+   * refuses anything but HTTPS, so a token can never be sent in clear.
+   */
+  KANAME_CLOUDFLARE_API_URL: z.string().url().default("https://api.cloudflare.com/client/v4"),
   ACME_EMAIL: z.string().optional(),
 
   /**
@@ -186,6 +192,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const raw = parsed.data;
   const isProduction = raw.KANAME_ENV === "production";
+  if (isProduction && !raw.KANAME_CLOUDFLARE_API_URL.startsWith("https://")) {
+    throw new Error("KANAME_CLOUDFLARE_API_URL must be https:// in production.");
+  }
 
   let masterKey: Buffer;
   if (raw.KANAME_MASTER_KEY) {

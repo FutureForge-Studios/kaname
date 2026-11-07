@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 use super::databases::find_database;
-use super::files::{clean_path, count_nodes, tree_size};
+use super::files::{MemFs, Node, clean_path, count_nodes, path_base, path_dir, path_join, tree_size};
 use super::state::{GIB, MIB, Sim, World, hash_string, mix, progress, stamp};
 use crate::providers::{
     BackupListParams, BackupPruneParams, BackupPruneResult, BackupRestoreParams, BackupRestoreResult,
@@ -78,6 +78,89 @@ fn find_snapshot(history: &[BackupSnapshotInfo], id: &str) -> Option<usize> {
         .position(|s| s.id == id || (!id.is_empty() && s.id.starts_with(id)))
 }
 
+/// What one restore wrote and what it left alone.
+#[derive(Default, Debug)]
+struct Merge {
+    written: i64,
+    kept: i64,
+    bytes: i64,
+}
+
+/// The part of a captured snapshot that `member` names: the captured
+/// root itself, or a subtree of it when `include` asked for less.
+fn snapshot_member(trees: &[(String, Node)], member: &str) -> Option<Node> {
+    for (root, tree) in trees {
+        if member == root {
+            return Some(tree.clone());
+        }
+        let prefix = if root == "/" {
+            "/".to_string()
+        } else {
+            format!("{root}/")
+        };
+        if let Some(rest) = member.strip_prefix(&prefix) {
+            let mut cur = tree;
+            for segment in rest.split('/').filter(|s| !s.is_empty()) {
+                cur = cur.children.get(segment)?;
+            }
+            return Some(cur.clone());
+        }
+    }
+    None
+}
+
+/// Writes `source` at `dest` the way `restic restore` does: directories
+/// are merged rather than replaced, files the host already has are only
+/// replaced when `overwrite` is set, and nothing extra is ever deleted.
+/// Ignoring `overwrite` here is what made the "safe" restore in the panel
+/// a lie: it said existing files were kept and then wrote over them.
+fn merge_into(fs: &mut MemFs, source: &Node, dest: &str, overwrite: bool, out: &mut Merge) {
+    let existing_kind = fs.lookup(dest, false).ok().map(|(n, _)| n.kind.clone());
+    if source.is_dir() {
+        match existing_kind.as_deref() {
+            Some("directory") | None => {}
+            Some(_) if !overwrite => {
+                out.kept += 1;
+                return;
+            }
+            Some(_) => {
+                fs.detach(dest);
+            }
+        }
+        let dir = fs.mkdir_all(dest);
+        dir.mode = source.mode.clone();
+        dir.owner = source.owner.clone();
+        dir.group = source.group.clone();
+        dir.uid = source.uid;
+        dir.gid = source.gid;
+        for (name, child) in &source.children {
+            merge_into(fs, child, &path_join(dest, name), overwrite, out);
+        }
+        return;
+    }
+
+    if existing_kind.is_some() && !overwrite {
+        out.kept += 1;
+        return;
+    }
+    let mut copy = source.clone();
+    copy.name = path_base(dest);
+    out.bytes += copy.size();
+    out.written += 1;
+    fs.mkdir_all(&path_dir(dest))
+        .children
+        .insert(path_base(dest), copy);
+}
+
+/// The restore's own marker obeys the same rule as every other file, but
+/// is not counted: it is the simulator's evidence, not snapshot content.
+fn write_marker(fs: &mut MemFs, path: &str, content: &str, overwrite: bool) {
+    if fs.lookup(path, false).is_ok() && !overwrite {
+        return;
+    }
+    fs.file(path, content);
+}
+
 pub struct SimBackups(pub Arc<Sim>);
 
 #[async_trait]
@@ -101,17 +184,22 @@ impl Backups for SimBackups {
 
         let mut files: i64 = 0;
         let mut bytes: i64 = 0;
+        let mut captured: Vec<(String, Node)> = Vec::new();
         for target in &paths {
             let cleaned = clean_path(target)?;
-            let (count, size) = {
-                let fs = self.0.fs.read();
-                let (n, _) = fs.lookup(&cleaned, true)?;
-                (count_nodes(n), tree_size(n))
-            };
             if excluded(&cleaned, &p.exclude) {
                 let _ = progress(ctx, &*s, Duration::ZERO, format!("skipping {cleaned} (excluded)")).await;
                 continue;
             }
+            // The tree is kept, not just counted: a restore has to be able
+            // to tell "this file was in the snapshot" from "this file is on
+            // the host now" for `overwrite` to mean anything.
+            let (count, size) = {
+                let fs = self.0.fs.read();
+                let (n, _) = fs.lookup(&cleaned, true)?;
+                captured.push((cleaned.clone(), n.clone()));
+                (count_nodes(n), tree_size(n))
+            };
             files += count;
             bytes += size;
             progress(
@@ -162,6 +250,7 @@ impl Backups for SimBackups {
             let mut history = snapshots_for(&self.0, &mut w, &p.repository);
             history.insert(0, snapshot.clone());
             w.snapshots.insert(p.repository.clone(), history);
+            w.snapshot_trees.insert(snapshot.id.clone(), captured);
         }
 
         let _ = progress(
@@ -221,11 +310,18 @@ impl Backups for SimBackups {
         )
         .await?;
 
-        let mut files: i64 = 0;
-        let mut bytes: i64 = 0;
-        let members = restoring.len().max(1) as i64;
-        let share = snapshot.file_count / members;
+        // What the snapshot holds for each member, resolved before the
+        // filesystem lock is taken (the world lock always comes first).
+        let trees = self
+            .0
+            .world
+            .lock()
+            .snapshot_trees
+            .get(&snapshot.id)
+            .cloned()
+            .unwrap_or_default();
 
+        let mut outcome = Merge::default();
         for member in &restoring {
             progress(
                 ctx,
@@ -234,27 +330,58 @@ impl Backups for SimBackups {
                 format!("restoring {member}"),
             )
             .await?;
-            files += share;
-            bytes += snapshot.bytes / members;
 
-            let mut fs = self.0.fs.write();
-            let destination = if &target == member {
-                target.clone()
-            } else {
-                format!("{target}{member}")
-            };
-            fs.mkdir_all(&destination);
-            fs.file(
-                &format!("{destination}/.restored-from"),
-                &format!("snapshot {} taken {}\n", snapshot.id, snapshot.taken_at),
-            );
+            let before = (outcome.written, outcome.kept);
+            {
+                let mut fs = self.0.fs.write();
+                let destination = if &target == member {
+                    target.clone()
+                } else {
+                    format!("{target}{member}")
+                };
+                // A snapshot taken by this agent restores what it captured.
+                // The seeded history captured nothing, so it restores what
+                // is on the host at that path now, which is the closest
+                // honest stand-in for "the files as they were".
+                let source = snapshot_member(&trees, member)
+                    .or_else(|| fs.lookup(member, true).ok().map(|(n, _)| n.clone()));
+                if let Some(source) = source {
+                    merge_into(&mut fs, &source, &destination, p.overwrite, &mut outcome);
+                } else {
+                    fs.mkdir_all(&destination);
+                }
+                let marker = format!("{destination}/.restored-from");
+                let content = format!("snapshot {} taken {}\n", snapshot.id, snapshot.taken_at);
+                write_marker(&mut fs, &marker, &content, p.overwrite);
+            }
+            let _ = progress(
+                ctx,
+                &*s,
+                Duration::ZERO,
+                format!(
+                    "{member}: {} written, {} already present and kept",
+                    outcome.written - before.0,
+                    outcome.kept - before.1
+                ),
+            )
+            .await;
         }
 
+        let files = outcome.written;
+        let bytes = outcome.bytes;
+        let kept = if p.overwrite {
+            String::new()
+        } else {
+            format!(
+                "; {} existing file(s) kept because overwrite is off",
+                outcome.kept
+            )
+        };
         let _ = progress(
             ctx,
             &*s,
             Duration::ZERO,
-            format!("restored {files} files ({bytes} bytes) to {target}"),
+            format!("restored {files} files ({bytes} bytes) to {target}{kept}"),
         )
         .await;
         Ok(BackupRestoreResult {
@@ -339,6 +466,9 @@ impl Backups for SimBackups {
             let keep = keep.clamp(0, sorted.len() as i64) as usize;
             let removed = sorted.split_off(keep);
             w.snapshots.insert(p.repository.clone(), sorted);
+            for gone in &removed {
+                w.snapshot_trees.remove(&gone.id);
+            }
             removed
         };
 
@@ -368,5 +498,130 @@ impl Backups for SimBackups {
             removed: removed.len() as i64,
             reclaimed_bytes: reclaimed,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::providers::{Encoding, Options, Stream, StreamRef};
+
+    /// Swallows the narration; these tests read the filesystem instead.
+    struct Quiet;
+
+    #[async_trait]
+    impl Stream for Quiet {
+        async fn send(&self, _data: &[u8], _enc: Encoding) -> PResult<()> {
+            Ok(())
+        }
+        async fn recv(&self) -> PResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+    }
+
+    fn quiet() -> StreamRef {
+        Arc::new(Quiet)
+    }
+
+    fn read(sim: &Sim, path: &str) -> String {
+        let fs = sim.fs.read();
+        let (node, _) = fs.lookup(path, true).expect(path);
+        String::from_utf8_lossy(&node.data).into_owned()
+    }
+
+    fn restore(snapshot_id: &str, target: &str, overwrite: bool) -> BackupRestoreParams {
+        BackupRestoreParams {
+            repository: "/var/backups/test".into(),
+            password_ref: String::new(),
+            snapshot_id: snapshot_id.into(),
+            target: target.into(),
+            include: vec![],
+            overwrite,
+        }
+    }
+
+    /// packages/db/src/seed.ts (`simSnapshotId`) writes restore points
+    /// naming these exact ids for the seeded schedules; if this history
+    /// changes shape, the seed must change with it or every seeded point
+    /// fails to verify. The expected values are what seed.ts computes.
+    #[tokio::test]
+    async fn seeded_history_matches_the_demo_seed() {
+        for (host, index, expected) in [
+            ("forge-01", 0, "7785b13c60c5778f86d54ded9b8521aa"),
+            ("db-01", 3, "91408c93699609398cfc4f52b21831dc"),
+        ] {
+            let sim = Sim::new(Options {
+                agent_version: "0.1.0".into(),
+                state_dir: std::env::temp_dir().join(host),
+            });
+            let repository = format!("b2:futureforge-backups:kaname/{host}");
+            let history = snapshots_for(&sim, &mut sim.world.lock(), &repository);
+            assert_eq!(history[index].id, expected, "{host} snapshot {index}");
+        }
+    }
+
+    /// `overwrite: false` keeps what the host already has and only fills
+    /// the gaps; `overwrite: true` puts the snapshot's own bytes back, even
+    /// over a file edited after the snapshot was taken.
+    #[tokio::test]
+    async fn restore_honours_overwrite() {
+        let sim = Sim::new(Options {
+            agent_version: "0.1.0".into(),
+            state_dir: std::env::temp_dir().join("kaname-sim-test-restore-overwrite"),
+        });
+        let backups = SimBackups(sim.clone());
+        let ctx = Ctx::background();
+        let original = read(&sim, "/etc/hostname");
+
+        let snapshot = backups
+            .run(
+                &ctx,
+                BackupRunParams {
+                    repository: "/var/backups/test".into(),
+                    password_ref: String::new(),
+                    paths: vec!["/etc".into()],
+                    exclude: vec![],
+                    tags: vec![],
+                    databases: vec![],
+                },
+                quiet(),
+            )
+            .await
+            .expect("backup runs");
+
+        // After the snapshot: the live file changes, and the restore target
+        // already holds a file of its own at the same relative path.
+        sim.fs.write().file("/etc/hostname", "edited-after-backup\n");
+        sim.fs.write().file("/srv/r/etc/hostname", "already-here\n");
+
+        let kept = backups
+            .restore(&ctx, restore(&snapshot.id, "/srv/r", false), quiet())
+            .await
+            .expect("restore without overwrite");
+        assert_eq!(read(&sim, "/srv/r/etc/hostname"), "already-here\n");
+        assert!(kept.restored_files > 0, "the missing files are still written");
+        assert!(sim.fs.read().lookup("/srv/r/etc/os-release", true).is_ok());
+
+        let replaced = backups
+            .restore(&ctx, restore(&snapshot.id, "/srv/r", true), quiet())
+            .await
+            .expect("restore with overwrite");
+        assert_eq!(read(&sim, "/srv/r/etc/hostname"), original);
+        assert!(replaced.restored_files > kept.restored_files);
+
+        // In place: without overwrite the edit survives, with it the
+        // snapshot's content comes back rather than today's.
+        backups
+            .restore(&ctx, restore(&snapshot.id, "/etc", false), quiet())
+            .await
+            .expect("in-place restore without overwrite");
+        assert_eq!(read(&sim, "/etc/hostname"), "edited-after-backup\n");
+        backups
+            .restore(&ctx, restore(&snapshot.id, "/etc", true), quiet())
+            .await
+            .expect("in-place restore with overwrite");
+        assert_eq!(read(&sim, "/etc/hostname"), original);
     }
 }

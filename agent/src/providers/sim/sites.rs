@@ -7,13 +7,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use sha2::{Digest, Sha256};
+
 use super::certs;
-use super::files::{clean_path, path_base, tree_size, uid_for};
+use super::files::{MemFs, clean_path, path_base, tree_size, uid_for};
 use super::services::transition;
 use super::state::Sim;
 use crate::providers::{
-    Ctx, PResult, ProviderError, SiteConfigResult, SiteCreateParams, SiteInfo, SiteRemoveParams,
-    SiteTestConfigResult, SiteUpdateParams, Sites,
+    Ctx, PResult, ProviderError, SiteActivateParams, SiteActivateResult, SiteConfigResult, SiteCreateParams,
+    SiteInfo, SiteReleaseParams, SiteReleaseResult, SiteRemoveParams, SiteTestConfigResult, SiteUpdateParams,
+    Sites,
 };
 
 #[derive(Clone)]
@@ -466,11 +469,479 @@ impl Sites for SimSites {
     async fn reload(&self, _ctx: &Ctx) -> PResult<()> {
         transition(&self.0, "nginx.service", "reload").map(|_| ())
     }
+
+    /// A release is a real directory in the in-memory tree and `current` a
+    /// real symlink, so the file manager, a later rollback and the unit
+    /// tests all see the same thing a Linux host would. Git cannot be
+    /// reached from a simulated host, so a git release is a deterministic
+    /// stand-in tree that records the revision it represents; an upload
+    /// release copies what was staged (or what the site already serves).
+    async fn release(&self, _ctx: &Ctx, p: SiteReleaseParams) -> PResult<SiteReleaseResult> {
+        let root = clean_path(&p.root)?;
+        let releases = format!("{root}/releases");
+        let target = format!("{releases}/{}", p.release);
+        let mut log = Vec::new();
+
+        let commit_sha = if p.source == "git" {
+            Some(p.commit_sha.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| {
+                simulated_head(
+                    p.repo_url.as_deref().unwrap_or_default(),
+                    p.branch.as_deref().unwrap_or("main"),
+                    &p.release,
+                )
+            }))
+        } else {
+            None
+        };
+
+        let mut fs = self.0.fs.write();
+        if fs.lookup(&target, false).is_ok() {
+            return Err(ProviderError::conflict(format!("{target} already exists")));
+        }
+
+        match p.source.as_str() {
+            "git" => {
+                let repo = p.repo_url.clone().unwrap_or_default();
+                let branch = p.branch.clone().unwrap_or_else(|| "main".into());
+                let sha = commit_sha.clone().unwrap_or_default();
+                log.push(format!("cloning {repo} ({branch}) into {target}"));
+                fs.dir_as(&target, "0755", "www-data", 33);
+                fs.file_as(
+                    &format!("{target}/index.html"),
+                    &format!(
+                        "<!doctype html>\n<title>{}</title>\n<p>Release {} of {repo}@{sha}</p>\n",
+                        p.name, p.release
+                    ),
+                    "0644",
+                    "www-data",
+                    33,
+                );
+                log.push(format!("checked out {sha}"));
+            }
+            _ => {
+                let source = clean_path(p.upload_path.as_deref().unwrap_or(&format!("{root}/upload")))?;
+                let (node, _) = fs.lookup(&source, true).map_err(|_| {
+                    ProviderError::PreconditionFailed(format!("nothing has been uploaded to {source}"))
+                })?;
+                if !node.is_dir() {
+                    return Err(ProviderError::PreconditionFailed(format!(
+                        "{source} is not a directory"
+                    )));
+                }
+                let mut tree = node.clone();
+                // The webroot can be the deploy root itself, and copying
+                // `releases/` into a release would nest every previous
+                // release inside the new one.
+                for skip in ["releases", "current", ".kaname-release"] {
+                    tree.children.remove(skip);
+                }
+                tree.name = p.release.clone();
+                log.push(format!("copying {} entries from {source}", tree.children.len()));
+                self.0.account_bytes(tree_size(&tree));
+                fs.mkdir_all(&releases).children.insert(p.release.clone(), tree);
+            }
+        }
+        fs.file_as(
+            &format!("{target}/.kaname-release"),
+            &release_manifest(&p, commit_sha.as_deref()),
+            "0644",
+            "www-data",
+            33,
+        );
+
+        let current = format!("{root}/current");
+        swap_current(&mut fs, &current, &target)?;
+        log.push(format!("{current} -> {target}"));
+
+        let mut pruned = Vec::new();
+        for (path, bytes) in prune_releases(&mut fs, &releases, &target, p.keep.max(1) as usize) {
+            self.0.account_bytes(-bytes);
+            log.push(format!("pruned {path}"));
+            pruned.push(path);
+        }
+
+        Ok(SiteReleaseResult {
+            release_path: target,
+            current_path: current,
+            commit_sha,
+            pruned,
+            log,
+        })
+    }
+
+    async fn activate(&self, _ctx: &Ctx, p: SiteActivateParams) -> PResult<SiteActivateResult> {
+        let root = clean_path(&p.root)?;
+        let target = clean_path(&p.release_path)?;
+        let mut fs = self.0.fs.write();
+        match fs.lookup(&target, false) {
+            Ok((node, _)) if node.is_dir() => {}
+            _ => {
+                return Err(ProviderError::not_found(format!(
+                    "release directory {target} is not on this host"
+                )));
+            }
+        }
+        let current = format!("{root}/current");
+        let previous = swap_current(&mut fs, &current, &target)?;
+        Ok(SiteActivateResult {
+            current_path: current,
+            release_path: target,
+            previous,
+        })
+    }
+}
+
+/// What the simulated `git rev-parse HEAD` answers: stable for one
+/// repository, branch and release, different across releases.
+fn simulated_head(repo: &str, branch: &str, release: &str) -> String {
+    let digest = Sha256::digest(format!("{repo}\n{branch}\n{release}").as_bytes());
+    hex::encode(digest)[..40].to_string()
+}
+
+fn release_manifest(p: &SiteReleaseParams, sha: Option<&str>) -> String {
+    serde_json::json!({
+        "site": p.name,
+        "release": p.release,
+        "source": p.source,
+        "repo_url": p.repo_url,
+        "branch": p.branch,
+        "commit_sha": sha,
+    })
+    .to_string()
+}
+
+/// Points `current` at `target`, refusing to replace a real directory —
+/// that would be a site's only copy of its files, not a previous release.
+fn swap_current(fs: &mut MemFs, current: &str, target: &str) -> PResult<Option<String>> {
+    let previous = match fs.lookup(current, false) {
+        Ok((node, _)) if node.kind == "symlink" => Some(node.target.clone()),
+        Ok(_) => {
+            return Err(ProviderError::PreconditionFailed(format!(
+                "{current} is a real directory, not a release symlink; move it aside before deploying"
+            )));
+        }
+        Err(_) => None,
+    };
+    fs.link(current, target);
+    Ok(previous)
+}
+
+/// Keeps the newest `keep` releases (names sort by time) and never the
+/// one just written or the one `current` points at.
+fn prune_releases(fs: &mut MemFs, releases: &str, keep_path: &str, keep: usize) -> Vec<(String, i64)> {
+    let names: Vec<String> = match fs.lookup(releases, false) {
+        Ok((dir, _)) => dir.children.keys().cloned().collect(),
+        Err(_) => return Vec::new(),
+    };
+    let mut sorted = names;
+    sorted.sort();
+    sorted.reverse();
+    let mut pruned = Vec::new();
+    for name in sorted.into_iter().skip(keep) {
+        let path = format!("{releases}/{name}");
+        if path == keep_path {
+            continue;
+        }
+        if let Some(node) = fs.detach(&path) {
+            pruned.push((path, tree_size(&node)));
+        }
+    }
+    pruned.sort();
+    pruned
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::{
+        DnsPublishParams, DnsPublishedRecord, DnsResolveParams, FsWriteParams, Options, ProviderRef,
+    };
+
+    async fn open_sim(name: &str) -> ProviderRef {
+        super::super::open(Options {
+            agent_version: "0.1.0".into(),
+            state_dir: std::env::temp_dir().join(format!("kaname-sim-sites-{name}")),
+        })
+        .await
+        .expect("opening the simulator")
+    }
+
+    fn git_release(release: &str) -> SiteReleaseParams {
+        SiteReleaseParams {
+            name: "shop".into(),
+            root: "/var/www/shop".into(),
+            release: release.into(),
+            source: "git".into(),
+            repo_url: Some("https://github.com/acme/shop.git".into()),
+            branch: Some("main".into()),
+            keep: 5,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_deploy_writes_a_release_and_a_rollback_switches_back_to_it() {
+        let provider = open_sim("release").await;
+        let ctx = Ctx::background();
+        let sites = provider.sites();
+
+        let first = sites
+            .release(&ctx, git_release("20261101T000000Z-a"))
+            .await
+            .unwrap();
+        assert_eq!(first.release_path, "/var/www/shop/releases/20261101T000000Z-a");
+        assert_eq!(first.current_path, "/var/www/shop/current");
+        let sha = first.commit_sha.clone().unwrap();
+        assert_eq!(sha.len(), 40);
+
+        let second = sites
+            .release(&ctx, git_release("20261102T000000Z-b"))
+            .await
+            .unwrap();
+        assert_ne!(second.commit_sha, first.commit_sha);
+        let entry = provider
+            .files()
+            .stat(&ctx, "/var/www/shop/current")
+            .await
+            .unwrap();
+        assert_eq!(entry.kind, "symlink");
+        assert_eq!(entry.link_target.as_deref(), Some(second.release_path.as_str()));
+        // `current` resolves into the release, so whatever serves it sees it.
+        let manifest = provider
+            .files()
+            .read(
+                &ctx,
+                crate::providers::FsReadParams {
+                    path: "/var/www/shop/current/.kaname-release".into(),
+                    max_bytes: 4096,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            manifest.content.contains("20261102T000000Z-b"),
+            "{}",
+            manifest.content
+        );
+
+        let back = sites
+            .activate(
+                &ctx,
+                SiteActivateParams {
+                    name: "shop".into(),
+                    root: "/var/www/shop".into(),
+                    release_path: first.release_path.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(back.previous.as_deref(), Some(second.release_path.as_str()));
+        let entry = provider
+            .files()
+            .stat(&ctx, "/var/www/shop/current")
+            .await
+            .unwrap();
+        assert_eq!(entry.link_target.as_deref(), Some(first.release_path.as_str()));
+
+        // The same release twice is refused rather than overwritten.
+        assert!(matches!(
+            sites.release(&ctx, git_release("20261101T000000Z-a")).await,
+            Err(ProviderError::Conflict(_))
+        ));
+        provider.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_release_that_is_not_on_the_host_cannot_be_rolled_back_to() {
+        let provider = open_sim("release-missing").await;
+        let err = provider
+            .sites()
+            .activate(
+                &Ctx::background(),
+                SiteActivateParams {
+                    name: "shop".into(),
+                    root: "/var/www/shop".into(),
+                    release_path: "/var/www/shop/releases/gone".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, ProviderError::NotFound(ref m) if m.contains("is not on this host")),
+            "{err:?}"
+        );
+        provider.close().await;
+    }
+
+    #[tokio::test]
+    async fn an_upload_release_copies_the_webroot_and_retention_prunes_old_releases() {
+        let provider = open_sim("release-upload").await;
+        let ctx = Ctx::background();
+        provider
+            .files()
+            .write(
+                &ctx,
+                FsWriteParams {
+                    path: "/var/www/shop/index.html".into(),
+                    content: "<p>uploaded</p>".into(),
+                    encoding: "utf8".into(),
+                    create_parents: true,
+                    mode: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let mut upload = SiteReleaseParams {
+            name: "shop".into(),
+            root: "/var/www/shop".into(),
+            source: "upload".into(),
+            upload_path: Some("/var/www/shop".into()),
+            keep: 2,
+            ..Default::default()
+        };
+        let mut releases = Vec::new();
+        for n in 1..=3 {
+            upload.release = format!("2026110{n}T000000Z");
+            releases.push(provider.sites().release(&ctx, upload.clone()).await.unwrap());
+        }
+        assert_eq!(releases[0].commit_sha, None);
+        // The webroot is the deploy root here; earlier releases are not
+        // copied into the new one.
+        assert!(
+            provider
+                .files()
+                .stat(&ctx, "/var/www/shop/releases/20261103T000000Z/releases")
+                .await
+                .is_err()
+        );
+        assert!(
+            provider
+                .files()
+                .stat(&ctx, "/var/www/shop/releases/20261103T000000Z/index.html")
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            releases[2].pruned,
+            vec!["/var/www/shop/releases/20261101T000000Z".to_string()]
+        );
+
+        let nothing = SiteReleaseParams {
+            upload_path: Some("/var/www/nowhere".into()),
+            release: "x1".into(),
+            ..upload
+        };
+        assert!(matches!(
+            provider.sites().release(&ctx, nothing).await,
+            Err(ProviderError::PreconditionFailed(_))
+        ));
+        provider.close().await;
+    }
+
+    /// Suspending is `site.update` with `enabled: false`: the vhost leaves
+    /// sites-enabled, the config still tests clean, the site stays listed,
+    /// an unrelated update does not quietly resume it, and resuming links
+    /// it again.
+    #[tokio::test]
+    async fn a_suspended_site_stays_listed_disabled_until_it_is_resumed() {
+        let provider = open_sim("suspend").await;
+        let ctx = Ctx::background();
+        let sites = provider.sites();
+        let name = sites
+            .list(&ctx)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| s.enabled)
+            .unwrap()
+            .name;
+        let link = format!("/etc/nginx/sites-enabled/{name}");
+        let update = |enabled: Option<bool>| SiteUpdateParams {
+            name: name.clone(),
+            enabled,
+            ..Default::default()
+        };
+
+        sites.update(&ctx, update(Some(false))).await.unwrap();
+        assert!(provider.files().stat(&ctx, &link).await.is_err());
+        assert!(sites.test_config(&ctx).await.unwrap().valid);
+        let listed = sites.list(&ctx).await.unwrap();
+        assert!(!listed.iter().find(|s| s.name == name).unwrap().enabled);
+
+        sites
+            .update(
+                &ctx,
+                SiteUpdateParams {
+                    force_https: Some(true),
+                    ..update(None)
+                },
+            )
+            .await
+            .unwrap();
+        assert!(provider.files().stat(&ctx, &link).await.is_err());
+
+        sites.update(&ctx, update(Some(true))).await.unwrap();
+        assert!(provider.files().stat(&ctx, &link).await.is_ok());
+        assert!(
+            sites
+                .list(&ctx)
+                .await
+                .unwrap()
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap()
+                .enabled
+        );
+        provider.close().await;
+    }
+
+    /// The `_kaname` proof Kaname hands the operator resolves once it is
+    /// published, and stops resolving when the zone is withdrawn.
+    #[tokio::test]
+    async fn the_resolver_serves_what_kaname_published() {
+        let provider = open_sim("dns-publish").await;
+        let ctx = Ctx::background();
+        let query = || DnsResolveParams {
+            name: "_kaname.shop.example.".into(),
+            r#type: "txt".into(),
+            resolver: None,
+        };
+        assert!(provider.dns().resolve(&ctx, query()).await.unwrap().is_empty());
+
+        provider
+            .dns()
+            .publish(
+                &ctx,
+                DnsPublishParams {
+                    zone: "shop.example".into(),
+                    records: vec![DnsPublishedRecord {
+                        name: "_kaname.shop.example".into(),
+                        r#type: "TXT".into(),
+                        content: "kaname-verification=abc".into(),
+                        ttl: Some(300),
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        let answer = provider.dns().resolve(&ctx, query()).await.unwrap();
+        assert_eq!(answer[0].values, vec!["kaname-verification=abc".to_string()]);
+
+        provider
+            .dns()
+            .publish(
+                &ctx,
+                DnsPublishParams {
+                    zone: "shop.example".into(),
+                    records: vec![],
+                },
+            )
+            .await
+            .unwrap();
+        assert!(provider.dns().resolve(&ctx, query()).await.unwrap().is_empty());
+        provider.close().await;
+    }
 
     #[test]
     fn rendered_vhosts_pass_the_syntax_check() {

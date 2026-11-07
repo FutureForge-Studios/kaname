@@ -70,9 +70,9 @@ async function steps(): Promise<Map<string, boolean>> {
 describe("Getting Started", () => {
   it("reports every area to the owner, and nothing done on an empty instance", async () => {
     const state = await steps();
+    // "Every agent connected" waits for a first paired server (see below).
     expect([...state.keys()].sort()).toEqual(
       [
-        "agents_connected",
         "alert_rule_created",
         "backup_destination_added",
         "backup_succeeded",
@@ -91,6 +91,12 @@ describe("Getting Started", () => {
       ].sort(),
     );
     expect([...state.values()].every((done) => !done)).toBe(true);
+
+    // A server row whose agent never enrolled is not paired yet either.
+    await ctx.db.insert(servers).values({ name: "pending-01", hostname: "pending-01.example.test" });
+    const pending = await steps();
+    expect(pending.get("server_paired")).toBe(false);
+    expect(pending.has("agents_connected")).toBe(false);
   });
 
   it("follows the rows: a paired server, a domain, an installed mail server, a teammate", async () => {
@@ -111,6 +117,7 @@ describe("Getting Started", () => {
 
     let state = await steps();
     expect(state.get("server_paired")).toBe(true);
+    // Shown once a server is paired, and not before.
     expect(state.get("agents_connected")).toBe(true);
     expect(state.get("domain_added")).toBe(true);
     expect(state.get("mail_server_installed")).toBe(false);

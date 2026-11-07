@@ -541,6 +541,7 @@ export function deploymentToApi(row: DeploymentRow): Deployment {
     // job_id is nulled when the job row is pruned, which is precisely
     // when the log stops being available.
     log_available: d.jobId !== null,
+    release_path: d.releasePath,
     created_at: d.createdAt.toISOString(),
     updated_at: d.updatedAt.toISOString(),
   };

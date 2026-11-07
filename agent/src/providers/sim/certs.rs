@@ -258,17 +258,28 @@ impl Certs for SimCerts {
         Ok(())
     }
 
+    /// Records what the certificate itself says — its names, issuer and
+    /// validity — rather than inventing a year of validity, so `cert.list`
+    /// on a simulated host agrees with the PEM the operator pasted. The
+    /// control plane validated the pair before queueing; a chain that does
+    /// not even parse is still refused here, as on a real host.
     async fn install(&self, _ctx: &Ctx, p: CertInstallParams) -> PResult<CertInstallResult> {
-        let now = Utc::now();
         let dir = format!("/etc/ssl/kaname/{}", p.subject);
+        let parsed = read_leaf(&p.certificate_pem).map_err(|e| {
+            ProviderError::invalid(format!("certificate_pem is not a valid certificate: {e}"))
+        })?;
         let cert = Certificate {
             subject: p.subject.clone(),
-            sans: vec![p.subject.clone()],
-            issuer: "externally issued".into(),
-            not_before: now,
-            not_after: now + chrono::Duration::days(365),
+            sans: if parsed.sans.is_empty() {
+                vec![p.subject.clone()]
+            } else {
+                parsed.sans
+            },
+            issuer: parsed.issuer,
+            not_before: parsed.not_before,
+            not_after: parsed.not_after,
             path: format!("{dir}/fullchain.pem"),
-            key_type: "rsa".into(),
+            key_type: parsed.key_type,
         };
 
         {
@@ -289,5 +300,90 @@ impl Certs for SimCerts {
             fs.file_as(&format!("{dir}/privkey.pem"), &p.key_pem, "0600", "root", 0);
         }
         Ok(CertInstallResult { path: cert.path })
+    }
+}
+
+struct Leaf {
+    sans: Vec<String>,
+    issuer: String,
+    not_before: DateTime<Utc>,
+    not_after: DateTime<Utc>,
+    key_type: String,
+}
+
+/// The leaf of a PEM chain: the first CERTIFICATE block.
+fn read_leaf(pem: &str) -> Result<Leaf, String> {
+    use x509_parser::extensions::GeneralName;
+    use x509_parser::pem::Pem;
+    use x509_parser::prelude::FromDer;
+
+    let block = Pem::iter_from_buffer(pem.as_bytes())
+        .filter_map(Result::ok)
+        .find(|b| b.label == "CERTIFICATE")
+        .ok_or_else(|| "no CERTIFICATE block found".to_string())?;
+    let (_, leaf) =
+        x509_parser::certificate::X509Certificate::from_der(&block.contents).map_err(|e| e.to_string())?;
+    let mut sans = Vec::new();
+    if let Ok(Some(ext)) = leaf.subject_alternative_name() {
+        for name in &ext.value.general_names {
+            if let GeneralName::DNSName(dns) = name {
+                sans.push(dns.to_string());
+            }
+        }
+    }
+    let at = |t: i64| DateTime::<Utc>::from_timestamp(t, 0).unwrap_or_default();
+    let key_type = match leaf.public_key().algorithm.algorithm.to_id_string().as_str() {
+        "1.2.840.10045.2.1" => "ecdsa",
+        _ => "rsa",
+    };
+    Ok(Leaf {
+        sans,
+        issuer: leaf.issuer().to_string(),
+        not_before: at(leaf.validity().not_before.timestamp()),
+        not_after: at(leaf.validity().not_after.timestamp()),
+        key_type: key_type.into(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Self-signed for example.test and www.example.test, valid to 2126.
+    const EC_CERT: &str = "-----BEGIN CERTIFICATE-----
+MIIBtzCCAV6gAwIBAgIUbLOB7Gu+wLOF88DZGZ4B1CERDC0wCgYIKoZIzj0EAwIw
+FzEVMBMGA1UEAwwMZXhhbXBsZS50ZXN0MCAXDTI2MTEwNjEzMTE1MFoYDzIxMjYx
+MDEzMTMxMTUwWjAXMRUwEwYDVQQDDAxleGFtcGxlLnRlc3QwWTATBgcqhkjOPQIB
+BggqhkjOPQMBBwNCAAS/+qY73IFbTKbyufyVGRoCp2v3XMnGfoXJAI+GYucIFG5f
+UUL+3oE5m7bW3KETlzfSTVDfS6dHvjXYb8Jcze+ho4GFMIGCMB0GA1UdDgQWBBTY
+zxO4+ZfG40ob7XJQMeBIWvNeJzAfBgNVHSMEGDAWgBTYzxO4+ZfG40ob7XJQMeBI
+WvNeJzAPBgNVHRMBAf8EBTADAQH/MC8GA1UdEQQoMCaCDGV4YW1wbGUudGVzdIIQ
+d3d3LmV4YW1wbGUudGVzdIcEywBxBzAKBggqhkjOPQQDAgNHADBEAiAzwhSnTksh
+68MNhSPyeYUMkNMWKB7cyXlPUUKvsS99lAIgD+Jqy/t9v49PUrvf15mNx4co1a1U
+DZ8+LC+M3B3qW+U=
+-----END CERTIFICATE-----
+";
+
+    #[test]
+    fn an_installed_certificate_is_described_by_its_own_contents() {
+        let leaf = read_leaf(EC_CERT).unwrap();
+        assert_eq!(leaf.sans, vec!["example.test", "www.example.test"]);
+        assert_eq!(leaf.key_type, "ecdsa");
+        assert_eq!(leaf.not_after.format("%Y").to_string(), "2126");
+        assert!(leaf.issuer.contains("example.test"));
+        assert!(read_leaf("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n").is_err());
+    }
+
+    #[test]
+    fn install_params_never_print_the_private_key() {
+        let p = CertInstallParams {
+            subject: "example.test".into(),
+            certificate_pem: EC_CERT.into(),
+            key_pem: "-----BEGIN PRIVATE KEY-----\nSECRETKEYMATERIAL\n-----END PRIVATE KEY-----\n".into(),
+            chain_pem: None,
+        };
+        let printed = format!("{p:?}");
+        assert!(!printed.contains("SECRETKEYMATERIAL"), "{printed}");
+        assert!(printed.contains("<redacted>"));
     }
 }

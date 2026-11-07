@@ -55,6 +55,13 @@ async function rowAction(page: Page, row: Locator, action: string): Promise<void
   await page.getByRole("menuitem", { name: action }).click();
 }
 
+/** The text of a MIME message with quoted-printable soft breaks and escapes undone. */
+function decodeQuotedPrintable(raw: string): string {
+  return raw
+    .replace(/=\r?\n/g, "")
+    .replace(/=([0-9A-F]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+}
+
 /* -------------------------------- users -------------------------------- */
 
 test.describe("users", () => {
@@ -76,8 +83,8 @@ test.describe("users", () => {
     await emailField.fill("ines@localhost");
     await dialog.getByRole("textbox", { name: /^Name/ }).fill("Ines Invitee");
     await dialog.getByRole("button", { name: "Send invitation" }).click();
-    await expect(dialog.getByText("Invalid email")).toBeVisible();
-    await expect(dialog.getByText("Array must contain at least 1 element(s)")).toBeVisible();
+    await expect(dialog.getByText("Enter a valid email address.")).toBeVisible();
+    await expect(dialog.getByText("Choose at least one.")).toBeVisible();
 
     const email = uniqueEmail("invitee");
     await dialog.getByRole("textbox", { name: /^Email/ }).fill(email);
@@ -122,6 +129,128 @@ test.describe("users", () => {
 
     await page.reload();
     await expect(rowFor(usersTable(page), email)).toContainText("active");
+  });
+
+  test("an emailed invitation arrives through Outgoing mail with a working link", async ({
+    page,
+    browser,
+  }) => {
+    const sink = await startSmtpSink();
+    try {
+      data(
+        await asOwner("PATCH", "/settings", {
+          panel: { name: "Forge Fleet" },
+          notifications: {
+            smtp: {
+              host: "127.0.0.1",
+              port: sink.port,
+              security: "none",
+              username: "",
+              password: null,
+              from_address: "panel@forge.example.com",
+              from_name: "Forge Fleet",
+            },
+          },
+        }),
+        "point outgoing mail at the sink",
+      );
+
+      const email = uniqueEmail("mailed");
+      await page.goto("/administration/users");
+      await page.getByRole("button", { name: "Invite user" }).first().click();
+      const dialog = dialogNamed(page, "Invite a user");
+      await dialog.getByRole("textbox", { name: /^Email/ }).fill(email);
+      await dialog.getByRole("textbox", { name: /^Name/ }).fill("Mara Mailed");
+      await chooseOption(page, dialog.getByRole("combobox", { name: /^Roles/ }), "Viewer");
+      /* On by default: the switch used to be audited and do nothing else. */
+      await expect(dialog.getByRole("switch", { name: /Email the invitation/ })).toBeChecked();
+      await dialog.getByRole("button", { name: "Send invitation" }).click();
+
+      const issued = dialogNamed(page, `${email} is invited`);
+      await expect(issued.getByText(`The invitation was emailed to ${email}.`, { exact: false })).toBeVisible();
+      const shown = (await issued.getByText(/\/invite\//).first().textContent())!.trim();
+      await issued.getByRole("button", { name: "Done" }).click();
+
+      /* It really went: one message, to the invitee, from the configured sender. */
+      await expect.poll(() => sink.received.filter((m) => m.to.includes(email)).length).toBe(1);
+      const mail = sink.received.find((m) => m.to.includes(email))!;
+      expect(mail.from).toBe("panel@forge.example.com");
+      const body = decodeQuotedPrintable(mail.data);
+      expect(body).toContain("invited you to Forge Fleet");
+      const link = body.match(/https?:\/\/\S+?\/invite\/[A-Za-z0-9_-]+/)?.[0];
+      expect(link, "the email carries the accept link").toBe(shown);
+
+      /* And the link in the email is the one that sets a password and signs in. */
+      const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+      const invitee = await context.newPage();
+      await invitee.goto(link!);
+      await invitee.getByLabel(/^Password/).fill(STRONG_PASSWORD);
+      await invitee.getByLabel("Confirm password").fill(STRONG_PASSWORD);
+      await invitee.getByRole("button", { name: "Set password and sign in" }).click();
+      await expect(invitee).toHaveURL(`${webUrl}/`);
+      await context.close();
+
+      const audit = data<{ action: string; metadata: Record<string, unknown> }[]>(
+        await asOwner("GET", `/audit?action=user.invited&q=${encodeURIComponent(email)}`),
+        "audit",
+      );
+      expect(audit[0]?.metadata).toMatchObject({ send_invite: true, email_sent: true });
+    } finally {
+      await sink.close();
+      // Nothing configured again, so the next spec starts from the default.
+      data(
+        await asOwner("PATCH", "/settings", {
+          panel: { name: "Kaname" },
+          notifications: { smtp: { host: "", from_address: "", from_name: "Kaname" } },
+        }),
+        "clear outgoing mail",
+      );
+    }
+  });
+
+  test("with no outgoing mail server, the invitation stands and the dialog says why", async ({
+    page,
+  }) => {
+    data(
+      await asOwner("PATCH", "/settings", { notifications: { smtp: { host: "" } } }),
+      "no outgoing mail",
+    );
+    const email = uniqueEmail("unmailed");
+    await page.goto("/administration/users");
+    await page.getByRole("button", { name: "Invite user" }).first().click();
+    const dialog = dialogNamed(page, "Invite a user");
+    await dialog.getByRole("textbox", { name: /^Email/ }).fill(email);
+    await dialog.getByRole("textbox", { name: /^Name/ }).fill("Uma Unmailed");
+    await chooseOption(page, dialog.getByRole("combobox", { name: /^Roles/ }), "Viewer");
+    await dialog.getByRole("button", { name: "Send invitation" }).click();
+
+    const issued = dialogNamed(page, `${email} is invited`);
+    await expect(
+      issued.getByText(
+        /The invitation email could not be sent: No outgoing mail server is configured\./,
+      ),
+    ).toBeVisible();
+    /* The link is the fallback, shown once, and it works. */
+    const link = (await issued.getByText(/\/invite\//).first().textContent())!.trim();
+    await issued.getByRole("button", { name: "Done" }).click();
+    const token = decodeURIComponent(link.split("/invite/")[1]!);
+    expect((await acceptInvite(token, STRONG_PASSWORD)).status).toBe(200);
+  });
+
+  test("an invited account cannot be made active from the edit dialog", async ({ page }) => {
+    const { user } = await invite("noactivate", [(await roleBySlug("viewer")).id]);
+    await page.goto(`/administration/users?q=${encodeURIComponent(user.email)}`);
+    const row = rowFor(usersTable(page), user.email);
+    await row.click();
+    const dialog = dialogNamed(page, user.email);
+    await dialog.getByLabel(/^Status/).selectOption("active");
+    await dialog.getByRole("button", { name: "Save changes" }).click();
+    /* The same refusal the Activate action gives, for the same reason. */
+    await expect(dialog.getByText(`${user.email} has never set a password.`)).toBeVisible();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+    await expect(row).toContainText("invited");
+    const activate = await asOwner<ErrorBody>("POST", `/users/${user.id}/activate`);
+    expect(activate.status).toBe(409);
   });
 
   test("the invitation link opens a page that sets the first password", async ({ browser }) => {
@@ -204,7 +333,7 @@ test.describe("users", () => {
     await row.click();
     await dialog.getByRole("button", { name: "Remove Operator" }).click();
     await dialog.getByRole("button", { name: "Save changes" }).click();
-    await expect(dialog.getByText("Array must contain at least 1 element(s)")).toBeVisible();
+    await expect(dialog.getByText("Choose at least one.")).toBeVisible();
   });
 
   test("suspend and activate from the row menu bite immediately", async ({ page, browser }) => {
@@ -508,7 +637,7 @@ test.describe.serial("settings", () => {
     await page.locator("section#panel").getByRole("textbox").first().fill("");
     await page.locator("section#panel").getByRole("button", { name: "Save" }).click();
     await expect(page.locator("section#panel").getByRole("list", { name: "Panel problems" })).toHaveText(
-      "panel.name: String must contain at least 1 character(s)",
+      "panel.name: This field is required.",
     );
 
     const audit = data<{ action: string }[]>(

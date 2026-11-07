@@ -94,6 +94,11 @@ pub struct World {
     pub ssh_sessions: Vec<SshSessionInfo>,
 
     pub snapshots: HashMap<String, Vec<BackupSnapshotInfo>>,
+    /// What a snapshot taken by `backup.run` actually held, keyed by
+    /// snapshot id: (path, tree) per backed-up path. A restore copies from
+    /// here so it can honour `overwrite` against real file contents; the
+    /// seeded history has none and falls back to the live tree.
+    pub snapshot_trees: HashMap<String, Vec<(String, super::files::Node)>>,
     pub packages: Vec<PackageInfo>,
 
     pub ptys: HashMap<String, Arc<PtySession>>,
@@ -101,6 +106,11 @@ pub struct World {
     /// Certificates already announced this run, so one expiry is reported
     /// once rather than every housekeeping tick.
     pub announced: HashSet<String>,
+
+    /// Zones the control plane published with `dns.publish`, keyed by zone
+    /// name: the sim's stand-in for what public DNS would serve once the
+    /// operator (or the provider) published Kaname's records.
+    pub published_zones: HashMap<String, Vec<crate::providers::DnsPublishedRecord>>,
 }
 
 /// One fake host. Every sub-trait is served by a small struct holding an
@@ -140,7 +150,7 @@ impl Sim {
             - chrono::Duration::days(11 + (mix(seed ^ 0x0b) % 37) as i64)
             - chrono::Duration::seconds((mix(seed ^ 0x0c) % 86400) as i64);
 
-        let id = system::build_identity(seed);
+        let id = system::build_identity(&identity, seed);
         let world = World {
             boot_time,
             units: Vec::new(),
@@ -165,9 +175,11 @@ impl Sim {
             ssh_config: SshConfigInfo::default(),
             ssh_sessions: Vec::new(),
             snapshots: HashMap::new(),
+            snapshot_trees: HashMap::new(),
             packages: Vec::new(),
             ptys: HashMap::new(),
             announced: HashSet::new(),
+            published_zones: HashMap::new(),
         };
 
         let fs = files::build_filesystem(&id);

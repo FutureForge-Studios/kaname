@@ -9,9 +9,11 @@ import {
   apiPort,
   apiUrl,
   artifactsDir,
+  cloudflareUrl,
   databaseUrl,
   fleetSize,
   host,
+  offlineAfterSeconds,
   ownerEmail,
   ownerPassword,
   repoRoot,
@@ -165,6 +167,14 @@ export function startControlPlane(options: { detachOutput?: boolean } = {}): Man
       KANAME_BOOTSTRAP_PASSWORD: ownerPassword,
       LOG_LEVEL: "info",
       LOG_PRETTY: "false",
+      // Half the 60 s default, so a host whose heartbeats run late reads
+      // Degraded within one spec's patience (fleet-servers.spec.ts). Still
+      // twice the agents' 15 s metrics cadence, so an on-time host never
+      // brushes it. Seeds Settings › Agents, which is what the sweep reads.
+      AGENT_OFFLINE_AFTER_SECONDS: String(offlineAfterSeconds),
+      // Cloudflare's API, served on loopback by websites-dns.spec.ts while
+      // it runs; nothing else in the suite reaches it.
+      KANAME_CLOUDFLARE_API_URL: cloudflareUrl,
       // The yunori-mail release feed. The suite cannot reach yunori.email,
       // so the Email specs serve a local one and point the control plane
       // at it; forwarded explicitly so a stray value in .env cannot win.

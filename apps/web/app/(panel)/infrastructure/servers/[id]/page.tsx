@@ -194,7 +194,8 @@ export default function ServerDetailPage() {
             <MenuItem
               icon={ShieldOff}
               destructive
-              disabled={!can("infra.servers:write", server.id) || server.connection === "revoked"}
+              // Revoking is granted by infra.servers:delete, as the API checks it.
+              disabled={!can("infra.servers:delete", server.id) || server.connection === "revoked"}
               onSelect={() => commands.request("revoke", server)}
             >
               Revoke certificate

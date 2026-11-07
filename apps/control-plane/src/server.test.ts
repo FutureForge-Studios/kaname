@@ -270,6 +270,11 @@ describe("live reads degrade honestly", () => {
     const error = JSON.parse(res.body).error;
     expect(error.code).toBe("agent_offline");
     expect(error.remediation.summary).toBeTruthy();
+    // "Server details" lands on this host, not on the fleet list.
+    const details = (error.remediation.actions as { label: string; href?: string }[]).find(
+      (action) => action.label === "Server details",
+    );
+    expect(details?.href).toBe(`/infrastructure/servers/${await serverId()}`);
   });
 });
 

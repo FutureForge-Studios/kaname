@@ -3,27 +3,26 @@ import { SYSTEM_ROLES, type Permission, type SystemRoleSlug } from "@kaname/cont
 import { missingId } from "../support/config.js";
 import {
   Api,
-  argon2Hash,
   mailDomainNamed,
   mailServerOn,
   mailboxAt,
-  openDatabase,
   owner,
   rowAction,
   syncMail,
   tableRow,
   unique,
-  withControlPlaneStopped,
 } from "../support/email.js";
+import { acceptInvite, STRONG_PASSWORD } from "../support/platform.js";
 
 /* ------------------------------------------------------------------ *
  * Email — who may do what (packages/contract/src/rbac.ts).
  *
  * One user per system role is created through the admin API exactly as
- * an owner would invite them. Accepting an invitation has no route yet
- * (an invited account cannot set a password anywhere: see the report),
- * so the spec stops the control plane for a moment and activates the
- * invited rows with a known password, then signs in as each.
+ * an owner would invite them, and each invitation is redeemed through
+ * POST /auth/invite/accept the way the invitee would redeem it. (This
+ * used to stop the control plane and write the rows directly, back when
+ * an invitation could not be accepted; nothing here touches the
+ * database behind the panel's back any more.)
  *
  * The API matrix probes every Email route with an id that does not
  * exist, which separates the two answers that matter: 403 when the
@@ -34,7 +33,8 @@ import {
  * ------------------------------------------------------------------ */
 
 const ROLES: SystemRoleSlug[] = ["owner", "operator", "developer", "auditor", "viewer"];
-const PASSWORD = "rbac-e2e-passphrase-1!";
+// Chosen by each invitee, so it has to pass the server-side strength check.
+const PASSWORD = STRONG_PASSWORD;
 const stamp = Math.random().toString(36).slice(2, 7);
 const emailFor = (role: SystemRoleSlug) => `rbac-${role}-${stamp}@kaname.test`;
 
@@ -59,22 +59,11 @@ test.beforeAll(async () => {
       send_invite: false,
     });
     expect(res.status, res.text).toBe(201);
+    const url = (res.body.data as { invite: { url: string } }).invite.url;
+    const token = decodeURIComponent(new URL(url).pathname.split("/invite/")[1] ?? "");
+    const accepted = await acceptInvite(token, PASSWORD);
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
   }
-
-  const hash = await argon2Hash(PASSWORD);
-  await withControlPlaneStopped(async () => {
-    const db = await openDatabase();
-    try {
-      const updated = await db.query(
-        `update users set password_hash = $1, status = 'active', invite_token_hash = null
-          where email = any($2::text[]) returning email`,
-        [hash, ROLES.map(emailFor)],
-      );
-      expect(updated.rows).toHaveLength(ROLES.length);
-    } finally {
-      await db.close();
-    }
-  });
 
   for (const role of ROLES) apis.set(role, await Api.signIn(emailFor(role), PASSWORD));
   await syncMail(await owner(), "mail-01");

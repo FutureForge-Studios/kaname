@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::Utc;
 
-use super::files::uid_for;
+use super::files::{FsRef, path_join};
 use super::firewall::{RollbackWindow, schedule_rollback};
 use super::state::{Sim, hash_string, mix};
 use crate::providers::{
@@ -61,6 +61,51 @@ pub fn write_sshd_config(sim: &Sim) {
     sim.fs.write().file("/etc/ssh/sshd_config", &b);
 }
 
+/// A POSIX account as the simulated host's /etc/passwd describes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SimAccount {
+    pub name: String,
+    pub uid: i64,
+    pub gid: i64,
+    pub home: String,
+}
+
+/// Reads one account out of passwd text, the way getpwnam would.
+pub fn passwd_account(passwd: &str, name: &str) -> Option<SimAccount> {
+    passwd.lines().find_map(|line| {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() < 7 || fields[0] != name {
+            return None;
+        }
+        Some(SimAccount {
+            name: fields[0].to_string(),
+            uid: fields[2].parse().ok()?,
+            gid: fields[3].parse().ok()?,
+            home: fields[5].to_string(),
+        })
+    })
+}
+
+/// Looks the account up in the simulated /etc/passwd, so the sim refuses
+/// a key for an account the host does not have, exactly as the Linux
+/// provider does, instead of conjuring a home directory for it.
+fn lookup_account(fs: &FsRef, user: &str) -> PResult<SimAccount> {
+    let fs = fs.read();
+    let passwd = fs
+        .lookup("/etc/passwd", true)
+        .map(|(node, _)| String::from_utf8_lossy(&node.data).into_owned())
+        .unwrap_or_default();
+    let account = passwd_account(&passwd, user)
+        .ok_or_else(|| ProviderError::not_found(format!("no POSIX account named {user} on this host")))?;
+    match fs.lookup(&account.home, false) {
+        Ok((node, _)) if node.is_dir() => Ok(account),
+        _ => Err(ProviderError::PreconditionFailed(format!(
+            "{user} has no home directory at {}",
+            account.home
+        ))),
+    }
+}
+
 pub struct SimSsh(pub Arc<Sim>);
 
 #[async_trait]
@@ -79,6 +124,9 @@ impl Ssh for SimSsh {
     }
 
     async fn apply_keys(&self, _ctx: &Ctx, p: SshKeysApplyParams) -> PResult<i64> {
+        // Before anything is recorded: a key for a user the host lacks is a
+        // failed job, not a file in a home directory nobody owns.
+        let account = lookup_account(&self.0.fs, &p.user)?;
         let mut keys = Vec::with_capacity(p.keys.len());
         let mut authorized = String::new();
 
@@ -108,19 +156,17 @@ impl Ssh for SimSsh {
         let count = keys.len() as i64;
         self.0.world.lock().ssh_keys.insert(p.user.clone(), keys);
 
-        let home = if p.user == "root" {
-            "/root".to_string()
-        } else {
-            format!("/home/{}", p.user)
-        };
+        // ~user/.ssh at 0700 and authorized_keys at 0600, both owned by the
+        // account: sshd's StrictModes refuses anything looser.
+        let ssh_dir = path_join(&account.home, ".ssh");
         let mut fs = self.0.fs.write();
-        fs.dir_as(&format!("{home}/.ssh"), "0700", &p.user, uid_for(&p.user));
+        fs.dir_as(&ssh_dir, "0700", &account.name, account.uid);
         fs.file_as(
-            &format!("{home}/.ssh/authorized_keys"),
+            &path_join(&ssh_dir, "authorized_keys"),
             &authorized,
             "0600",
-            &p.user,
-            uid_for(&p.user),
+            &account.name,
+            account.uid,
         );
         Ok(count)
     }
@@ -151,11 +197,14 @@ impl Ssh for SimSsh {
             if let Some(v) = p.max_auth_tries {
                 next.max_auth_tries = v;
             }
-            if !p.allow_users.is_empty() {
-                next.allow_users = p.allow_users;
+            // An omitted list leaves the directive alone; an empty one clears
+            // it, as on Linux. Treating empty as "unchanged" meant clearing
+            // AllowUsers in the panel did nothing on a simulated host.
+            if let Some(users) = p.allow_users {
+                next.allow_users = users;
             }
-            if !p.allow_groups.is_empty() {
-                next.allow_groups = p.allow_groups;
+            if let Some(groups) = p.allow_groups {
+                next.allow_groups = groups;
             }
             if let Some(v) = p.x11_forwarding {
                 next.x11_forwarding = v;
@@ -188,5 +237,183 @@ impl Ssh for SimSsh {
 
     async fn sessions(&self, _ctx: &Ctx) -> PResult<Vec<SshSessionInfo>> {
         Ok(self.0.world.lock().ssh_sessions.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::providers::{
+        Ctx, FsReadParams, Options, ProviderError, ProviderRef, SshAuthorizedKey, SshConfigApplyParams,
+        SshKeysApplyParams,
+    };
+
+    use super::passwd_account;
+
+    async fn sim() -> (ProviderRef, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = super::super::open(Options {
+            agent_version: "0.1.0".into(),
+            state_dir: dir.path().to_path_buf(),
+        })
+        .await
+        .expect("opening the simulator");
+        (provider, dir)
+    }
+
+    async fn read(provider: &ProviderRef, path: &str) -> String {
+        provider
+            .files()
+            .read(
+                &Ctx::background(),
+                FsReadParams {
+                    path: path.into(),
+                    max_bytes: 1 << 20,
+                },
+            )
+            .await
+            .unwrap()
+            .content
+    }
+
+    const KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGtbVp8kR1oZ2mXs6aWq9QyU3nLd0vEcHfJ7tB4iY5Kp";
+
+    #[test]
+    fn passwd_lines_are_read_like_getpwnam() {
+        let passwd = "root:x:0:0:root:/root:/bin/bash\ndeploy:x:1000:1000:Deploy,,,:/home/deploy:/bin/bash\n";
+        let deploy = passwd_account(passwd, "deploy").unwrap();
+        assert_eq!(
+            (deploy.uid, deploy.gid, deploy.home.as_str()),
+            (1000, 1000, "/home/deploy")
+        );
+        assert!(passwd_account(passwd, "dep").is_none());
+        assert!(passwd_account("broken:x\n", "broken").is_none());
+    }
+
+    #[tokio::test]
+    async fn keys_go_to_the_named_accounts_home_owned_by_it() {
+        let (provider, _dir) = sim().await;
+        let applied = provider
+            .ssh()
+            .apply_keys(
+                &Ctx::background(),
+                SshKeysApplyParams {
+                    user: "alice".into(),
+                    keys: vec![SshAuthorizedKey {
+                        public_key: KEY.into(),
+                        comment: "alice@laptop".into(),
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(applied, 1);
+
+        let content = read(&provider, "/home/alice/.ssh/authorized_keys").await;
+        assert_eq!(content, format!("{KEY} alice@laptop\n"));
+        let file = provider
+            .files()
+            .stat(&Ctx::background(), "/home/alice/.ssh/authorized_keys")
+            .await
+            .unwrap();
+        assert_eq!(
+            (file.owner.as_str(), file.uid, file.mode.as_str()),
+            ("alice", 1001, "0600")
+        );
+        let dir = provider
+            .files()
+            .stat(&Ctx::background(), "/home/alice/.ssh")
+            .await
+            .unwrap();
+        assert_eq!((dir.owner.as_str(), dir.mode.as_str()), ("alice", "0700"));
+
+        // Root's own file is a different account's and is left alone.
+        assert!(
+            !read(&provider, "/root/.ssh/authorized_keys")
+                .await
+                .contains("alice@laptop")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_account_the_host_does_not_have_is_refused_and_nothing_is_written() {
+        let (provider, _dir) = sim().await;
+        let err = provider
+            .ssh()
+            .apply_keys(
+                &Ctx::background(),
+                SshKeysApplyParams {
+                    user: "mallory".into(),
+                    keys: vec![SshAuthorizedKey {
+                        public_key: KEY.into(),
+                        comment: String::new(),
+                    }],
+                },
+            )
+            .await
+            .unwrap_err();
+        match err {
+            ProviderError::NotFound(message) => assert!(message.contains("mallory"), "{message}"),
+            other => panic!("expected not_found, got {other:?}"),
+        }
+        assert!(
+            provider
+                .files()
+                .stat(&Ctx::background(), "/home/mallory")
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_allow_list_clears_the_directive_and_an_omitted_one_keeps_it() {
+        let (provider, _dir) = sim().await;
+        let ctx = Ctx::background();
+        let before = provider.ssh().read_config(&ctx).await.unwrap();
+        assert!(
+            !before.allow_users.is_empty(),
+            "the seeded host restricts AllowUsers"
+        );
+
+        // Omitted: untouched.
+        provider
+            .ssh()
+            .apply_config(
+                &ctx,
+                SshConfigApplyParams {
+                    max_auth_tries: Some(5),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let kept = provider.ssh().read_config(&ctx).await.unwrap();
+        assert_eq!(kept.allow_users, before.allow_users);
+        assert!(
+            read(&provider, "/etc/ssh/sshd_config")
+                .await
+                .contains("AllowUsers ")
+        );
+
+        // Empty: cleared, in the reported config and in the file sshd reads.
+        provider
+            .ssh()
+            .apply_config(
+                &ctx,
+                SshConfigApplyParams {
+                    allow_users: Some(vec![]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let cleared = provider.ssh().read_config(&ctx).await.unwrap();
+        assert!(cleared.allow_users.is_empty());
+        assert_eq!(
+            cleared.allow_groups, before.allow_groups,
+            "only the named list is cleared"
+        );
+        let file = read(&provider, "/etc/ssh/sshd_config").await;
+        assert!(!file.contains("AllowUsers"), "{file}");
+        assert!(file.contains("MaxAuthTries 5"), "{file}");
     }
 }

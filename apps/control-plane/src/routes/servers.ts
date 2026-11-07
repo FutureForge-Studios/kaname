@@ -254,7 +254,10 @@ export async function serverRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/servers/:id/revoke", async (req, reply) => {
     const { id } = parseParams(req, idParam);
-    const server = await loadServer(req, id, "infra.servers:write");
+    // Revoking cuts a host off until it is enrolled again, which is why
+    // infra.servers:delete — whose description is exactly "remove a server
+    // and revoke its agent certificate" — is what grants it, not :write.
+    const server = await loadServer(req, id, "infra.servers:delete");
     const h = helpers(req);
 
     req.ctx.hub.disconnect(id, "certificate revoked");

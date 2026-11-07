@@ -257,13 +257,42 @@ test.describe("firewall", () => {
     const first = await remaining.getAttribute("aria-label");
     await expect.poll(() => remaining.getAttribute("aria-label")).not.toBe(first);
 
+    /* The window is part of the status read, named by the job that armed it
+     * and listing what would revert... */
+    const api = await owner();
+    type Status = {
+      pending_rollback: { expires_at: string; seconds: number; job_id: string | null; changes: string[] } | null;
+    };
+    const during = await api.get<Status>(`/firewall/status?server_id=${forge.id}`);
+    expect(during.pending_rollback, "no pending window in the status read").not.toBeNull();
+    expect(during.pending_rollback!.seconds).toBe(WINDOW_S);
+    expect(Date.parse(during.pending_rollback!.expires_at)).toBeGreaterThan(Date.now());
+    expect(during.pending_rollback!.expires_at <= new Date(appliedAt + WINDOW_S * 1000).toISOString()).toBe(true);
+    expect(during.pending_rollback!.job_id).toBe((await lastApplyJob(forge.id)).id);
+    expect(during.pending_rollback!.changes).toContain("allow inbound tcp 22 from 127.0.0.1/32");
+
+    /* ...so a reload inside the window brings the countdown back, and its
+     * Confirm is the one that keeps the rules. It used to vanish here. */
+    await page.reload();
+    await expect(banner).toBeVisible();
+    await expect(banner.getByRole("list", { name: "Waiting to be confirmed" })).toContainText(
+      "allow inbound tcp 22 from 127.0.0.1/32",
+    );
+    const resumed = await remaining.getAttribute("aria-label");
+    await expect.poll(() => remaining.getAttribute("aria-label")).not.toBe(resumed);
+
     await banner.getByRole("button", { name: "Confirm — keep these changes" }).click();
     await expect(banner).toBeHidden();
     await expect(page.getByText("Staged, not applied", { exact: true }).locator("xpath=../..")).toContainText("0");
     await expect(ruleRow(table, "e2e operator SSH").getByText("staged")).toHaveCount(0);
+    expect((await api.get<Status>(`/firewall/status?server_id=${forge.id}`)).pending_rollback).toBeNull();
+
+    /* Nor does it come back on the next load, once confirmed. */
+    await page.reload();
+    await expect(page.getByText("Staged, not applied", { exact: true }).locator("xpath=../..")).toContainText("0");
+    await expect(banner).toHaveCount(0);
 
     /* A second confirm has nothing left to confirm, and says why. */
-    const api = await owner();
     const twice = await api.call("POST", "/firewall/confirm", { server_id: forge.id });
     expect(twice.status).toBe(409);
     expect(twice.error?.message).toBe("forge-01 has no firewall rule set waiting to be confirmed.");
@@ -325,12 +354,17 @@ test.describe("firewall", () => {
     expect(late.status).toBe(409);
     expect(late.error?.message).toMatch(/edge-01/);
 
-    /* The panel must not claim the reverted rules are live. */
+    /* The panel must not claim the reverted rules are live, nor offer a
+     * window that has closed. */
+    const status = await api.get<{ pending_rollback: unknown }>(`/firewall/status?server_id=${edge.id}`);
+    expect(status.pending_rollback).toBeNull();
     await page.reload();
     await expect(
       page.getByRole("status").filter({ hasText: /staged in Kaname and not on edge-01/ }),
     ).toBeVisible();
     await expect(ruleRow(table, "e2e lapse probe").getByText("staged")).toBeVisible();
+    // Checked once the status read has rendered, so absence means something.
+    await expect(page.getByRole("status").filter({ hasText: "reverts its firewall rule set in" })).toHaveCount(0);
   });
 
   test("a rule set that would lock the panel out is refused without a window", async ({ page }) => {

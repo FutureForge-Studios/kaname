@@ -1,9 +1,18 @@
 "use client";
 
 import * as React from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Ban, EyeOff, ShieldAlert, ShieldOff, Undo2 } from "lucide-react";
-import type { Job, ThreatEvent, ThreatSummary, TimeRange } from "@kaname/contract";
+import { Ban, EyeOff, List, ShieldAlert, ShieldOff, Undo2 } from "lucide-react";
+import {
+  cidr as cidrSchema,
+  ipAddress as ipAddressSchema,
+  type IpBlock,
+  type Job,
+  type ThreatEvent,
+  type ThreatSummary,
+  type TimeRange,
+} from "@kaname/contract";
 import {
   AreaChart,
   Badge,
@@ -32,8 +41,16 @@ import {
 import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { PageError } from "@/components/PageError";
+import { ViewTabs } from "@/components/ViewTabs";
 import { api, type ApiError } from "@/lib/api";
-import { queryKeys, useCan, useList, useMutationWithJob, useResourceMutation } from "@/lib/queries";
+import {
+  queryKeys,
+  useCan,
+  useList,
+  useMutationWithJob,
+  useResourceMutation,
+  useServers,
+} from "@/lib/queries";
 import { formatCount, humanize } from "@/lib/format";
 
 /* ------------------------------------------------------------------ *
@@ -61,6 +78,8 @@ const KIND_LABELS: Record<ThreatEvent["kind"], string> = {
 
 const DISPOSITION_TONES: Record<ThreatEvent["disposition"], Tone> = {
   observed: "neutral",
+  // Asked for, not yet done by the host: the job decides what comes next.
+  pending: "warn",
   banned: "info",
   ignored: "neutral",
 };
@@ -80,10 +99,45 @@ interface BanTarget {
   attempts: number | null;
 }
 
+type View = "events" | "bans";
+
+/**
+ * Two views over one module: what reached the hosts, and what the hosts
+ * are blocking because Kaname asked them to. The second had no page at
+ * all — a ban could be made but never seen again, or lifted, without
+ * finding the event that prompted it.
+ */
 export default function ThreatsPage() {
+  const searchParams = useSearchParams();
+  return searchParams.get("panel") === "bans" ? <BansView /> : <EventsView />;
+}
+
+function ThreatTabs({ current, serverId }: { current: View; serverId: string | null }) {
+  const pathname = usePathname() ?? "/security/threats";
+  const href = (view: View) => {
+    const params = new URLSearchParams();
+    if (serverId) params.set("server_id", serverId);
+    if (view === "bans") params.set("panel", "bans");
+    const query = params.toString();
+    return query ? `${pathname}?${query}` : pathname;
+  };
+  return (
+    <ViewTabs
+      label="Threat protection views"
+      current={current}
+      tabs={[
+        { id: "events", label: "Events", href: href("events"), icon: ShieldAlert },
+        { id: "bans", label: "Bans", href: href("bans"), icon: List },
+      ]}
+    />
+  );
+}
+
+function EventsView() {
   const can = useCan();
   const selection = useServerSelection({ permission: "security.threats:read" });
   const serverId = selection.serverId;
+  const [banOpen, setBanOpen] = React.useState(false);
 
   const [range, setRange] = React.useState<TimeRange>("24h");
 
@@ -216,11 +270,23 @@ export default function ThreatsPage() {
       {
         id: "disposition",
         header: "Disposition",
-        width: 112,
+        width: 168,
         cell: (row) => (
-          <StatusBadge tone={DISPOSITION_TONES[row.disposition]} size="xs">
-            {row.disposition}
-          </StatusBadge>
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <StatusBadge tone={DISPOSITION_TONES[row.disposition]} size="xs">
+              {row.disposition}
+            </StatusBadge>
+            {/* The host's own reason, kept after the row went back to its
+                previous disposition, so a failed ban is not silent. */}
+            {row.disposition_error && (
+              <span
+                className="truncate text-xs text-[var(--kn-danger)]"
+                title={row.disposition_error}
+              >
+                Last change failed: {row.disposition_error}
+              </span>
+            )}
+          </span>
         ),
       },
       {
@@ -250,7 +316,7 @@ export default function ThreatsPage() {
           id: "ban",
           label: "Ban this address",
           icon: Ban,
-          disabled: !writable || row.disposition === "banned",
+          disabled: !writable || row.disposition === "banned" || row.disposition === "pending",
           onSelect: () => act("ban", row.source_ip, row.attempts),
         },
         {
@@ -279,6 +345,18 @@ export default function ThreatsPage() {
         waiting={selection.isLoading}
         title="Threat protection"
         subtitle={selection.server ? selection.server.hostname : "Every server in your scope"}
+        tabs={<ThreatTabs current="events" serverId={serverId} />}
+        primaryAction={
+          <Button
+            variant="primary"
+            size="sm"
+            icon={Ban}
+            disabled={!mayWrite}
+            onClick={() => setBanOpen(true)}
+          >
+            Ban address
+          </Button>
+        }
         headerActions={
           <TimeRangePicker
             value={{ kind: "preset", preset: range }}
@@ -317,6 +395,7 @@ export default function ThreatsPage() {
               options={[
                 { value: "", label: "Any disposition" },
                 { value: "observed", label: "observed" },
+                { value: "pending", label: "pending" },
                 { value: "banned", label: "banned" },
                 { value: "ignored", label: "ignored" },
               ]}
@@ -397,6 +476,13 @@ export default function ThreatsPage() {
         onBan={(reason, duration) => target && ban.mutate({ ip: target.ip, reason, duration })}
         onUnban={() => target && unban.mutate(target.ip)}
         onIgnore={() => target && ignore.mutate(target.ip)}
+      />
+
+      <BanAddressDialog
+        open={banOpen}
+        defaultServerId={serverId}
+        onClose={() => setBanOpen(false)}
+        onQueued={() => void summary.refetch()}
       />
     </>
   );
@@ -715,5 +801,333 @@ function ActionDialog({
         </DialogFooter>
       </form>
     </Dialog>
+  );
+}
+
+/* ---------------------------- ban address --------------------------- */
+
+const TARGET_MESSAGE =
+  "must be an IP address like 203.0.113.7, or a CIDR range like 198.51.100.0/24";
+
+/** What the ban route accepts, so the form refuses exactly what the API would. */
+function targetError(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  const ok = trimmed.includes("/")
+    ? cidrSchema.safeParse(trimmed).success
+    : ipAddressSchema.safeParse(trimmed).success;
+  return ok ? undefined : TARGET_MESSAGE;
+}
+
+interface BanAddressDialogProps {
+  open: boolean;
+  /** The server picked on the page, offered first; null is fleet-wide. */
+  defaultServerId: string | null;
+  onClose: () => void;
+  onQueued?: () => void;
+}
+
+/**
+ * Bans any address or range, not only one that already shows up as a
+ * threat. Until this, banning an address nobody had observed yet — a
+ * range a provider published, a scanner seen elsewhere — was API-only.
+ */
+function BanAddressDialog({ open, defaultServerId, onClose, onQueued }: BanAddressDialogProps) {
+  const can = useCan();
+  const servers = useServers();
+  const [address, setAddress] = React.useState("");
+  const [where, setWhere] = React.useState("");
+  const [reason, setReason] = React.useState("");
+  const [duration, setDuration] = React.useState("86400");
+  const [error, setError] = React.useState<ApiError | null>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setAddress("");
+    setWhere(defaultServerId ?? "");
+    setReason("");
+    setDuration("86400");
+    setError(null);
+  }, [open, defaultServerId]);
+
+  const ban = useMutationWithJob<{ target: string; serverId: string | null; reason: string; duration: number }>({
+    mutationFn: ({ target, serverId, reason: why, duration: seconds }) =>
+      api.post<{ job: Job | null; jobs: Job[]; correlation_id: string }>(
+        `/threats/${encodeURIComponent(target)}/ban`,
+        { server_id: serverId, reason: why, duration_seconds: seconds },
+      ),
+    invalidates: ["threats", "ip-blocks", "firewall"],
+    describe: ({ target }) => `Ban ${target}`,
+    toastErrors: false,
+    onQueued: () => {
+      onClose();
+      onQueued?.();
+    },
+    onFailed: (failure) => setError(failure),
+  });
+
+  const addressError = targetError(address);
+  const reasonMissing = reason.trim().length === 0;
+  const valid = address.trim().length > 0 && !addressError && !reasonMissing;
+  const options = [
+    { value: "", label: "Every server in your scope" },
+    ...(servers.data?.data ?? [])
+      .filter((server) => can("security.threats:write", server.id))
+      .map((server) => ({ value: server.id, label: server.name })),
+  ];
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => !next && onClose()}
+      size="sm"
+      dismissible={!ban.isPending}
+    >
+      <form
+        className="flex min-h-0 flex-1 flex-col"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!valid || ban.isPending) return;
+          setError(null);
+          ban.mutate({
+            target: address.trim(),
+            serverId: where || null,
+            reason: reason.trim(),
+            duration: Number(duration),
+          });
+        }}
+      >
+        <DialogHeader
+          title="Ban an address"
+          description="Any address or range, observed or not. Each host blocks it as a job; the ban is listed once the host has done it."
+        />
+        <DialogBody>
+          <div className="flex flex-col gap-4">
+            {error && <PageError error={error} context="Ban" />}
+            <FormField
+              label="Address or range"
+              description="Single addresses are stored as /32 or /128."
+              error={addressError}
+              required
+            >
+              <Input
+                data-autofocus=""
+                mono
+                value={address}
+                onChange={(event) => setAddress(event.target.value)}
+                placeholder="203.0.113.7 or 198.51.100.0/24"
+                autoComplete="off"
+                spellCheck={false}
+                maxLength={64}
+              />
+            </FormField>
+            <FormField label="Where">
+              <Select value={where} onChange={(event) => setWhere(event.target.value)} options={options} />
+            </FormField>
+            <FormField
+              label="Reason"
+              description="Recorded in the audit trail."
+              error={reason.length > 0 && reasonMissing ? "a reason is required" : undefined}
+              required
+            >
+              <Input value={reason} onChange={(event) => setReason(event.target.value)} maxLength={200} />
+            </FormField>
+            <FormField label="Duration">
+              <Select
+                value={duration}
+                onChange={(event) => setDuration(event.target.value)}
+                options={DURATION_OPTIONS}
+              />
+            </FormField>
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <Button type="button" variant="secondary" disabled={ban.isPending} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" disabled={!valid} loading={ban.isPending}>
+            Ban
+          </Button>
+        </DialogFooter>
+      </form>
+    </Dialog>
+  );
+}
+
+/* -------------------------------- bans ------------------------------ */
+
+const BAN_SOURCE_LABELS: Record<IpBlock["source"], string> = {
+  manual: "Kaname",
+  fail2ban: "fail2ban",
+  rule: "firewall rule",
+};
+
+function BansView() {
+  const can = useCan();
+  const selection = useServerSelection({ permission: "security.threats:read" });
+  const serverId = selection.serverId;
+  const [banOpen, setBanOpen] = React.useState(false);
+  const [lifting, setLifting] = React.useState<IpBlock | null>(null);
+
+  const state = useResourceListState({
+    defaultSort: { id: "created_at", order: "desc" },
+    extraParams: { server_id: serverId ?? undefined },
+  });
+  const bans = useList<IpBlock>("ip-blocks", state.params, { path: "/threats/bans" });
+  const mayWrite = can("security.threats:write", serverId);
+
+  const unban = useMutationWithJob<IpBlock>({
+    mutationFn: (row) =>
+      api.post<{ job: Job | null; jobs: Job[]; correlation_id: string }>(
+        `/threats/${encodeURIComponent(row.cidr)}/unban`,
+        { server_id: row.server_id },
+      ),
+    invalidates: ["threats", "ip-blocks", "firewall"],
+    describe: (row) => `Unban ${row.cidr}`,
+    onQueued: () => setLifting(null),
+  });
+
+  const columns = React.useMemo<DataTableColumn<IpBlock>[]>(
+    () => [
+      {
+        id: "cidr",
+        header: "Address",
+        sortable: true,
+        locked: true,
+        mono: true,
+        minWidth: 168,
+        accessor: (row) => row.cidr,
+      },
+      {
+        id: "server",
+        header: "Server",
+        sortable: true,
+        mono: true,
+        width: 140,
+        accessor: (row) => row.server_name ?? "every server",
+      },
+      {
+        id: "reason",
+        header: "Reason",
+        minWidth: 200,
+        cell: (row) => (
+          <span className="truncate text-[var(--kn-text-2)]" title={row.reason}>
+            {row.reason || "—"}
+          </span>
+        ),
+      },
+      {
+        id: "source",
+        header: "Source",
+        width: 112,
+        hideBelow: "md",
+        accessor: (row) => BAN_SOURCE_LABELS[row.source] ?? row.source,
+      },
+      {
+        id: "created_at",
+        header: "Banned",
+        sortable: true,
+        width: 116,
+        cell: (row) => <RelativeTime value={row.created_at} />,
+      },
+      {
+        id: "expires_at",
+        header: "Expires",
+        sortable: true,
+        width: 116,
+        cell: (row) =>
+          row.expires_at ? (
+            <RelativeTime value={row.expires_at} />
+          ) : (
+            <span className="text-[var(--kn-text-3)]">until unbanned</span>
+          ),
+      },
+    ],
+    [],
+  );
+
+  const rowActions = React.useCallback(
+    (row: IpBlock): DataTableRowAction<IpBlock>[] => [
+      {
+        id: "unban",
+        label: "Unban",
+        icon: Undo2,
+        disabled: !can("security.threats:write", row.server_id ?? undefined),
+        onSelect: () => setLifting(row),
+      },
+    ],
+    [can],
+  );
+
+  return (
+    <>
+      <ResourcePage<IpBlock>
+        waiting={selection.isLoading}
+        title="Threat protection"
+        subtitle={selection.server ? selection.server.hostname : "Every server in your scope"}
+        tabs={<ThreatTabs current="bans" serverId={serverId} />}
+        primaryAction={
+          <Button
+            variant="primary"
+            size="sm"
+            icon={Ban}
+            disabled={!mayWrite}
+            onClick={() => setBanOpen(true)}
+          >
+            Ban address
+          </Button>
+        }
+        state={state}
+        query={bans}
+        columns={columns}
+        getRowId={(row) => row.id}
+        tableLabel="Active bans"
+        density="compact"
+        searchPlaceholder="Search address or reason"
+        rowActions={rowActions}
+        emptyIcon={ShieldOff}
+        emptyTitle="Nothing is banned"
+        emptyDescription="Bans made from Kaname are listed here once the host has applied them, until they expire or are lifted."
+        errorContext="Bans"
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <ServerPicker selection={selection} allowAll />
+        </div>
+      </ResourcePage>
+
+      <Dialog
+        open={lifting !== null}
+        onOpenChange={(next) => !next && setLifting(null)}
+        size="sm"
+        dismissible={!unban.isPending}
+      >
+        <DialogHeader
+          title={`Unban ${lifting?.cidr ?? ""}`}
+          description={`${lifting?.server_name ?? "Every server"} stops blocking it once the job has run.`}
+        />
+        <DialogFooter>
+          <Button
+            variant="secondary"
+            disabled={unban.isPending}
+            onClick={() => setLifting(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            loading={unban.isPending}
+            onClick={() => lifting && unban.mutate(lifting)}
+          >
+            Unban
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      <BanAddressDialog
+        open={banOpen}
+        defaultServerId={serverId}
+        onClose={() => setBanOpen(false)}
+      />
+    </>
   );
 }

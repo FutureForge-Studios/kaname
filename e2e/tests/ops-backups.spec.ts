@@ -1,6 +1,16 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { missingId } from "../support/config.js";
-import { auditRows, hostFile, owner, server, settled, type JobRow } from "../support/secops.js";
+import { openDatabase, withControlPlaneStopped } from "../support/email.js";
+import {
+  auditRows,
+  hostFile,
+  owner,
+  server,
+  settled,
+  startAgent,
+  stopAgent,
+  type JobRow,
+} from "../support/secops.js";
 import { jobStatusPill } from "../support/ui.js";
 
 /* ------------------------------------------------------------------ *
@@ -22,13 +32,23 @@ interface Schedule {
   id: string;
   name: string;
   last_run_status: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
 }
 interface Run {
   id: string;
   status: string;
+  trigger: string;
+  server_id: string;
   error: string | null;
   restore_point_id: string | null;
   job_id: string;
+  created_at: string;
+}
+interface Job extends JobRow {
+  server_id: string | null;
+  blocked_reason: string | null;
+  type: string;
 }
 interface Point {
   id: string;
@@ -40,9 +60,9 @@ interface Point {
 
 const DIR = "/var/backups";
 
-async function localDestination(name: string): Promise<Destination> {
+async function localDestination(name: string, host = "forge-01"): Promise<Destination> {
   const api = await owner();
-  const forge = await server("forge-01");
+  const forge = await server(host);
   const found = (await api.get<Destination[]>(`/backups/destinations?q=${encodeURIComponent(name)}`)).find(
     (d) => d.name === name,
   );
@@ -71,6 +91,33 @@ async function runNow(scheduleId: string): Promise<JobRow> {
   const api = await owner();
   const accepted = await api.ok<{ job: JobRow }>("POST", `/backups/schedules/${scheduleId}/run`);
   return settled(accepted.job.id, 90_000);
+}
+
+async function runsOf(scheduleId: string): Promise<Run[]> {
+  return (await owner()).get<Run[]>(`/backups/runs?schedule_id=${scheduleId}&per_page=50`);
+}
+
+/** Restores a point through the API exactly as the dialog would, and waits for the job. */
+async function restoreVia(point: Point, serverId: string, target: string, overwrite: boolean): Promise<JobRow> {
+  const accepted = await (await owner()).ok<{ job: JobRow }>("POST", "/backups/restore", {
+    restore_point_id: point.id,
+    target_server_id: serverId,
+    target_path: target,
+    overwrite,
+    confirm_label: point.label,
+  });
+  return settled(accepted.job.id, 90_000);
+}
+
+async function writeHostFile(serverId: string, path: string, content: string): Promise<void> {
+  const { job } = await (await owner()).ok<{ job: JobRow }>("POST", "/files/write", {
+    server_id: serverId,
+    path,
+    content,
+    encoding: "utf8",
+    create_parents: true,
+  });
+  expect((await settled(job.id)).status).toBe("succeeded");
 }
 
 async function pointsFor(scheduleId: string): Promise<Point[]> {
@@ -230,11 +277,21 @@ test.describe("backups", () => {
     expect(await drawerSettles(page, "forge-01")).toContain("Succeeded");
     await expect.poll(() => hostFile(forge.id, "/srv/e2e-restore/etc/.restored-from")).toContain(`taken`);
 
-    /* What was sent to the host is on record: no overwrite, this target. */
-    const [requested] = await api.get<{ metadata: { params: { overwrite: boolean; target: string } } }[]>(
-      "/audit?action=backup.restore.requested&per_page=1&sort=seq&order=desc",
+    /* `overwrite` is honoured by the host: off keeps a file already there, on puts the snapshot's back. */
+    const snapshotHostname = await hostFile(forge.id, "/srv/e2e-restore/etc/hostname");
+    expect(snapshotHostname).toBe(await hostFile(forge.id, "/etc/hostname"));
+    await writeHostFile(forge.id, "/srv/e2e-restore/etc/hostname", "edited after the restore\n");
+    expect((await restoreVia(point!, forge.id, "/srv/e2e-restore", false)).status).toBe("succeeded");
+    expect(await hostFile(forge.id, "/srv/e2e-restore/etc/hostname")).toBe("edited after the restore\n");
+    expect((await restoreVia(point!, forge.id, "/srv/e2e-restore", true)).status).toBe("succeeded");
+    expect(await hostFile(forge.id, "/srv/e2e-restore/etc/hostname")).toBe(snapshotHostname);
+
+    /* What was sent to the host is on record: the panel's restore had no overwrite, this target. */
+    const requested = await api.get<{ metadata: { params: { overwrite: boolean; target: string } } }[]>(
+      "/audit?action=backup.restore.requested&per_page=3&sort=seq&order=desc",
     );
-    expect(requested?.metadata.params).toMatchObject({ overwrite: false, target: "/srv/e2e-restore" });
+    expect(requested.map((r) => r.metadata.params.overwrite)).toEqual([true, false, false]);
+    expect(requested[2]?.metadata.params).toMatchObject({ overwrite: false, target: "/srv/e2e-restore" });
 
     /* The label is retyped and checked against the row, not the browser. */
     const wrong = await api.call("POST", "/backups/restore", {
@@ -320,5 +377,126 @@ test.describe("backups", () => {
     }
     const run = await api.call("POST", `/backups/schedules/${missingId}/run`);
     expect(run.status).toBe(404);
+  });
+
+  test("a seeded restore point names a snapshot the host's repository really has", async () => {
+    const forge = await server("forge-01");
+    const api = await owner();
+    const seeded = (
+      await api.get<Point[]>(`/backups/restore-points?server_id=${forge.id}&q=forge-01-&per_page=50&sort=taken_at&order=desc`)
+    ).filter((p) => p.label.startsWith("forge-01-"));
+    expect(seeded.length).toBeGreaterThan(1);
+    const unverified = seeded.find((p) => p.verified_at === null)!;
+    expect(unverified).toBeTruthy();
+
+    const accepted = await api.ok<{ job: JobRow }>("POST", `/backups/restore-points/${unverified.id}/verify`);
+    const job = await settled(accepted.job.id, 90_000);
+    expect(job.status, JSON.stringify(job.error)).toBe("succeeded");
+    await expect.poll(async () => (await api.get<Point>(`/backups/restore-points/${unverified.id}`)).verified_at).not.toBeNull();
+
+    /* And it restores, from that very snapshot. */
+    const { snapshot_id } = await api.get<Point & { snapshot_id: string }>(`/backups/restore-points/${unverified.id}`);
+    expect((await restoreVia(unverified, forge.id, "/srv/e2e-seeded", false)).status).toBe("succeeded");
+    expect(await hostFile(forge.id, "/srv/e2e-seeded/etc/.restored-from")).toContain(`snapshot ${snapshot_id}`);
+  });
+
+  test("a slot that came due while the control plane was down runs once, and only once, across restarts", async () => {
+    test.setTimeout(8 * 60_000);
+    const forge = await server("forge-01");
+    const plan = await schedule("e2e missed while down", ["/etc/nginx"]);
+    expect(await runsOf(plan.id)).toHaveLength(0);
+
+    /* Down: the slot is moved into the past, as if the machine had been off at 02:30. */
+    await withControlPlaneStopped(async () => {
+      const db = await openDatabase();
+      try {
+        await db.query("update backup_schedules set next_run_at = now() - interval '5 minutes' where id = $1", [plan.id]);
+      } finally {
+        await db.close();
+      }
+    });
+
+    const api = await owner();
+    await expect.poll(async () => (await runsOf(plan.id)).length, { timeout: 60_000 }).toBe(1);
+    const [run] = await runsOf(plan.id);
+    expect(run).toMatchObject({ trigger: "scheduled", server_id: forge.id });
+    expect((await settled(run!.job_id, 90_000)).status).toBe("succeeded");
+    await expect.poll(async () => (await runsOf(plan.id))[0]?.status).toBe("succeeded");
+    const after = await api.get<Schedule>(`/backups/schedules/${plan.id}`);
+    expect(Date.parse(after.next_run_at!)).toBeGreaterThan(Date.now());
+    expect(after.last_run_status).toBe("succeeded");
+
+    /*
+     * Restarted again, with only a second schedule made due. Its run is
+     * the evidence that the new process has made a full pass; the first
+     * schedule, whose next run is persisted in the future, must not have
+     * been run a second time by it.
+     */
+    const canary = await schedule("e2e restart canary", ["/etc/nginx"]);
+    await withControlPlaneStopped(async () => {
+      const db = await openDatabase();
+      try {
+        await db.query("update backup_schedules set next_run_at = now() - interval '1 minute' where id = $1", [canary.id]);
+      } finally {
+        await db.close();
+      }
+    });
+    await expect.poll(async () => (await runsOf(canary.id)).length, { timeout: 60_000 }).toBe(1);
+    expect((await settled((await runsOf(canary.id))[0]!.job_id, 90_000)).status).toBe("succeeded");
+    expect(await runsOf(plan.id)).toHaveLength(1);
+    expect((await api.get<Schedule>(`/backups/schedules/${plan.id}`)).next_run_at).toBe(after.next_run_at);
+    const audit = (await auditRows("backup.run.requested", 50)).filter((r) => r.target_label === plan.name);
+    expect(audit).toHaveLength(1);
+  });
+
+  test("a schedule fires on its cron on its own server, and waits for an offline agent", async () => {
+    test.setTimeout(6 * 60_000);
+    const edge = await server("edge-01");
+    const api = await owner();
+    const destination = await localDestination("e2e edge repository", "edge-01");
+    const plan = await api.ok<Schedule>("POST", "/backups/schedules", {
+      name: "e2e every minute",
+      server_id: edge.id,
+      destination_id: destination.id,
+      scope: [{ kind: "files", selectors: ["/etc"] }],
+      cron: "* * * * *",
+      retention: { keep_last: 3, keep_daily: 0, keep_weekly: 0, keep_monthly: 0 },
+    });
+    expect(Date.parse(plan.next_run_at!) - Date.now()).toBeLessThanOrEqual(61_000);
+
+    await stopAgent("edge-01");
+    try {
+      /* The scheduler queues it with nobody pressing anything; the host is away, so it waits. */
+      await expect.poll(async () => (await runsOf(plan.id)).length, { timeout: 120_000, intervals: [2000] }).toBe(1);
+      const [run] = await runsOf(plan.id);
+      expect(run).toMatchObject({ trigger: "scheduled", status: "queued", server_id: edge.id });
+      const job = await api.get<Job>(`/jobs/${run!.job_id}`);
+      expect(job).toMatchObject({ type: "backup.run", server_id: edge.id, status: "queued", blocked_reason: "agent_offline" });
+
+      /* The next slot passes while it waits: no second run is stacked behind it. */
+      const firstSlot = (await api.get<Schedule>(`/backups/schedules/${plan.id}`)).next_run_at!;
+      await expect
+        .poll(async () => (await api.get<Schedule>(`/backups/schedules/${plan.id}`)).next_run_at, {
+          timeout: 120_000,
+          intervals: [2000],
+        })
+        .not.toBe(firstSlot);
+      expect(await runsOf(plan.id)).toHaveLength(1);
+    } finally {
+      await startAgent("edge-01");
+    }
+
+    try {
+      /* Back online, the waiting run is claimed and completes on edge-01. */
+      const [run] = await runsOf(plan.id);
+      const done = await settled(run!.job_id, 120_000);
+      expect(done.status, JSON.stringify(done.error)).toBe("succeeded");
+      await expect.poll(async () => (await runsOf(plan.id)).find((r) => r.id === run!.id)?.status).toBe("succeeded");
+      const [point] = await pointsFor(plan.id);
+      expect(point?.run_id).toBe(run!.id);
+    } finally {
+      /* Every minute is a test cadence, not one to leave running for the rest of the suite. */
+      await api.ok("PATCH", `/backups/schedules/${plan.id}`, { enabled: false });
+    }
   });
 });

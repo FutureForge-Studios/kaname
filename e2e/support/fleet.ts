@@ -104,6 +104,8 @@ export interface ContainerRow {
   id: string;
   server_id: string;
   server_name: string;
+  /** The runtime's id; a container's hostname is its first 12 characters. */
+  container_id: string;
   name: string;
   state: string;
   restart_count: number;
@@ -294,12 +296,15 @@ function recordPid(pid: number): void {
   writeFileSync(stackFile, JSON.stringify({ pids }, null, 2));
 }
 
-/** Starts (or restarts) the simulated agent for a state directory. */
-export function startAgent(name: string): Managed {
+/**
+ * Starts (or restarts) the simulated agent for a state directory. `extra`
+ * goes after the arguments `agentPids` matches on, e.g. a heartbeat delay.
+ */
+export function startAgent(name: string, extra: string[] = []): Managed {
   const managed = launch(
     `agent-${name}-${Date.now().toString(36)}`,
     agentBinary,
-    ["run", "--simulate", "--state-dir", stateDir(name), "--log-level", "info"],
+    ["run", "--simulate", "--state-dir", stateDir(name), "--log-level", "info", ...extra],
     { cwd: repoRoot, env: { KANAME_ENV: "development" } },
   );
   recordPid(managed.pid);
@@ -365,6 +370,9 @@ export interface TerminalSessionRow {
   server_id: string;
   started_at: string | null;
   ended_at: string | null;
+  /** Set for a container's Exec session; null for a host shell. */
+  container_name: string | null;
+  recording_available: boolean;
 }
 
 export async function terminalSessionsFor(serverId: string): Promise<TerminalSessionRow[]> {
