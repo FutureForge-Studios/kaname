@@ -279,6 +279,8 @@ function TotpCard({ user, onChanged }: { user: User | null; onChanged: () => voi
 
   return (
     <SectionCard
+      id="two-factor"
+      className="scroll-mt-4"
       title="Two-factor authentication"
       icon={ShieldCheck}
       description="A time-based code from an authenticator app, checked on every sign-in."

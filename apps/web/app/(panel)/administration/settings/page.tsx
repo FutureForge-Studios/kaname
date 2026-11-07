@@ -202,8 +202,21 @@ function SettingsSection({
   onReset,
   children,
 }: SettingsSectionProps) {
+  /* Anchors such as #notifications are linked from Getting Started. The
+   * sections render after the settings load, so the browser's own jump
+   * to the hash has already happened by then; do it once on mount. */
+  const anchor = title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const ref = React.useRef<HTMLElement>(null);
+  React.useEffect(() => {
+    if (window.location.hash === `#${anchor}`) ref.current?.scrollIntoView({ block: "start" });
+  }, [anchor]);
+
   return (
-    <section className="overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)]">
+    <section
+      ref={ref}
+      id={anchor}
+      className="scroll-mt-4 overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)]"
+    >
       <div className="flex min-h-9 items-center justify-between gap-3 border-b border-[var(--kn-border)] px-4 py-2">
         <div className="flex min-w-0 items-center gap-2">
           <Icon size={14} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
