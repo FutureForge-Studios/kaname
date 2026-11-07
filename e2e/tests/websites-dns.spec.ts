@@ -56,6 +56,14 @@ async function openZone(page: Page, domain: DomainRow) {
   await expect(page.getByText(domain.name).first()).toBeVisible();
 }
 
+/** A queued job opens the activity drawer over the page; close it to read the page. */
+async function closeDrawer(page: Page) {
+  const drawer = page.getByRole("dialog", { name: "Job activity" });
+  await expect(drawer).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(drawer).toBeHidden();
+}
+
 async function openAddRecord(page: Page, domain: DomainRow) {
   await page.getByRole("button", { name: "Add record" }).first().click();
   const dialog = page.getByRole("dialog", { name: `Add record to ${domain.name}` });
@@ -104,6 +112,9 @@ test("a manual zone's records are created, edited and deleted from the DNS page"
     `${domain.name} already has that exact A record.`,
   );
   await again.getByRole("button", { name: "Cancel" }).click();
+  /* The refusal's toast is dismissed here: once the edit dialog is open
+   * it is modal and the toast stack behind it no longer takes a click. */
+  await dismissToasts(page);
 
   /* Edit in place. */
   await row.getByRole("button", { name: "Row actions" }).click();
@@ -305,6 +316,7 @@ test("a Cloudflare zone syncs as a job and apply pushes its staged drift back", 
     /* Sync is a job, watched in place; its summary is the job's result. */
     await openZone(page, domain);
     await page.getByRole("button", { name: "Sync zone" }).click();
+    await closeDrawer(page);
     const synced = page.locator("section").filter({ hasText: `${name} synced` });
     await expect(synced).toBeVisible({ timeout: 60_000 });
     await expect(synced).toContainText("2created");
@@ -337,6 +349,7 @@ test("a Cloudflare zone syncs as a job and apply pushes its staged drift back", 
     );
     await dismissToasts(page);
     await page.getByRole("button", { name: "Sync zone" }).click();
+    await closeDrawer(page);
     await expect(synced).toContainText("2drifted", { timeout: 60_000 });
     const www = (await records(domain.id)).find((r) => r.name === `www.${name}`)!;
     expect(www.content).toBe("198.51.100.9");
@@ -346,6 +359,7 @@ test("a Cloudflare zone syncs as a job and apply pushes its staged drift back", 
     const apply = page.getByRole("button", { name: "Apply 2 staged" });
     await expect(apply).toBeEnabled();
     await apply.click();
+    await closeDrawer(page);
     await expectJobStatus(sectionNamed(page, "Apply job"), "Succeeded");
     expect(cf.writes.sort()).toEqual(
       [`POST api.${name} 203.0.113.51`, `PUT www.${name} 203.0.113.50`].sort(),
