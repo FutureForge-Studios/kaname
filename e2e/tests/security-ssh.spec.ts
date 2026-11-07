@@ -237,7 +237,7 @@ test.describe("ssh", () => {
 
     await expect(
       page.getByText(
-        "This sshd configuration would end SSH access to db-01 and you asked for no rollback window.",
+        "Apply sshd configuration: This sshd configuration would end SSH access to db-01 and you asked for no rollback window.",
       ),
     ).toBeVisible();
     expect(await hostFile(db.id, SSHD)).toBe(before);

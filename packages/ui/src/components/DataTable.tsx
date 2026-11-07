@@ -353,6 +353,11 @@ function DataTableInner<T>(
           focusRow(rows.length - 1);
           break;
         case "Enter": {
+          // Enter on a control inside the row (the row menu, a link) is
+          // that control's own activation. Taking it for the row opened the
+          // row instead and, with preventDefault, made the row menu
+          // unreachable from the keyboard.
+          if (target.closest(CONTROL_SELECTOR)) break;
           const row = rows[current];
           if (onRowClick && row !== undefined) {
             event.preventDefault();

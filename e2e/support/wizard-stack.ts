@@ -105,7 +105,6 @@ function startFreshControlPlane(): Managed {
       // variable that is already set. Empty means "no bootstrap owner".
       KANAME_BOOTSTRAP_EMAIL: "",
       KANAME_BOOTSTRAP_PASSWORD: "",
-      KANAME_SETUP_TOKEN: "",
       KANAME_DEPLOYMENT: "compose",
       KANAME_DATA_DIR: wizardDataDir,
       LOG_LEVEL: "info",
@@ -131,7 +130,9 @@ async function waitForSetupToken(): Promise<string> {
 
 function readSetupToken(logPath: string): string | null {
   if (!existsSync(logPath)) return null;
-  const matches = [...readFileSync(logPath, "utf8").matchAll(/"setup_token":"([^"]+)"/g)];
+  // JSON lines, or pino-pretty (development forces it): `setup_token: "…"`.
+  const text = readFileSync(logPath, "utf8").replace(/\u001b\[[0-9;]*m/g, "");
+  const matches = [...text.matchAll(/"?setup_token"?\s*:\s*"(kn_setup[^"]+)"/g)];
   return matches.at(-1)?.[1] ?? null;
 }
 
