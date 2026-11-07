@@ -16,9 +16,10 @@ use super::files::{Node, clean_path, path_base, path_dir};
 use super::services::unit_active;
 use super::state::{Sim, World, hash_string, mix, progress};
 use crate::providers::{
-    Ctx, Databases, DbDatabaseCreateParams, DbDatabaseDeleteParams, DbDatabaseInfo, DbDumpParams, DbDumpResult,
-    DbEngineParams, DbGrantApplyParams, DbInstanceInfo, DbRestoreParams, DbSizeParams, DbSizeResult,
-    DbUserCreateParams, DbUserDeleteParams, DbUserInfo, DbUserUpdateParams, PResult, ProviderError, StreamRef,
+    Ctx, Databases, DbDatabaseCreateParams, DbDatabaseDeleteParams, DbDatabaseInfo, DbDumpParams,
+    DbDumpResult, DbEngineParams, DbGrantApplyParams, DbInstanceInfo, DbRestoreParams, DbSizeParams,
+    DbSizeResult, DbUserCreateParams, DbUserDeleteParams, DbUserInfo, DbUserUpdateParams, PResult,
+    ProviderError, StreamRef,
 };
 
 pub const ENGINE_POSTGRES: &str = "postgres";
@@ -51,8 +52,11 @@ pub fn build_databases(sim: &Sim) {
             .collect(),
     );
 
-    let mariadb: &[(&str, i64, i64)] =
-        &[("blog_prod", 3_221_225_472, 64), ("blog_staging", 486_539_264, 64), ("legacy_crm", 12_884_901_888, 211)];
+    let mariadb: &[(&str, i64, i64)] = &[
+        ("blog_prod", 3_221_225_472, 64),
+        ("blog_staging", 486_539_264, 64),
+        ("legacy_crm", 12_884_901_888, 211),
+    ];
     w.databases.insert(
         ENGINE_MARIADB.into(),
         mariadb
@@ -100,13 +104,28 @@ pub fn build_databases(sim: &Sim) {
         (ENGINE_POSTGRES, "storefront", "storefront", "localhost", &["ALL"]),
         (ENGINE_POSTGRES, "analytics", "analytics", "localhost", &["ALL"]),
         (ENGINE_POSTGRES, "analytics", "readonly", "localhost", &["SELECT"]),
-        (ENGINE_POSTGRES, "storefront", "readonly", "localhost", &["SELECT"]),
-        (ENGINE_MARIADB, "blog_prod", "blog", "localhost", &["SELECT", "INSERT", "UPDATE", "DELETE"]),
+        (
+            ENGINE_POSTGRES,
+            "storefront",
+            "readonly",
+            "localhost",
+            &["SELECT"],
+        ),
+        (
+            ENGINE_MARIADB,
+            "blog_prod",
+            "blog",
+            "localhost",
+            &["SELECT", "INSERT", "UPDATE", "DELETE"],
+        ),
         (ENGINE_MARIADB, "blog_staging", "blog", "localhost", &["ALL"]),
         (ENGINE_MARIADB, "legacy_crm", "backup", "%", &["SELECT"]),
     ];
     for (engine, database, user, host, privileges) in grants {
-        w.db_grants.insert(grant_key(engine, database, user, host), privileges.iter().map(|p| p.to_string()).collect());
+        w.db_grants.insert(
+            grant_key(engine, database, user, host),
+            privileges.iter().map(|p| p.to_string()).collect(),
+        );
     }
 }
 
@@ -117,15 +136,25 @@ fn grant_key(engine: &str, database: &str, user: &str, host: &str) -> String {
 /// Folds mysql onto mariadb: the host runs one of them, and a panel
 /// configured for either should reach it.
 fn normalise_engine(engine: &str) -> String {
-    if engine == ENGINE_MYSQL { ENGINE_MARIADB.into() } else { engine.into() }
+    if engine == ENGINE_MYSQL {
+        ENGINE_MARIADB.into()
+    } else {
+        engine.into()
+    }
 }
 
 pub fn find_database<'a>(w: &'a World, engine: &str, name: &str) -> Option<&'a DbDatabaseInfo> {
-    w.databases.get(&normalise_engine(engine))?.iter().find(|db| db.name == name)
+    w.databases
+        .get(&normalise_engine(engine))?
+        .iter()
+        .find(|db| db.name == name)
 }
 
 fn find_database_mut<'a>(w: &'a mut World, engine: &str, name: &str) -> Option<&'a mut DbDatabaseInfo> {
-    w.databases.get_mut(&normalise_engine(engine))?.iter_mut().find(|db| db.name == name)
+    w.databases
+        .get_mut(&normalise_engine(engine))?
+        .iter_mut()
+        .find(|db| db.name == name)
 }
 
 fn find_user_index(w: &World, engine: &str, username: &str, host: &str) -> Option<usize> {
@@ -136,18 +165,40 @@ fn find_user_index(w: &World, engine: &str, username: &str, host: &str) -> Optio
 }
 
 fn sum_sizes(w: &World, engine: &str) -> i64 {
-    w.databases.get(engine).map(|dbs| dbs.iter().map(|d| d.size_bytes).sum()).unwrap_or(0)
+    w.databases
+        .get(engine)
+        .map(|dbs| dbs.iter().map(|d| d.size_bytes).sum())
+        .unwrap_or(0)
 }
 
 fn dump_table_name(engine: &str, index: usize) -> &'static str {
     const PG: &[&str] = &[
-        "users", "sessions", "orders", "order_items", "products", "inventory",
-        "audit_events", "jobs", "job_logs", "settings", "migrations", "carts",
+        "users",
+        "sessions",
+        "orders",
+        "order_items",
+        "products",
+        "inventory",
+        "audit_events",
+        "jobs",
+        "job_logs",
+        "settings",
+        "migrations",
+        "carts",
     ];
     const WP: &[&str] = &[
-        "wp_posts", "wp_postmeta", "wp_options", "wp_users", "wp_usermeta",
-        "wp_terms", "wp_term_taxonomy", "wp_comments", "wp_commentmeta",
-        "wp_links", "wp_termmeta", "wp_term_relationships",
+        "wp_posts",
+        "wp_postmeta",
+        "wp_options",
+        "wp_users",
+        "wp_usermeta",
+        "wp_terms",
+        "wp_term_taxonomy",
+        "wp_comments",
+        "wp_commentmeta",
+        "wp_links",
+        "wp_termmeta",
+        "wp_term_relationships",
     ];
     let tables = if engine == ENGINE_MARIADB { WP } else { PG };
     tables[index % tables.len()]
@@ -189,7 +240,11 @@ impl Databases for SimDatabases {
 
     async fn list_databases(&self, _ctx: &Ctx, p: DbEngineParams) -> PResult<Vec<DbDatabaseInfo>> {
         let w = self.0.world.lock();
-        let mut out = w.databases.get(&normalise_engine(&p.engine)).cloned().unwrap_or_default();
+        let mut out = w
+            .databases
+            .get(&normalise_engine(&p.engine))
+            .cloned()
+            .unwrap_or_default();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
     }
@@ -198,7 +253,10 @@ impl Databases for SimDatabases {
         let engine = normalise_engine(&p.engine);
         let mut w = self.0.world.lock();
         if find_database(&w, &engine, &p.name).is_some() {
-            return Err(ProviderError::conflict(format!("database {} already exists", p.name)));
+            return Err(ProviderError::conflict(format!(
+                "database {} already exists",
+                p.name
+            )));
         }
 
         let (mut encoding, mut collation) = ("UTF8".to_string(), "en_US.UTF-8".to_string());
@@ -213,7 +271,11 @@ impl Databases for SimDatabases {
             collation = c;
         }
         let owner = p.owner.filter(|o| !o.is_empty()).unwrap_or_else(|| {
-            if engine == ENGINE_MARIADB { "root".to_string() } else { "postgres".to_string() }
+            if engine == ENGINE_MARIADB {
+                "root".to_string()
+            } else {
+                "postgres".to_string()
+            }
         });
 
         let db = DbDatabaseInfo {
@@ -246,7 +308,11 @@ impl Databases for SimDatabases {
 
     async fn list_users(&self, _ctx: &Ctx, p: DbEngineParams) -> PResult<Vec<DbUserInfo>> {
         let w = self.0.world.lock();
-        let mut out = w.db_users.get(&normalise_engine(&p.engine)).cloned().unwrap_or_default();
+        let mut out = w
+            .db_users
+            .get(&normalise_engine(&p.engine))
+            .cloned()
+            .unwrap_or_default();
         out.sort_by(|a, b| a.username.cmp(&b.username));
         Ok(out)
     }
@@ -255,9 +321,16 @@ impl Databases for SimDatabases {
         let engine = normalise_engine(&p.engine);
         let mut w = self.0.world.lock();
         if find_user_index(&w, &engine, &p.username, &p.host_pattern).is_some() {
-            return Err(ProviderError::conflict(format!("user {} already exists", p.username)));
+            return Err(ProviderError::conflict(format!(
+                "user {} already exists",
+                p.username
+            )));
         }
-        let plugin = if engine == ENGINE_MARIADB { "mysql_native_password" } else { "scram-sha-256" };
+        let plugin = if engine == ENGINE_MARIADB {
+            "mysql_native_password"
+        } else {
+            "scram-sha-256"
+        };
         let user = DbUserInfo {
             username: p.username,
             host_pattern: p.host_pattern,
@@ -286,11 +359,20 @@ impl Databases for SimDatabases {
         let engine = normalise_engine(&p.engine);
         let mut w = self.0.world.lock();
         let users = w.db_users.entry(engine).or_default();
-        let Some(index) = users.iter().position(|u| u.username == p.username && u.host_pattern == p.host_pattern) else {
-            return Err(ProviderError::not_found(format!("user {}@{}", p.username, p.host_pattern)));
+        let Some(index) = users
+            .iter()
+            .position(|u| u.username == p.username && u.host_pattern == p.host_pattern)
+        else {
+            return Err(ProviderError::not_found(format!(
+                "user {}@{}",
+                p.username, p.host_pattern
+            )));
         };
         if users[index].is_superuser {
-            return Err(ProviderError::PermissionDenied(format!("refusing to drop the superuser {}", p.username)));
+            return Err(ProviderError::PermissionDenied(format!(
+                "refusing to drop the superuser {}",
+                p.username
+            )));
         }
         users.remove(index);
 
@@ -306,7 +388,10 @@ impl Databases for SimDatabases {
             return Err(ProviderError::not_found(format!("database {}", p.database)));
         }
         if find_user_index(&w, &engine, &p.username, &p.host_pattern).is_none() {
-            return Err(ProviderError::not_found(format!("user {}@{}", p.username, p.host_pattern)));
+            return Err(ProviderError::not_found(format!(
+                "user {}@{}",
+                p.username, p.host_pattern
+            )));
         }
 
         let key = grant_key(&engine, &p.database, &p.username, &p.host_pattern);
@@ -325,7 +410,10 @@ impl Databases for SimDatabases {
         let Some(db) = find_database(&w, &p.engine, &p.name) else {
             return Err(ProviderError::not_found(format!("database {}", p.name)));
         };
-        Ok(DbSizeResult { size_bytes: db.size_bytes, table_count: db.table_count })
+        Ok(DbSizeResult {
+            size_bytes: db.size_bytes,
+            table_count: db.table_count,
+        })
     }
 
     async fn dump(&self, ctx: &Ctx, p: DbDumpParams, s: StreamRef) -> PResult<DbDumpResult> {
@@ -340,14 +428,27 @@ impl Databases for SimDatabases {
             (db.size_bytes, db.table_count)
         };
 
-        let tool = if engine == ENGINE_MARIADB { "mariadb-dump" } else { "pg_dump" };
-        progress(ctx, &*s, Duration::ZERO, format!("{tool}: dumping database {:?} to {destination}", p.name)).await?;
+        let tool = if engine == ENGINE_MARIADB {
+            "mariadb-dump"
+        } else {
+            "pg_dump"
+        };
+        progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            format!("{tool}: dumping database {:?} to {destination}", p.name),
+        )
+        .await?;
         for i in 0..tables.min(12) {
             progress(
                 ctx,
                 &*s,
                 Duration::from_millis(110),
-                format!("{tool}: dumping contents of table \"public.{}\"", dump_table_name(&engine, i as usize)),
+                format!(
+                    "{tool}: dumping contents of table \"public.{}\"",
+                    dump_table_name(&engine, i as usize)
+                ),
             )
             .await?;
         }
@@ -359,12 +460,23 @@ impl Databases for SimDatabases {
             fs.mkdir_all(&path_dir(&destination));
             let mut n = Node::new_file(&path_base(&destination), Vec::new(), "0640", Utc::now());
             n.virtual_size = size;
-            fs.parent_mut(&destination)?.children.insert(path_base(&destination), n);
+            fs.parent_mut(&destination)?
+                .children
+                .insert(path_base(&destination), n);
         }
         self.0.account_bytes(size);
 
-        let _ = progress(ctx, &*s, Duration::ZERO, format!("{tool}: wrote {destination} ({size} bytes, {tables} tables)")).await;
-        Ok(DbDumpResult { path: destination, size_bytes: size })
+        let _ = progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            format!("{tool}: wrote {destination} ({size} bytes, {tables} tables)"),
+        )
+        .await;
+        Ok(DbDumpResult {
+            path: destination,
+            size_bytes: size,
+        })
     }
 
     async fn restore(&self, ctx: &Ctx, p: DbRestoreParams, s: StreamRef) -> PResult<()> {
@@ -377,7 +489,11 @@ impl Databases for SimDatabases {
             dump.size()
         };
 
-        let tool = if engine == ENGINE_MARIADB { "mariadb" } else { "psql" };
+        let tool = if engine == ENGINE_MARIADB {
+            "mariadb"
+        } else {
+            "psql"
+        };
 
         {
             let mut w = self.0.world.lock();
@@ -385,14 +501,17 @@ impl Databases for SimDatabases {
                 if !p.drop_existing {
                     return Err(ProviderError::not_found(format!("database {}", p.name)));
                 }
-                w.databases.entry(engine.clone()).or_default().push(DbDatabaseInfo {
-                    name: p.name.clone(),
-                    owner: Some("postgres".into()),
-                    encoding: "UTF8".into(),
-                    collation: Some("en_US.UTF-8".into()),
-                    size_bytes: 0,
-                    table_count: 0,
-                });
+                w.databases
+                    .entry(engine.clone())
+                    .or_default()
+                    .push(DbDatabaseInfo {
+                        name: p.name.clone(),
+                        owner: Some("postgres".into()),
+                        encoding: "UTF8".into(),
+                        collation: Some("en_US.UTF-8".into()),
+                        size_bytes: 0,
+                        table_count: 0,
+                    });
             }
         }
 

@@ -20,7 +20,9 @@ use chrono::{DateTime, Utc};
 use super::containers::find_container;
 use super::firewall::THREAT_SOURCES;
 use super::state::{Sim, hash_string, lattice, mix, parse_stamp, pick, stamp};
-use crate::providers::{Ctx, Encoding, LogRecord, LogSource, LogTailParams, Logs, PResult, ProviderError, Stream, StreamRef};
+use crate::providers::{
+    Ctx, Encoding, LogRecord, LogSource, LogTailParams, Logs, PResult, ProviderError, Stream, StreamRef,
+};
 
 pub const SOURCE_JOURNAL: &str = "journal";
 pub const SOURCE_SYSLOG: &str = "syslog";
@@ -83,18 +85,82 @@ impl LogStream {
 
 /* ------------------------------ catalogue ---------------------------- */
 
-fn stream(id: &str, label: &str, kind: &str, r#ref: &str, size: i64, rate: f64, render: Renderer) -> LogStream {
-    LogStream { id: id.into(), label: label.into(), kind: kind.into(), r#ref: r#ref.into(), size, rate, render }
+fn stream(
+    id: &str,
+    label: &str,
+    kind: &str,
+    r#ref: &str,
+    size: i64,
+    rate: f64,
+    render: Renderer,
+) -> LogStream {
+    LogStream {
+        id: id.into(),
+        label: label.into(),
+        kind: kind.into(),
+        r#ref: r#ref.into(),
+        size,
+        rate,
+        render,
+    }
 }
 
 pub fn log_streams(sim: &Sim) -> Vec<LogStream> {
     let mut streams = vec![
-        stream(SOURCE_JOURNAL, "systemd journal", "journald", "*", 117_440_512, 1.6, Renderer::Journal(String::new())),
-        stream(SOURCE_SYSLOG, "/var/log/syslog", "file", "/var/log/syslog", 18_432_112, 0.9, Renderer::Syslog),
-        stream(SOURCE_AUTH, "/var/log/auth.log", "file", "/var/log/auth.log", 2_884_213, 0.35, Renderer::Auth),
-        stream(SOURCE_NGINX_ACCESS, "nginx access", "nginx_access", "/var/log/nginx/access.log", 214_884_112, 3.4, Renderer::NginxAccess),
-        stream(SOURCE_NGINX_ERROR, "nginx error", "nginx_error", "/var/log/nginx/error.log", 4_118_223, 0.14, Renderer::NginxError),
-        stream(SOURCE_MAIL, "Yunori Mail (Stalwart)", "journald", "stalwart-mail.service", 9_442_881, 1.0, Renderer::Mail),
+        stream(
+            SOURCE_JOURNAL,
+            "systemd journal",
+            "journald",
+            "*",
+            117_440_512,
+            1.6,
+            Renderer::Journal(String::new()),
+        ),
+        stream(
+            SOURCE_SYSLOG,
+            "/var/log/syslog",
+            "file",
+            "/var/log/syslog",
+            18_432_112,
+            0.9,
+            Renderer::Syslog,
+        ),
+        stream(
+            SOURCE_AUTH,
+            "/var/log/auth.log",
+            "file",
+            "/var/log/auth.log",
+            2_884_213,
+            0.35,
+            Renderer::Auth,
+        ),
+        stream(
+            SOURCE_NGINX_ACCESS,
+            "nginx access",
+            "nginx_access",
+            "/var/log/nginx/access.log",
+            214_884_112,
+            3.4,
+            Renderer::NginxAccess,
+        ),
+        stream(
+            SOURCE_NGINX_ERROR,
+            "nginx error",
+            "nginx_error",
+            "/var/log/nginx/error.log",
+            4_118_223,
+            0.14,
+            Renderer::NginxError,
+        ),
+        stream(
+            SOURCE_MAIL,
+            "Yunori Mail (Stalwart)",
+            "journald",
+            "stalwart-mail.service",
+            9_442_881,
+            1.0,
+            Renderer::Mail,
+        ),
     ];
 
     let w = sim.world.lock();
@@ -115,7 +181,10 @@ fn container_stream(name: &str, image: &str) -> LogStream {
         r#ref: name.into(),
         size: 12_884_901,
         rate: 0.45,
-        render: Renderer::Container { name: name.into(), image: image.into() },
+        render: Renderer::Container {
+            name: name.into(),
+            image: image.into(),
+        },
     }
 }
 
@@ -194,7 +263,12 @@ pub async fn tail(sim: &Sim, ctx: &Ctx, stream: &dyn Stream, req: TailRequest) -
     let last = generator.index_at(origin, now);
 
     let mut first = last - lines;
-    if let Some(since) = req.since.as_deref().filter(|s| !s.is_empty()).and_then(parse_stamp) {
+    if let Some(since) = req
+        .since
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(parse_stamp)
+    {
         let from = generator.index_at(origin, since);
         if from > first {
             first = from;
@@ -317,13 +391,27 @@ fn pick_level(seed: u64, n: i64) -> &'static str {
 }
 
 const JOURNAL_UNITS: &[&str] = &[
-    "nginx", "postgresql@16-main", "dockerd", "containerd", "stalwart-mail", "yunori-mail", "sshd", "CRON", "systemd",
-    "fail2ban.actions", "kanamed", "systemd-timesyncd",
+    "nginx",
+    "postgresql@16-main",
+    "dockerd",
+    "containerd",
+    "stalwart-mail",
+    "yunori-mail",
+    "sshd",
+    "CRON",
+    "systemd",
+    "fail2ban.actions",
+    "kanamed",
+    "systemd-timesyncd",
 ];
 
 fn render_journal(sim: &Sim, unit: &str, n: i64, at: DateTime<Utc>) -> LogRecord {
     let seed = hash_string(&format!("journal|{unit}"));
-    let name = if unit.is_empty() { pick(seed, n, JOURNAL_UNITS).to_string() } else { unit.to_string() };
+    let name = if unit.is_empty() {
+        pick(seed, n, JOURNAL_UNITS).to_string()
+    } else {
+        unit.to_string()
+    };
     let name = name.trim_end_matches(".service").to_string();
 
     let (level, message) = journal_message(sim, seed, &name, n);
@@ -374,7 +462,13 @@ fn journal_message(sim: &Sim, seed: u64, unit: &str, n: i64) -> (&'static str, S
         }
         "postgresql@16-main" => {
             if level == "warn" {
-                return ("warn", format!("checkpoints are occurring too frequently ({} seconds apart)", 18 + n % 12));
+                return (
+                    "warn",
+                    format!(
+                        "checkpoints are occurring too frequently ({} seconds apart)",
+                        18 + n % 12
+                    ),
+                );
             }
             (
                 level,
@@ -409,9 +503,19 @@ fn journal_message(sim: &Sim, seed: u64, unit: &str, n: i64) -> (&'static str, S
                 seed,
                 n,
                 &[
-                    format!("INFO SMTP connection started (smtp.connection-start) remoteIp = {}, remotePort = {}", pick(seed, n, THREAT_SOURCES), 40000 + n % 20000),
-                    format!("INFO Message delivered (delivery.completed) host = mx1.example.net, to = \"anna@example.net\", elapsed = {}ms", 180 + n % 900),
-                    format!("WARN Authentication failed (auth.failed) accountName = \"ops@{mail_domain}\", remoteIp = {}", pick(seed ^ 0x7, n, THREAT_SOURCES)),
+                    format!(
+                        "INFO SMTP connection started (smtp.connection-start) remoteIp = {}, remotePort = {}",
+                        pick(seed, n, THREAT_SOURCES),
+                        40000 + n % 20000
+                    ),
+                    format!(
+                        "INFO Message delivered (delivery.completed) host = mx1.example.net, to = \"anna@example.net\", elapsed = {}ms",
+                        180 + n % 900
+                    ),
+                    format!(
+                        "WARN Authentication failed (auth.failed) accountName = \"ops@{mail_domain}\", remoteIp = {}",
+                        pick(seed ^ 0x7, n, THREAT_SOURCES)
+                    ),
                     "INFO Housekeeper task completed (housekeeper.run) task = \"purge-blobs\"".to_string(),
                 ],
             ),
@@ -480,7 +584,10 @@ fn journal_message(sim: &Sim, seed: u64, unit: &str, n: i64) -> (&'static str, S
             )
             .to_string(),
         ),
-        "systemd-timesyncd" => ("info", "Contacted time server 185.125.190.56:123 (ntp.ubuntu.com).".into()),
+        "systemd-timesyncd" => (
+            "info",
+            "Contacted time server 185.125.190.56:123 (ntp.ubuntu.com).".into(),
+        ),
         _ => (
             level,
             pick(
@@ -498,10 +605,22 @@ fn journal_message(sim: &Sim, seed: u64, unit: &str, n: i64) -> (&'static str, S
 }
 
 const ACCESS_PATHS: &[&str] = &[
-    "/", "/index.html", "/assets/app.css", "/assets/app.js", "/favicon.ico",
-    "/api/v1/status", "/api/v1/servers", "/api/v1/jobs?page=1", "/robots.txt",
-    "/blog/2026/08/shipping-kaname", "/pricing", "/docs/getting-started",
-    "/wp-login.php", "/.env", "/admin/config.php", "/api/v1/metrics?range=24h",
+    "/",
+    "/index.html",
+    "/assets/app.css",
+    "/assets/app.js",
+    "/favicon.ico",
+    "/api/v1/status",
+    "/api/v1/servers",
+    "/api/v1/jobs?page=1",
+    "/robots.txt",
+    "/blog/2026/08/shipping-kaname",
+    "/pricing",
+    "/docs/getting-started",
+    "/wp-login.php",
+    "/.env",
+    "/admin/config.php",
+    "/api/v1/metrics?range=24h",
 ];
 
 const USER_AGENTS: &[&str] = &[
@@ -515,8 +634,16 @@ const USER_AGENTS: &[&str] = &[
 ];
 
 const VISITOR_IPS: &[&str] = &[
-    "81.2.69.142", "24.48.0.1", "203.0.113.24", "198.51.100.77", "192.0.2.211",
-    "91.198.174.192", "8.8.8.8", "45.33.32.156", "104.28.14.10", "34.107.221.82",
+    "81.2.69.142",
+    "24.48.0.1",
+    "203.0.113.24",
+    "198.51.100.77",
+    "192.0.2.211",
+    "91.198.174.192",
+    "8.8.8.8",
+    "45.33.32.156",
+    "104.28.14.10",
+    "34.107.221.82",
 ];
 
 fn render_nginx_access(sim: &Sim, n: i64, at: DateTime<Utc>) -> LogRecord {
@@ -540,7 +667,11 @@ fn render_nginx_access(sim: &Sim, n: i64, at: DateTime<Utc>) -> LogRecord {
 
     let client = pick(seed ^ 0xa, n, VISITOR_IPS);
     let bytes = 180 + mix(seed ^ n as u64 ^ 0x44) % 48_000;
-    let referer = if mix(seed ^ n as u64 ^ 0x55) % 3 == 0 { format!("https://{}/", sim.id.domain) } else { "-".into() };
+    let referer = if mix(seed ^ n as u64 ^ 0x55) % 3 == 0 {
+        format!("https://{}/", sim.id.domain)
+    } else {
+        "-".into()
+    };
 
     let message = format!(
         "{client} - - [{}] \"{method} {path} HTTP/1.1\" {status} {bytes} \"{referer}\" \"{}\"",
@@ -568,7 +699,11 @@ fn render_nginx_error(sim: &Sim, n: i64, at: DateTime<Utc>) -> LogRecord {
     let client = pick(seed, n, THREAT_SOURCES);
     let pid = 1040 + (mix(seed ^ n as u64) % 4) as i64;
     let domain = &sim.id.domain;
-    let probe = pick(seed ^ 0x2, n, &["/wp-login.php", "/.env", "/phpmyadmin/index.php"]);
+    let probe = pick(
+        seed ^ 0x2,
+        n,
+        &["/wp-login.php", "/.env", "/phpmyadmin/index.php"],
+    );
 
     let variants = [
         format!(
@@ -586,7 +721,11 @@ fn render_nginx_error(sim: &Sim, n: i64, at: DateTime<Utc>) -> LogRecord {
         ),
     ];
 
-    let level = if mix(seed ^ n as u64 ^ 0x91) % 3 == 0 { "warn" } else { "error" };
+    let level = if mix(seed ^ n as u64 ^ 0x91) % 3 == 0 {
+        "warn"
+    } else {
+        "error"
+    };
 
     LogRecord {
         ts: stamp(at),
@@ -611,7 +750,11 @@ pub fn render_mail(sim: &Sim, n: i64, at: DateTime<Utc>) -> LogRecord {
     let queue_id = 1_000_000 + (mix(seed ^ n as u64) % 9_000_000) as i64;
     let local = pick(seed, n, &["hello", "ops", "alice", "billing", "noreply"]);
     let remote_user = pick(seed ^ 0x3, n, &["anna", "sam", "billing", "hello", "noreply"]);
-    let remote_domain = pick(seed ^ 0x4, n, &["example.net", "example.org", "mail.example.co", "contoso.example"]);
+    let remote_domain = pick(
+        seed ^ 0x4,
+        n,
+        &["example.net", "example.org", "mail.example.co", "contoso.example"],
+    );
     let remote_ip = pick(seed ^ 0x5, n, THREAT_SOURCES);
     let pid = 1_180 + (n % 3) as i64;
 
@@ -690,7 +833,11 @@ pub fn render_mail(sim: &Sim, n: i64, at: DateTime<Utc>) -> LogRecord {
         ts: stamp(at),
         level: level.into(),
         source: SOURCE_MAIL.into(),
-        message: format!("{} stalwart-mail[{pid}]: {} {body}", sim.short_host(), level.to_uppercase()),
+        message: format!(
+            "{} stalwart-mail[{pid}]: {} {body}",
+            sim.short_host(),
+            level.to_uppercase()
+        ),
         fields: fields(&[
             ("event", event.to_string()),
             ("queue_id", queue_id.to_string()),
@@ -778,8 +925,14 @@ fn render_container(sim: &Sim, name: &str, image: &str, n: i64, at: DateTime<Utc
             seed,
             n,
             &[
-                format!("API: SYSTEM.scanner  Time: {}", at.format("%H:%M:%S UTC %m/%d/%Y")),
-                format!("PUT /kaname-backups/2026/08/snapshot-{:04}.tar.zst 200 OK", n % 9999),
+                format!(
+                    "API: SYSTEM.scanner  Time: {}",
+                    at.format("%H:%M:%S UTC %m/%d/%Y")
+                ),
+                format!(
+                    "PUT /kaname-backups/2026/08/snapshot-{:04}.tar.zst 200 OK",
+                    n % 9999
+                ),
                 "Automatically configured API requests per node based on available memory".to_string(),
             ],
         )
@@ -789,7 +942,11 @@ fn render_container(sim: &Sim, name: &str, image: &str, n: i64, at: DateTime<Utc
             n,
             &[
                 format!("[Monitor] [#{} api.{domain}] Down: connect ETIMEDOUT", 3 + n % 6),
-                format!("[Monitor] [#{} {domain}] Up: 200 - OK ({}ms)", 1 + n % 9, 40 + n % 320),
+                format!(
+                    "[Monitor] [#{} {domain}] Up: 200 - OK ({}ms)",
+                    1 + n % 9,
+                    40 + n % 320
+                ),
                 "Adding a new monitor to the queue".to_string(),
             ],
         )
@@ -799,11 +956,23 @@ fn render_container(sim: &Sim, name: &str, image: &str, n: i64, at: DateTime<Utc
             n,
             &[
                 "Workflow execution finished successfully".to_string(),
-                format!("Workflow execution {} failed: ECONNREFUSED 127.0.0.1:5432", 1200 + n),
+                format!(
+                    "Workflow execution {} failed: ECONNREFUSED 127.0.0.1:5432",
+                    1200 + n
+                ),
             ],
         )
     } else {
-        pick(seed, n, &["listening on 0.0.0.0", "health check ok", "reloading configuration"]).to_string()
+        pick(
+            seed,
+            n,
+            &[
+                "listening on 0.0.0.0",
+                "health check ok",
+                "reloading configuration",
+            ],
+        )
+        .to_string()
     };
 
     LogRecord {
