@@ -217,6 +217,18 @@ pub fn build_security(sim: &Sim) {
     ];
 }
 
+/// The jail keys bans by bare address, and the control plane sends single
+/// addresses as /32 or /128. Without one spelling for both, a ban the jail
+/// made could never be lifted from the panel ("x/32 is not banned").
+fn ban_key(target: &str) -> String {
+    target
+        .strip_suffix("/32")
+        .filter(|ip| !ip.contains(':'))
+        .or_else(|| target.strip_suffix("/128").filter(|ip| ip.contains(':')))
+        .unwrap_or(target)
+        .to_string()
+}
+
 pub fn jail_for(kind: &str) -> &'static str {
     match kind {
         "web_bruteforce" => "nginx-http-auth",
@@ -516,20 +528,21 @@ impl Firewall for SimFirewall {
             expires_at: None,
             attempts: 0,
         };
-        if let Some(observation) = w.threats.get(&p.target) {
+        let key = ban_key(&p.target);
+        if let Some(observation) = w.threats.get(&key) {
             entry.jail = jail_for(&observation.kind).into();
             entry.attempts = observation.attempts;
         }
         if p.duration_seconds > 0 {
             entry.expires_at = Some(stamp(now + chrono::Duration::seconds(p.duration_seconds)));
         }
-        w.bans.insert(p.target, entry);
+        w.bans.insert(key, entry);
         Ok(())
     }
 
     async fn unban(&self, _ctx: &Ctx, p: FwUnbanParams) -> PResult<()> {
         let mut w = self.0.world.lock();
-        if w.bans.remove(&p.target).is_none() {
+        if w.bans.remove(&ban_key(&p.target)).is_none() {
             return Err(ProviderError::not_found(format!("{} is not banned", p.target)));
         }
         Ok(())
@@ -573,5 +586,18 @@ impl Firewall for SimFirewall {
             out.truncate(p.limit as usize);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod ban_key_tests {
+    use super::ban_key;
+
+    #[test]
+    fn single_addresses_share_the_jails_spelling() {
+        assert_eq!(ban_key("203.0.113.7/32"), "203.0.113.7");
+        assert_eq!(ban_key("203.0.113.7"), "203.0.113.7");
+        assert_eq!(ban_key("2001:db8::1/128"), "2001:db8::1");
+        assert_eq!(ban_key("203.0.113.0/24"), "203.0.113.0/24");
     }
 }

@@ -177,11 +177,28 @@ export async function invite(
   return { user, token };
 }
 
-export async function acceptInvite(token: string, password: string): Promise<ApiResult> {
-  return call("POST", "/auth/invite/accept", {
-    ip: freshIp(),
-    body: { token, password, password_confirmation: password },
+/**
+ * Redeems an invitation over the API. Accepting signs the invitee in, so
+ * the session it opened is signed out again unless `keepSession`: a
+ * journey that counts an account's sessions must start from none.
+ */
+export async function acceptInvite(
+  token: string,
+  password: string,
+  keepSession = false,
+): Promise<ApiResult> {
+  const res = await fetch(`${apiUrl}/api/v1/auth/invite/accept`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-forwarded-for": freshIp() },
+    body: JSON.stringify({ token, password }),
   });
+  const text = await res.text();
+  const body: unknown = text ? JSON.parse(text) : null;
+  const cookie = res.headers.getSetCookie()[0]?.split(";")[0];
+  if (res.ok && cookie && !keepSession) {
+    await call("POST", "/auth/logout", { cookie, body: {} });
+  }
+  return { status: res.status, body };
 }
 
 /** An active account holding exactly these roles, with a known password. */
@@ -290,18 +307,22 @@ export async function sidebarEntries(page: Page): Promise<string[]> {
   const nav = page.getByRole("navigation", { name: "Primary" }).first();
   await expect(nav.getByRole("link").first()).toBeVisible();
   return nav.evaluate((root) => {
+    // The label span, not the whole link: a leaf with a shortcut also
+    // carries its "g then s" hint.
+    const labelOf = (link: Element): string =>
+      (link.querySelector("span")?.textContent ?? link.textContent ?? "").trim();
     const out: string[] = [];
     for (const child of Array.from(root.children)) {
       const group = child.getAttribute("role") === "group" ? child : null;
       if (!group) {
         const link = child.querySelector("a");
-        if (link) out.push((link.textContent ?? "").trim());
+        if (link) out.push(labelOf(link));
         continue;
       }
       const labelId = group.getAttribute("aria-labelledby");
       const label = labelId ? (document.getElementById(labelId)?.textContent ?? "").trim() : "?";
       for (const link of Array.from(group.querySelectorAll("a"))) {
-        out.push(`${label} › ${(link.textContent ?? "").trim()}`);
+        out.push(`${label} › ${labelOf(link)}`);
       }
     }
     return out;

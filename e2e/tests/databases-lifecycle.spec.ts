@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { serverNamed } from "../support/api.js";
-import { call, data, jobSucceeds, qs, settle, unique } from "../support/data.js";
+import { call, codeBlock, data, jobSucceeds, qs, settle, unique } from "../support/data.js";
 
 /* ------------------------------------------------------------------ *
  * Databases — MySQL/MariaDB and PostgreSQL, the same journeys on both.
@@ -127,12 +127,12 @@ for (const meta of ENGINES) {
       const submit = dialog.getByRole("button", { name: "Create database" });
 
       /* Identifiers are checked before anything is sent. */
-      await dialog.getByLabel("Name").fill("1shop");
+      await dialog.getByLabel(/^Name/).fill("1shop");
       await expect(dialog.getByText("must start with a letter or underscore, then letters, digits, _ or -")).toBeVisible();
       await expect(submit).toBeDisabled();
-      await dialog.getByLabel("Name").fill("shop db");
+      await dialog.getByLabel(/^Name/).fill("shop db");
       await expect(submit).toBeDisabled();
-      await dialog.getByLabel("Name").fill(name);
+      await dialog.getByLabel(/^Name/).fill(name);
 
       await dialog.getByLabel("Username").fill(username);
       if (meta.hostPatterns) await expect(dialog.getByLabel("Host pattern")).toHaveValue("localhost");
@@ -140,7 +140,7 @@ for (const meta of ENGINES) {
 
       /* A hand-typed password has a floor too. */
       await dialog.getByRole("switch", { name: "Generate a password" }).uncheck();
-      await dialog.getByLabel("Password", { exact: true }).fill("short-password");
+      await dialog.getByLabel(/^Password( \(required\))?$/).fill("short-password");
       await expect(dialog.getByText("at least 16 characters")).toBeVisible();
       await expect(submit).toBeDisabled();
       await dialog.getByRole("switch", { name: "Generate a password" }).check();
@@ -149,9 +149,9 @@ for (const meta of ENGINES) {
 
       const credentials = page.getByRole("dialog", { name: "Credentials — shown once" });
       await expect(credentials).toBeVisible();
-      const password = ((await credentials.getByLabel("Password").textContent()) ?? "").trim();
+      const password = ((await codeBlock(credentials, "Password").textContent()) ?? "").trim();
       expect(password.length).toBeGreaterThanOrEqual(16);
-      const connection = ((await credentials.getByLabel("Connection string").textContent()) ?? "").trim();
+      const connection = ((await codeBlock(credentials, "Connection string").textContent()) ?? "").trim();
       expect(connection).toBe(`${meta.scheme}://${username}:${password}@127.0.0.1:${meta.port}/${name}`);
       await credentials.getByRole("button", { name: "I have copied it" }).click();
       await expect(credentials).toBeHidden();
@@ -233,7 +233,7 @@ for (const meta of ENGINES) {
 
       const credentials = page.getByRole("dialog", { name: "Credentials — shown once" });
       await expect(credentials).toBeVisible();
-      await expect(credentials.getByLabel("User")).toHaveText(meta.hostPatterns ? `${username}@localhost` : username);
+      await expect(codeBlock(credentials, "User")).toHaveText(meta.hostPatterns ? `${username}@localhost` : username);
       await credentials.getByRole("button", { name: "I have copied it" }).click();
       await jobSucceeds(page, "Create database user", username);
 
@@ -274,7 +274,7 @@ for (const meta of ENGINES) {
       await rotate.getByLabel("New password").fill(fresh);
       await rotate.getByRole("button", { name: "Rotate password" }).click();
       const shown = page.getByRole("dialog", { name: "Credentials — shown once" });
-      await expect(shown.getByLabel("Password")).toHaveText(fresh);
+      await expect(codeBlock(shown, "Password")).toHaveText(fresh);
       await shown.getByRole("button", { name: "I have copied it" }).click();
       await jobSucceeds(page, "Update database user", username);
 
@@ -291,7 +291,6 @@ for (const meta of ENGINES) {
     });
 
     test("updating a user's host pattern in place is refused with the way forward", async () => {
-      if (!meta.hostPatterns) test.info().annotations.push({ type: "note", description: "PostgreSQL has no host pattern; the refusal is the same" });
       const instance = await instanceFor(meta.engine);
       const res = await data<{ jobs: { id: string }[]; db_user: DbUserRow }>("POST", "/db-users", {
         instance_id: instance.id,

@@ -19,6 +19,7 @@ import {
   createSshKeyInput,
   firewallRuleListQuery,
   idParam,
+  cidr,
   ipAddress,
   sshKeyListQuery,
   threatEventListQuery,
@@ -115,6 +116,8 @@ const SORTABLE_AUDIT = {
 
 const serverBody = z.object({ server_id: uuid });
 const ipParam = z.object({ ip: ipAddress });
+/** Ban and unban take a range as well as an address, as createIpBlockInput always said. */
+const banParam = z.object({ ip: cidr.or(ipAddress) });
 const fleetTargetBody = z.object({ server_id: uuid.nullable().default(null) });
 
 export async function securityRoutes(app: FastifyInstance): Promise<void> {
@@ -622,7 +625,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/threats/:ip/ban", async (req, reply) => {
-    const { ip } = parseParams(req, ipParam);
+    const { ip } = parseParams(req, banParam);
     const body = parseBody(req, createIpBlockInput.omit({ target: true }));
     const target = normalizeCidr(ip);
     const targets = await banTargets(req, body.server_id);
@@ -648,7 +651,7 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/threats/:ip/unban", async (req, reply) => {
-    const { ip } = parseParams(req, ipParam);
+    const { ip } = parseParams(req, banParam);
     const body = parseBody(req, fleetTargetBody);
     const target = normalizeCidr(ip);
     const targets = await banTargets(req, body.server_id);
@@ -969,6 +972,26 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
 
     const current = await sshConfigRow(req, serverId);
     const warnings = await assessSshLockout(req, server, current, body);
+
+    // Same rule as the firewall: a configuration that ends the way in AND
+    // has no window to undo itself is an outage, not a warning. sshd used
+    // to accept it and let the host lock itself out for good.
+    if (warnings.locks_out && body.rollback_seconds === 0) {
+      throw new ApiException(
+        "precondition_failed",
+        `This sshd configuration would end SSH access to ${server.name} and you asked for no rollback window.`,
+        {
+          detail: warnings,
+          remediation: {
+            summary:
+              "Set rollback_seconds to at least 30 so sshd reverts on its own if you lose access, or fix what the checks below name first.",
+            actions: [
+              { label: "sshd configuration", href: `/security/ssh?panel=config&server_id=${server.id}` },
+            ],
+          },
+        },
+      );
+    }
 
     const { rollback_seconds, ...desired } = body;
     const params = Object.fromEntries(
@@ -1306,7 +1329,8 @@ async function markDisposition(
     .set({ disposition, updatedAt: new Date() })
     .where(
       and(
-        eq(threatEvents.sourceIp, ip),
+        // A range marks every observed address inside it.
+        ip.includes("/") ? sql`${threatEvents.sourceIp} <<= ${ip}::inet` : eq(threatEvents.sourceIp, ip),
         inArray(
           threatEvents.serverId,
           targets.map((s) => s.id),
@@ -1329,6 +1353,7 @@ function fanOutReply(
 
 /** Single addresses become /32 or /128, so one column covers both forms. */
 function normalizeCidr(ip: string): string {
+  if (ip.includes("/")) return ip;
   return ip.includes(":") ? `${ip}/128` : `${ip}/32`;
 }
 

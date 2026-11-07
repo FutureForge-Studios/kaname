@@ -34,7 +34,9 @@ async function openFirewall(page: Page, serverName: string): Promise<Locator> {
   await page.goto(`/security/firewall?server_id=${target.id}`);
   await expect(page.getByRole("heading", { level: 1, name: "Firewall" })).toBeVisible();
   const table = page.getByRole("table", { name: "Firewall rules" });
-  await expect(table.locator("tbody tr").first()).toBeVisible();
+  // Every seeded host has this rule; waiting for it (not just any row)
+  // skips the moment the list renders before the server is resolved.
+  await expect(ruleRow(table, "ICMP echo")).toBeVisible();
   return table;
 }
 
@@ -43,7 +45,10 @@ function ruleRow(table: Locator, text: string): Locator {
 }
 
 async function rowAction(page: Page, row: Locator, action: string): Promise<void> {
-  await row.getByRole("button", { name: "Row actions" }).click();
+  // By keyboard: the toast stack sits over the right-hand column, where
+  // the row menu lives, for a few seconds after every mutation.
+  await row.getByRole("button", { name: "Row actions" }).focus();
+  await page.keyboard.press("Enter");
   await page.getByRole("menuitem", { name: action, exact: true }).click();
 }
 
@@ -51,7 +56,7 @@ async function addRule(
   page: Page,
   rule: { priority?: string; action?: string; port?: string; source?: string; comment: string },
 ): Promise<void> {
-  await page.getByRole("button", { name: "New rule" }).click();
+  await page.getByRole("button", { name: "New rule" }).first().click();
   const dialog = page.getByRole("dialog", { name: "New rule" });
   await expect(dialog).toBeVisible();
   if (rule.priority) await dialog.getByLabel("Priority").fill(rule.priority);
@@ -100,7 +105,7 @@ test.describe("firewall", () => {
     await expect(ruleRow(table, "HTTP and HTTPS")).toBeVisible();
 
     /* Bad input is refused in the form, with the field's own message. */
-    await page.getByRole("button", { name: "New rule" }).click();
+    await page.getByRole("button", { name: "New rule" }).first().click();
     const dialog = page.getByRole("dialog", { name: "New rule" });
     const add = dialog.getByRole("button", { name: "Add rule" });
 
@@ -140,7 +145,7 @@ test.describe("firewall", () => {
       source_cidr: "10.0.0.0/40",
       priority: 70000,
     });
-    expect(refused.status).toBe(400);
+    expect(refused.status).toBe(422);
     expect(refused.error?.code).toBe("validation_failed");
     expect(refused.error?.fields?.["port_spec"]).toBe(
       "must be a port, a comma-separated list, or a range",
@@ -290,11 +295,13 @@ test.describe("firewall", () => {
     await expect.poll(() => hostFile(edge.id, NFT)).toContain('comment "e2e lapse probe"');
 
     /* Do nothing. The banner closes on its own clock... */
-    const banner = page.getByRole("status").filter({ hasText: "edge-01" });
-    await expect(banner).toContainText("The rollback window on edge-01 has closed.", {
-      timeout: (WINDOW_S + 15) * 1000,
-    });
-    await expect(banner.getByRole("button", { name: /Confirm/ })).toHaveCount(0);
+    const open = page.getByRole("status").filter({ hasText: "edge-01 reverts its firewall rule set in" });
+    await expect(open.getByRole("button", { name: "Confirm — keep these changes" })).toBeVisible();
+    const closed = page
+      .getByRole("status")
+      .filter({ hasText: "The rollback window on edge-01 has closed." });
+    await expect(closed).toBeVisible({ timeout: (WINDOW_S + 15) * 1000 });
+    await expect(closed.getByRole("button", { name: /Confirm/ })).toHaveCount(0);
 
     /* ...and the host's own timer has put the previous set back. */
     await expect

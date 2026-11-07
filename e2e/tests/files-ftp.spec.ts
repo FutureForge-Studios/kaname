@@ -2,7 +2,7 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { join } from "node:path";
 import { serverNamed } from "../support/api.js";
 import { agentStateRoot } from "../support/config.js";
-import { call, data, jobSucceeds, qs, settle, unique } from "../support/data.js";
+import { call, codeBlock, data, jobSucceeds, qs, settle, unique } from "../support/data.js";
 
 /* ------------------------------------------------------------------ *
  * Files — FTP / SFTP transfer accounts.
@@ -48,7 +48,7 @@ async function createViaUi(page: Page, username: string, home?: string): Promise
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Username").fill(username);
   if (home) await dialog.getByLabel("Home directory").fill(home);
-  const password = await dialog.getByLabel("Password").inputValue();
+  const password = await dialog.getByLabel(/^Password( \(required\))?$/).inputValue();
   await dialog.getByRole("button", { name: "Create account" }).click();
   await expect(dialog).toBeHidden();
   return password;
@@ -68,7 +68,7 @@ test("creates an account whose home directory really appears on the host, owned 
   await expect(dialog.getByLabel("Home directory")).toHaveValue(`/home/${username}`);
 
   /* A generated credential, shown in full while it can still be copied. */
-  const passwordField = dialog.getByLabel("Password");
+  const passwordField = dialog.getByLabel(/^Password( \(required\))?$/);
   const password = await passwordField.inputValue();
   expect(password.length).toBeGreaterThanOrEqual(16);
   await expect(dialog.getByText("Kaname shows this once.")).toBeVisible();
@@ -124,10 +124,10 @@ test("validates the username, the password floor, duplicates and SSH keys by fie
   await dialog.getByLabel("Home directory").fill("/home/somewhere");
 
   /* Fifteen characters is one short of the contract's floor. */
-  await dialog.getByLabel("Password").fill("a".repeat(15));
+  await dialog.getByLabel(/^Password( \(required\))?$/).fill("a".repeat(15));
   await expect(dialog.getByText("15 characters")).toBeVisible();
   await expect(create).toBeDisabled();
-  await dialog.getByLabel("Password").fill("a".repeat(16));
+  await dialog.getByLabel(/^Password( \(required\))?$/).fill("a".repeat(16));
   await expect(create).toBeEnabled();
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
@@ -204,7 +204,7 @@ test("resets a password, showing the new one exactly once, then deletes the acco
 
   const reset = page.getByRole("dialog", { name: "Reset password" });
   await expect(reset).toBeVisible();
-  const shown = reset.getByLabel(`New password for ${username}`);
+  const shown = codeBlock(reset, `New password for ${username}`);
   const first = (await shown.textContent())?.trim() ?? "";
   expect(first.length).toBeGreaterThanOrEqual(16);
   await reset.getByRole("button", { name: "Generate a different one" }).click();
@@ -216,13 +216,13 @@ test("resets a password, showing the new one exactly once, then deletes the acco
   const queued = page.getByRole("dialog", { name: "Password reset queued" });
   await expect(queued).toBeVisible();
   /* Still on screen while the job runs: closing is the only way to lose it. */
-  await expect(queued.getByLabel(`New password for ${username}`)).toHaveText(password);
+  await expect(codeBlock(queued, `New password for ${username}`)).toHaveText(password);
   await page.keyboard.press("Escape");
 
   /* Reopening never shows the old one again — it mints a new candidate. */
   await row.getByRole("button", { name: "Row actions" }).click();
   await page.getByRole("menuitem", { name: "Reset password" }).click();
-  await expect(reset.getByLabel(`New password for ${username}`)).not.toHaveText(password);
+  await expect(codeBlock(reset, `New password for ${username}`)).not.toHaveText(password);
   await reset.getByRole("button", { name: "Cancel" }).click();
 
   /* Delete needs the username typed, and the home directory is left in place. */

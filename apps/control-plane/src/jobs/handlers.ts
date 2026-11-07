@@ -1,4 +1,4 @@
-import { and, eq, inArray, notInArray, sql } from "@kaname/db";
+import { and, eq, notInArray, sql } from "@kaname/db";
 import {
   backupRuns,
   backupSchedules,
