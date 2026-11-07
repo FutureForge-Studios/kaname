@@ -1,5 +1,6 @@
 import { copyFile } from "node:fs/promises";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   agentBinary,
@@ -131,7 +132,12 @@ function resetDatabase(): Promise<void> {
 async function buildAgent(): Promise<void> {
   const agentDir = join(repoRoot, "agent");
   await run("agent-build", "cargo", ["build", "--quiet"], { cwd: agentDir });
-  const built = join(agentDir, "target", "debug", process.platform === "win32" ? "kanamed.exe" : "kanamed");
+  const built = join(
+    agentDir,
+    "target",
+    "debug",
+    process.platform === "win32" ? "kanamed.exe" : "kanamed",
+  );
   await copyFile(built, agentBinary);
 }
 
@@ -168,19 +174,77 @@ function nextCli(...args: string[]): [string, string[]] {
   ];
 }
 
+/*
+ * A panel build is the heaviest step of a boot, and parallel suites on a
+ * small machine all start with one. Two may run at once machine-wide;
+ * the rest wait for a slot rather than fight for memory. The slots are
+ * directories in the OS temp dir, because mkdir is atomic everywhere.
+ */
+const PANEL_BUILD_SLOTS = 2;
+const PANEL_BUILD_WAIT_MS = 45 * 60_000;
+
+async function withPanelBuildSlot<T>(work: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + PANEL_BUILD_WAIT_MS;
+  for (;;) {
+    for (let slot = 0; slot < PANEL_BUILD_SLOTS; slot++) {
+      const lock = join(tmpdir(), `kaname-e2e-panel-build-${slot}`);
+      try {
+        mkdirSync(lock);
+      } catch {
+        // A slot left behind by a killed run is reclaimed after an hour.
+        try {
+          if (Date.now() - statSync(lock).mtimeMs > 60 * 60_000)
+            rmSync(lock, { recursive: true, force: true });
+        } catch {
+          /* raced with its owner releasing it */
+        }
+        continue;
+      }
+      try {
+        return await work();
+      } finally {
+        rmSync(lock, { recursive: true, force: true });
+      }
+    }
+    if (Date.now() > deadline) throw new Error("timed out waiting for a panel build slot");
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+}
+
 function buildPanel(): Promise<void> {
+  /*
+   * Opt-in reuse for iterating on specs, which do not change the bundle.
+   * Never set it after changing product code: the suite would test the
+   * old build.
+   */
+  if (
+    process.env["KANAME_E2E_REUSE_PANEL"] === "1" &&
+    existsSync(join(repoRoot, "apps", "web", nextDistDir, "BUILD_ID"))
+  ) {
+    return Promise.resolve();
+  }
   const [command, args] = nextCli("build");
-  return run("panel-build", command, args, {
-    cwd: join(repoRoot, "apps", "web"),
-    env: { KANAME_CONTROL_PLANE_URL: apiUrl, KANAME_PUBLIC_URL: webUrl, KANAME_NEXT_DIST_DIR: nextDistDir },
-  });
+  return withPanelBuildSlot(() =>
+    run("panel-build", command, args, {
+      cwd: join(repoRoot, "apps", "web"),
+      env: {
+        KANAME_CONTROL_PLANE_URL: apiUrl,
+        KANAME_PUBLIC_URL: webUrl,
+        KANAME_NEXT_DIST_DIR: nextDistDir,
+      },
+    }),
+  );
 }
 
 function startPanel(): Managed {
   const [command, args] = nextCli("start", "--port", String(webPort));
   return launch("panel", command, args, {
     cwd: join(repoRoot, "apps", "web"),
-    env: { KANAME_CONTROL_PLANE_URL: apiUrl, KANAME_PUBLIC_URL: webUrl, KANAME_NEXT_DIST_DIR: nextDistDir },
+    env: {
+      KANAME_CONTROL_PLANE_URL: apiUrl,
+      KANAME_PUBLIC_URL: webUrl,
+      KANAME_NEXT_DIST_DIR: nextDistDir,
+    },
   });
 }
 
