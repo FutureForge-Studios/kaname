@@ -254,6 +254,14 @@ export function StepFooter({
     if (!active || active === document.body) primaryRef.current?.focus();
   }, [primaryAutoFocus, blocked]);
 
+  /*
+   * Pressing a footer button must not blur the focused field first: the
+   * blur shows that field's error, the footer moves down, and the mouse is
+   * released off the button, so the click never lands. Keeping focus where
+   * it is leaves keyboard use untouched; the submit then shows every error.
+   */
+  const keepFocus = (event: React.MouseEvent) => event.preventDefault();
+
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--kn-border)] pt-5">
       <div className="flex min-w-0 items-center gap-2">
@@ -264,6 +272,7 @@ export function StepFooter({
             size="md"
             loading={laterPending}
             disabled={pending}
+            onMouseDown={keepFocus}
             onClick={later}
           >
             {laterLabel}
@@ -279,6 +288,7 @@ export function StepFooter({
         loading={pending}
         ref={primaryRef}
         disabled={blocked}
+        onMouseDown={keepFocus}
       >
         {primary}
       </Button>

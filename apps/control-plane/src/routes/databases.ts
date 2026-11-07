@@ -477,6 +477,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
       await enqueueServerJob(req, {
         type: "db.database.create",
         server,
+        permission: dbPermission(instance.engine, "write"),
         targetType: "database",
         targetId: database!.id,
         targetLabel: body.name,
@@ -525,6 +526,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
         await enqueueServerJob(req, {
           type: "db.user.create",
           server,
+          permission: dbPermission(instance.engine, "write"),
           targetType: "db_user",
           targetId: user!.id,
           targetLabel: body.create_user.username,
@@ -540,6 +542,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
         await enqueueServerJob(req, {
           type: "db.grant.apply",
           server,
+          permission: dbPermission(instance.engine, "write"),
           targetType: "db_user",
           targetId: user!.id,
           targetLabel: `${body.create_user.username} on ${body.name}`,
@@ -618,6 +621,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
     const job = await enqueueServerJob(req, {
       type: "db.database.delete",
       server,
+      permission: dbPermission(database.engine, "delete"),
       targetType: "database",
       targetId: id,
       targetLabel: database.name,
@@ -668,11 +672,16 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
   app.post("/databases/:id/dump", async (req, reply) => {
     const { id } = parseParams(req, idParam);
     const body = parseBody(req, dumpDatabaseInput);
-    const { database, server } = await loadDatabase(req, id, "read");
+    // Write, not read: a dump creates (or replaces) a file at a path the
+    // caller chooses on the host. With "read" the auditor role — "reads
+    // everything, changes nothing" — could write files anywhere the agent
+    // may.
+    const { database, server } = await loadDatabase(req, id, "write");
 
     const job = await enqueueServerJob(req, {
       type: "db.dump",
       server,
+      permission: dbPermission(database.engine, "write"),
       targetType: "database",
       targetId: id,
       targetLabel: database.name,
@@ -712,6 +721,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
     const job = await enqueueServerJob(req, {
       type: "db.restore",
       server,
+      permission: dbPermission(database.engine, "write"),
       targetType: "database",
       targetId: id,
       targetLabel: database.name,
@@ -828,6 +838,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
       await enqueueServerJob(req, {
         type: "db.user.create",
         server,
+        permission: dbPermission(instance.engine, "write"),
         targetType: "db_user",
         targetId: user!.id,
         targetLabel: body.username,
@@ -846,6 +857,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
         await enqueueServerJob(req, {
           type: "db.grant.apply",
           server,
+          permission: dbPermission(instance.engine, "write"),
           targetType: "db_user",
           targetId: user!.id,
           targetLabel: `${body.username} on ${target.database.name}`,
@@ -929,6 +941,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
       await enqueueServerJob(req, {
         type: "db.user.update",
         server,
+        permission: dbPermission(user.engine, "write"),
         targetType: "db_user",
         targetId: id,
         targetLabel: user.username,
@@ -958,6 +971,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
     const job = await enqueueServerJob(req, {
       type: "db.user.delete",
       server,
+      permission: dbPermission(user.engine, "delete"),
       targetType: "db_user",
       targetId: id,
       targetLabel: `${user.username}@${user.hostPattern}`,
@@ -1040,6 +1054,7 @@ async function applyGrantSet(
       await enqueueServerJob(req, {
         type: "db.grant.apply",
         server,
+        permission: dbPermission(user.engine, "write"),
         targetType: "db_user",
         targetId: user.id,
         targetLabel: `${user.username} on ${target.database.name}`,
@@ -1059,6 +1074,7 @@ async function applyGrantSet(
       await enqueueServerJob(req, {
         type: "db.grant.apply",
         server,
+        permission: dbPermission(user.engine, "write"),
         targetType: "db_user",
         targetId: user.id,
         targetLabel: `revoke ${user.username} on ${gone.database_name}`,

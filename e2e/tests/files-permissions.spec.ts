@@ -1,26 +1,25 @@
 import { expect, test } from "@playwright/test";
 import { serverNamed } from "../support/api.js";
 import {
-  actAs,
   call,
   contextFor,
   data,
-  keyWith,
+  memberWithPermissions,
+  memberWithRole,
   qs,
   settle,
   unique,
   ROLE_SLUGS,
+  type Member,
   type RoleSlug,
 } from "../support/data.js";
 
 /* ------------------------------------------------------------------ *
  * Files and databases, per system role.
  *
- * Each role is a real user invited through the API with that role, and
- * is exercised through an owner-minted API key carrying exactly the
- * role's grants — invited accounts have no way to set a password yet,
- * so a browser session for them cannot exist (reported as a gap). The
- * key is evaluated by the same `can()` a session is.
+ * Each role is a real member: invited through the API with that role,
+ * signed in by accepting the invitation with their own password. The
+ * same session drives the API probes and the browser.
  *
  * The matrix is the contract's SYSTEM_ROLES read as behaviour: every
  * cell is a request that must be allowed or refused, and a refusal must
@@ -35,7 +34,7 @@ const ALL: Expect = { owner: true, operator: true, developer: true, auditor: tru
 const only = (...roles: RoleSlug[]): Expect =>
   Object.fromEntries(ROLE_SLUGS.map((role) => [role, roles.includes(role)])) as Expect;
 
-const tokens = {} as Record<RoleSlug, string>;
+const members = {} as Record<RoleSlug, Member>;
 let filesServer = "";
 let dbServer = "";
 let pgInstance = "";
@@ -46,10 +45,13 @@ let workDir = "";
 test.beforeAll(async () => {
   filesServer = (await serverNamed(FILES_HOST)).id;
   dbServer = (await serverNamed(DB_HOST)).id;
-  for (const role of ROLE_SLUGS) tokens[role] = await actAs(role, "perm");
+  for (const role of ROLE_SLUGS) members[role] = await memberWithRole(role, "perm");
 
   workDir = `/srv/${unique("e2e-perm-")}`;
-  const mk = await data<{ job: { id: string } }>("POST", "/files/mkdir", { server_id: filesServer, path: workDir });
+  const mk = await data<{ job: { id: string } }>("POST", "/files/mkdir", {
+    server_id: filesServer,
+    path: workDir,
+  });
   await settle(mk.job.id);
 
   const instances = await data<{ id: string; engine: string }[]>(
@@ -57,11 +59,15 @@ test.beforeAll(async () => {
     `/db-instances?${qs({ server_id: dbServer, per_page: 100 })}`,
   );
   pgInstance = instances.find((i) => i.engine === "postgres")!.id;
-  const created = await data<{ jobs: { id: string }[]; database: { id: string } }>("POST", "/databases", {
-    instance_id: pgInstance,
-    engine: "postgres",
-    name: unique("perm_"),
-  });
+  const created = await data<{ jobs: { id: string }[]; database: { id: string } }>(
+    "POST",
+    "/databases",
+    {
+      instance_id: pgInstance,
+      engine: "postgres",
+      name: unique("perm_"),
+    },
+  );
   for (const job of created.jobs) await settle(job.id);
   pgDatabase = created.database.id;
 
@@ -72,54 +78,89 @@ test.beforeAll(async () => {
     password: "p".repeat(20),
     home_dir: `/home/${user}`,
   });
-  const accounts = await data<{ id: string; username: string }[]>("GET", `/ftp-accounts?${qs({ q: user })}`);
+  const accounts = await data<{ id: string; username: string }[]>(
+    "GET",
+    `/ftp-accounts?${qs({ q: user })}`,
+  );
   ftpAccount = accounts.find((a) => a.username === user)!.id;
 });
 
 interface Probe {
   name: string;
   allowed: Expect;
-  run: (token: string) => Promise<number>;
+  run: (member: Member) => Promise<number>;
 }
 
-const status = async (method: string, path: string, body: unknown, token: string) =>
-  (await call(method, path, body, token)).status;
+const status = async (method: string, path: string, body: unknown, member: Member) =>
+  (await call(method, path, body, member)).status;
 
 const PROBES: Probe[] = [
   {
     name: "browse files",
     allowed: only("owner", "operator", "developer", "auditor"),
-    run: (t) => status("GET", `/files?${qs({ server_id: filesServer, path: "/etc" })}`, undefined, t),
+    run: (t) =>
+      status("GET", `/files?${qs({ server_id: filesServer, path: "/etc" })}`, undefined, t),
   },
   {
     name: "read a file",
     allowed: only("owner", "operator", "developer", "auditor"),
-    run: (t) => status("GET", `/files/read?${qs({ server_id: filesServer, path: "/etc/hostname" })}`, undefined, t),
+    run: (t) =>
+      status(
+        "GET",
+        `/files/read?${qs({ server_id: filesServer, path: "/etc/hostname" })}`,
+        undefined,
+        t,
+      ),
   },
   {
     name: "download a file",
     allowed: only("owner", "operator", "developer", "auditor"),
-    run: (t) => status("GET", `/files/download?${qs({ server_id: filesServer, path: "/etc/hostname" })}`, undefined, t),
+    run: (t) =>
+      status(
+        "GET",
+        `/files/download?${qs({ server_id: filesServer, path: "/etc/hostname" })}`,
+        undefined,
+        t,
+      ),
   },
   {
     name: "create a folder",
     allowed: only("owner", "operator", "developer"),
-    run: (t) => status("POST", "/files/mkdir", { server_id: filesServer, path: `${workDir}/${unique("d")}` }, t),
+    run: (t) =>
+      status(
+        "POST",
+        "/files/mkdir",
+        { server_id: filesServer, path: `${workDir}/${unique("d")}` },
+        t,
+      ),
   },
   {
     name: "write a file",
     allowed: only("owner", "operator", "developer"),
-    run: (t) => status("POST", "/files/write", { server_id: filesServer, path: `${workDir}/${unique("f")}`, content: "x" }, t),
+    run: (t) =>
+      status(
+        "POST",
+        "/files/write",
+        { server_id: filesServer, path: `${workDir}/${unique("f")}`, content: "x" },
+        t,
+      ),
   },
   {
     name: "chmod",
     allowed: only("owner", "operator", "developer"),
-    run: (t) => status("POST", "/files/chmod", { server_id: filesServer, paths: [workDir], mode: "0755" }, t),
+    run: (t) =>
+      status("POST", "/files/chmod", { server_id: filesServer, paths: [workDir], mode: "0755" }, t),
   },
   {
     name: "delete a file",
     allowed: only("owner", "operator"),
-    run: (t) => status("POST", "/files/delete", { server_id: filesServer, paths: [`${workDir}/${unique("gone")}`] }, t),
+    run: (t) =>
+      status(
+        "POST",
+        "/files/delete",
+        { server_id: filesServer, paths: [`${workDir}/${unique("gone")}`] },
+        t,
+      ),
   },
   {
     name: "read storage",
@@ -136,13 +177,24 @@ const PROBES: Probe[] = [
     allowed: only("owner", "operator"),
     run: (t) => {
       const user = unique("rbac_");
-      return status("POST", "/ftp-accounts", { server_id: filesServer, username: user, password: "r".repeat(20), home_dir: `/home/${user}` }, t);
+      return status(
+        "POST",
+        "/ftp-accounts",
+        {
+          server_id: filesServer,
+          username: user,
+          password: "r".repeat(20),
+          home_dir: `/home/${user}`,
+        },
+        t,
+      );
     },
   },
   {
     name: "reset an FTP password",
     allowed: only("owner", "operator"),
-    run: (t) => status("POST", `/ftp-accounts/${ftpAccount}/reset-password`, { password: "n".repeat(20) }, t),
+    run: (t) =>
+      status("POST", `/ftp-accounts/${ftpAccount}/reset-password`, { password: "n".repeat(20) }, t),
   },
   {
     name: "list databases",
@@ -157,26 +209,44 @@ const PROBES: Probe[] = [
   {
     name: "create a database",
     allowed: only("owner", "operator", "developer"),
-    run: (t) => status("POST", "/databases", { instance_id: pgInstance, engine: "postgres", name: unique("rbac_") }, t),
+    run: (t) =>
+      status(
+        "POST",
+        "/databases",
+        { instance_id: pgInstance, engine: "postgres", name: unique("rbac_") },
+        t,
+      ),
   },
   {
     name: "create a database user",
     allowed: only("owner", "operator", "developer"),
-    run: (t) => status("POST", "/db-users", { instance_id: pgInstance, username: unique("rbac_") }, t),
+    run: (t) =>
+      status("POST", "/db-users", { instance_id: pgInstance, username: unique("rbac_") }, t),
   },
   {
     /* A dump writes a file at a path of the caller's choosing on the
      * host. "Reads everything, changes nothing" cannot include that. */
     name: "dump a database to the host",
     allowed: only("owner", "operator", "developer"),
-    run: (t) => status("POST", `/databases/${pgDatabase}/dump`, { destination: `/var/backups/kaname/${unique("rbac-")}.sql` }, t),
+    run: (t) =>
+      status(
+        "POST",
+        `/databases/${pgDatabase}/dump`,
+        { destination: `/var/backups/kaname/${unique("rbac-")}.sql` },
+        t,
+      ),
   },
   {
     name: "restore a database",
     allowed: only("owner", "operator", "developer"),
     run: async (t) => {
       const db = await data<{ name: string }>("GET", `/databases/${pgDatabase}`);
-      return status("POST", `/databases/${pgDatabase}/restore`, { source: "/var/backups/kaname/none.sql", database_name: db.name, confirm_name: db.name }, t);
+      return status(
+        "POST",
+        `/databases/${pgDatabase}/restore`,
+        { source: "/var/backups/kaname/none.sql", database_name: db.name, confirm_name: db.name },
+        t,
+      );
     },
   },
 ];
@@ -185,10 +255,12 @@ for (const role of ROLE_SLUGS) {
   test(`${role}: every files and databases verb is allowed or refused as the role says`, async () => {
     const wrong: string[] = [];
     for (const probe of PROBES) {
-      const code = await probe.run(tokens[role]);
+      const code = await probe.run(members[role]);
       const allowed = code < 400;
       if (allowed !== probe.allowed[role]) {
-        wrong.push(`${probe.name}: got ${code}, expected ${probe.allowed[role] ? "allowed" : "403"}`);
+        wrong.push(
+          `${probe.name}: got ${code}, expected ${probe.allowed[role] ? "allowed" : "403"}`,
+        );
       } else if (!allowed) {
         expect(code, `${role} ${probe.name}`).toBe(403);
       }
@@ -199,35 +271,59 @@ for (const role of ROLE_SLUGS) {
 
 test("dropping databases and deleting FTP accounts is for owner and operator only", async () => {
   for (const role of ROLE_SLUGS) {
-    const created = await data<{ jobs: { id: string }[]; database: { id: string } }>("POST", "/databases", {
-      instance_id: pgInstance,
-      engine: "postgres",
-      name: unique("dropme_"),
-    });
+    const created = await data<{ jobs: { id: string }[]; database: { id: string } }>(
+      "POST",
+      "/databases",
+      {
+        instance_id: pgInstance,
+        engine: "postgres",
+        name: unique("dropme_"),
+      },
+    );
     for (const job of created.jobs) await settle(job.id);
-    const drop = await call("DELETE", `/databases/${created.database.id}`, undefined, tokens[role]);
+    const drop = await call(
+      "DELETE",
+      `/databases/${created.database.id}`,
+      undefined,
+      members[role],
+    );
     expect(drop.status, `${role} drop database`).toBe(only("owner", "operator")[role] ? 202 : 403);
 
     const user = unique("delftp_");
-    await data("POST", "/ftp-accounts", { server_id: filesServer, username: user, password: "d".repeat(20), home_dir: `/home/${user}` });
-    const id = (await data<{ id: string; username: string }[]>("GET", `/ftp-accounts?${qs({ q: user })}`)).find((a) => a.username === user)!.id;
-    const del = await call("DELETE", `/ftp-accounts/${id}`, undefined, tokens[role]);
+    await data("POST", "/ftp-accounts", {
+      server_id: filesServer,
+      username: user,
+      password: "d".repeat(20),
+      home_dir: `/home/${user}`,
+    });
+    const id = (
+      await data<{ id: string; username: string }[]>("GET", `/ftp-accounts?${qs({ q: user })}`)
+    ).find((a) => a.username === user)!.id;
+    const del = await call("DELETE", `/ftp-accounts/${id}`, undefined, members[role]);
     expect(del.status, `${role} delete ftp`).toBe(only("owner", "operator")[role] ? 202 : 403);
   }
 });
 
 test("a refused create leaves nothing behind in the panel", async () => {
   const name = unique("refused_");
-  const res = await call("POST", "/databases", { instance_id: pgInstance, engine: "postgres", name }, tokens.auditor);
+  const res = await call(
+    "POST",
+    "/databases",
+    { instance_id: pgInstance, engine: "postgres", name },
+    members.auditor,
+  );
   expect(res.status).toBe(403);
-  const rows = await data<{ name: string }[]>("GET", `/databases?${qs({ instance_id: pgInstance, q: name })}`);
+  const rows = await data<{ name: string }[]>(
+    "GET",
+    `/databases?${qs({ instance_id: pgInstance, q: name })}`,
+  );
   expect(rows.map((r) => r.name)).not.toContain(name);
 });
 
 test("a PostgreSQL-only grant is enough to manage PostgreSQL", async () => {
   /* A custom role scoped to one engine — the shape a DBA for one stack
    * gets. Nothing about a PostgreSQL job needs a MySQL permission. */
-  const token = await keyWith("pg-only", [
+  const dba = await memberWithPermissions("pg-only", [
     "infra.servers:read",
     "databases.postgres:read",
     "databases.postgres:write",
@@ -238,18 +334,27 @@ test("a PostgreSQL-only grant is enough to manage PostgreSQL", async () => {
     "POST",
     "/databases",
     { instance_id: pgInstance, engine: "postgres", name },
-    token,
+    dba,
   );
   expect(created.status, JSON.stringify(created.body.error)).toBe(202);
-  for (const job of created.body.data!.jobs) expect((await settle(job.id)).status).toBe("succeeded");
+  for (const job of created.body.data!.jobs)
+    expect((await settle(job.id)).status).toBe("succeeded");
 
-  const drop = await call("DELETE", `/databases/${created.body.data!.database.id}`, undefined, token);
+  const drop = await call("DELETE", `/databases/${created.body.data!.database.id}`, undefined, dba);
   expect(drop.status).toBe(202);
 
   /* And it is not a MySQL grant in disguise. */
-  const instances = await data<{ id: string; engine: string }[]>("GET", `/db-instances?${qs({ server_id: dbServer })}`);
+  const instances = await data<{ id: string; engine: string }[]>(
+    "GET",
+    `/db-instances?${qs({ server_id: dbServer })}`,
+  );
   const maria = instances.find((i) => i.engine === "mariadb")!.id;
-  const refused = await call("POST", "/databases", { instance_id: maria, engine: "mariadb", name: unique("nope_") }, token);
+  const refused = await call(
+    "POST",
+    "/databases",
+    { instance_id: maria, engine: "mariadb", name: unique("nope_") },
+    dba,
+  );
   expect(refused.status).toBe(403);
 });
 
@@ -257,7 +362,7 @@ test("a PostgreSQL-only grant is enough to manage PostgreSQL", async () => {
 
 test("the file manager arms exactly the buttons each role may use", async ({ browser }) => {
   for (const role of ["developer", "auditor"] as const) {
-    const context = await contextFor(browser, tokens[role]);
+    const context = await contextFor(browser, members[role]);
     const page = await context.newPage();
     await page.goto(`/files/manager?${qs({ server_id: filesServer, path: "/etc" })}`);
     const table = page.getByRole("table", { name: "Directory listing" });
@@ -284,20 +389,25 @@ test("the file manager arms exactly the buttons each role may use", async ({ bro
   }
 
   /* A viewer cannot read files anywhere, and is told so rather than shown an empty tree. */
-  const context = await contextFor(browser, tokens.viewer);
+  const context = await contextFor(browser, members.viewer);
   const page = await context.newPage();
   await page.goto(`/files/manager?${qs({ server_id: filesServer })}`);
   await expect(
-    page.getByText("No host in scope").or(page.getByRole("alert").filter({ hasText: "forbidden" })).first(),
+    page
+      .getByText("No host in scope")
+      .or(page.getByRole("alert").filter({ hasText: "forbidden" }))
+      .first(),
   ).toBeVisible();
-  await expect(page.getByRole("table", { name: "Directory listing" }).locator('[title="/etc"]')).toHaveCount(0);
+  await expect(
+    page.getByRole("table", { name: "Directory listing" }).locator('[title="/etc"]'),
+  ).toHaveCount(0);
   await context.close();
 });
 
 test("the database pages arm exactly the actions each role may use", async ({ browser }) => {
   const db = await data<{ name: string }>("GET", `/databases/${pgDatabase}`);
   for (const role of ["developer", "auditor"] as const) {
-    const context = await contextFor(browser, tokens[role]);
+    const context = await contextFor(browser, members[role]);
     const page = await context.newPage();
     await page.goto(`/databases/postgres?${qs({ server_id: dbServer })}`);
     const table = page.getByRole("table", { name: "Databases" });
@@ -324,28 +434,39 @@ test("the database pages arm exactly the actions each role may use", async ({ br
     await context.close();
   }
 
-  const context = await contextFor(browser, tokens.viewer);
+  const context = await contextFor(browser, members.viewer);
   const page = await context.newPage();
   await page.goto(`/databases/postgres?${qs({ server_id: dbServer })}`);
-  await expect(page.getByRole("table", { name: "Databases" }).locator("tbody tr").filter({ hasText: db.name })).toHaveCount(0);
+  await expect(
+    page.getByRole("table", { name: "Databases" }).locator("tbody tr").filter({ hasText: db.name }),
+  ).toHaveCount(0);
   await context.close();
 });
 
 test("an FTP page for a role without FTP access shows no accounts", async ({ browser }) => {
-  const context = await contextFor(browser, tokens.developer);
+  const context = await contextFor(browser, members.developer);
   const page = await context.newPage();
   await page.goto(`/files/ftp?${qs({ server_id: filesServer })}`);
   await expect(page.getByRole("heading", { level: 1, name: "FTP / SFTP" })).toBeVisible();
-  await expect(page.getByRole("table", { name: "Transfer accounts" }).locator("tbody tr").filter({ hasText: "permftp_" })).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("table", { name: "Transfer accounts" })
+      .locator("tbody tr")
+      .filter({ hasText: "permftp_" }),
+  ).toHaveCount(0);
   await expect(page.getByRole("button", { name: "New account" }).first()).toBeDisabled();
   await context.close();
 });
 
 test("an invited member cannot sign in until they have set a password", async ({ request }) => {
-  const role = (await data<{ id: string; slug: string }[]>("GET", "/roles?per_page=100")).find((r) => r.slug === "developer")!;
+  const role = (await data<{ id: string; slug: string }[]>("GET", "/roles?per_page=100")).find(
+    (r) => r.slug === "developer",
+  )!;
   const email = `${unique("invitee-")}@e2e.kaname.local`;
   await data("POST", "/users", { email, name: "Invitee", role_ids: [role.id], send_invite: false });
-  const res = await request.post("/api/v1/auth/login", { data: { email, password: "anything-at-all-123" } });
+  const res = await request.post("/api/v1/auth/login", {
+    data: { email, password: "anything-at-all-123" },
+  });
   expect(res.status()).toBeGreaterThanOrEqual(400);
   expect(res.status()).toBeLessThan(500);
 });

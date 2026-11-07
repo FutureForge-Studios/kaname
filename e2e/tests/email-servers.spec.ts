@@ -50,6 +50,7 @@ test("the card keeps the host's connection and Yunori's verdict apart, with the 
 
 test("Check now re-reads the host and the card shows what it said", async ({ page }) => {
   const api = await owner();
+  const before = (await mailServerOn(api, MAIL_HOST))!;
   await page.goto("/email");
   const card = serverCard(page, MAIL_HOST);
   await card.getByRole("button", { name: "Check now" }).click();
@@ -57,6 +58,7 @@ test("Check now re-reads the host and the card shows what it said", async ({ pag
   await closeJobDrawer(page);
 
   const row = (await mailServerOn(api, MAIL_HOST))!;
+  expect(new Date(row.last_synced_at!).getTime()).toBeGreaterThan(new Date(before.last_synced_at ?? 0).getTime());
   /* The simulated host runs 0.1.0 and serves a second domain the seed
    * never had; both arrived through the sync. */
   expect(row.version).toBe("0.1.0");
@@ -69,8 +71,13 @@ test("Check now re-reads the host and the card shows what it said", async ({ pag
   /* A row the host no longer lists is marked, not silently deleted. */
   const detective = await mailboxAt(api, "detective@futureforge.dev");
   expect(detective?.status).toBe("error");
-  const job = (await api.data<JobRow[]>(`/jobs?type=mail.server.sync&server_id=${row.server_id}&per_page=1`))[0]!;
-  expect(await api.jobLog(job.id)).toContain("detective@futureforge.dev is no longer on the host; marked error, not deleted");
+  const syncs = await api.data<JobRow[]>(`/jobs?type=mail.server.sync&server_id=${row.server_id}&per_page=50`);
+  expect(await api.jobLog(syncs[0]!.id)).toContain(`yunori-mail 0.1.0 on mail.futureforge.dev: ${row.checks.length} checks`);
+  /* Whichever sync first saw it gone said so in its log. */
+  const logs = await Promise.all(syncs.map((job) => api.jobLog(job.id)));
+  expect(logs.join("\n")).toContain(
+    "detective@futureforge.dev is no longer on the host; marked error, not deleted",
+  );
 });
 
 test("the verdict filter narrows the cards and says when none match", async ({ page }) => {

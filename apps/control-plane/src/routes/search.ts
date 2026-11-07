@@ -1,7 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { sql, type SQL } from "@kaname/db";
 import {
+  can,
   searchQuery,
+  type EffectiveGrants,
   type Permission,
   type SearchAction,
   type SearchResponse,
@@ -310,7 +312,10 @@ export async function searchRoutes(app: FastifyInstance): Promise<void> {
         : [{ kind, label: GROUP_LABELS[kind], results: results.map(toResult) }];
     });
 
-    const response: SearchResponse = { groups, actions: buildActions(rows) };
+    const response: SearchResponse = {
+      groups,
+      actions: buildActions(rows, helpers(req).requirePrincipal().grants),
+    };
     return item(reply, response);
   });
 }
@@ -369,18 +374,26 @@ function scopeClause(column: string, scope: "global" | readonly string[]): SQL {
  * out what this caller cannot run; the endpoint behind each one checks
  * again, because a hidden button is not a security control.
  */
-function buildActions(rows: SearchRow[]): SearchAction[] {
+function buildActions(rows: SearchRow[], grants: EffectiveGrants): SearchAction[] {
   const actions: SearchAction[] = [];
   const seen = new Set<string>();
+  let current: SearchRow | null = null;
 
   const push = (action: SearchAction): void => {
     if (seen.has(action.id) || actions.length >= MAX_ACTIONS) return;
+    // The palette can only check a permission fleet-wide (an action
+    // carries no server id), so an operator scoped to one host was
+    // offered "Open terminal" and "Restart" on every host the search
+    // found. Checking here, against the row's own server, is the only
+    // place that knows which host each action is about.
+    if (!can(grants, action.permission, current?.server_id ?? null)) return;
     seen.add(action.id);
     actions.push(action);
   };
 
   for (const row of rows) {
     if (actions.length >= MAX_ACTIONS) break;
+    current = row;
 
     switch (row.kind) {
       case "server": {
@@ -395,7 +408,9 @@ function buildActions(rows: SearchRow[]): SearchAction[] {
             hint: "Reloads the web server as a tracked job",
             permission: "infra.services:exec",
             action: "services.restart",
-            href: `/infrastructure/services?server_id=${row.id}&unit=${webServer}`,
+            // `q` is the list's search parameter; `unit` was read by
+            // nothing, so the action landed on every unit on the host.
+            href: `/infrastructure/services?server_id=${row.id}&q=${webServer}`,
           });
         }
         push({

@@ -72,6 +72,15 @@ test("failed-only narrows the fleet to units that really failed, on every host",
   await page.goto(`/infrastructure/services?server_id=${db.id}&active_state=failed`);
   await expect(table.locator("tbody tr")).toHaveCount(1);
   await expect(tableRow(table, "clamav-freshclam.service")).toBeVisible();
+  /* `enabled=false` means disabled units — it used to be coerced to
+   * true and return the enabled ones. */
+  const disabled = await ownerCall<{ unit: string; enabled: boolean }[]>(
+    "GET",
+    `/services?server_id=${db.id}&enabled=false&per_page=100`,
+  );
+  expect(disabled.map((u) => u.unit)).toContain("redis-server.service");
+  expect(disabled.every((u) => !u.enabled)).toBe(true);
+
   /* On one host the Server column has nothing to say, so it is gone. */
   const headers = await table.locator("thead th").allInnerTexts();
   expect(headers.map((h) => h.trim())).not.toContain("Server");

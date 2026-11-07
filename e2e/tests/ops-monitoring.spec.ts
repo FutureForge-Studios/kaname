@@ -120,13 +120,14 @@ test.describe("monitoring", () => {
     await dialog.getByLabel("Duration").fill("0");
     await dialog.getByLabel("Severity").selectOption("critical");
     await dialog.getByLabel("Apply to the whole fleet").uncheck();
-    await dialog.getByRole("combobox").click();
-    await page.getByRole("option", { name: /forge-01/ }).click();
+    await dialog.getByRole("combobox", { name: /^Servers/ }).click();
+    await page.getByRole("listbox").getByRole("option", { name: /forge-01/ }).click();
     await page.keyboard.press("Escape");
     await dialog.getByRole("button", { name: "Create rule" }).click();
     await expect(dialog).toBeHidden();
     const ruleRow = page.getByRole("table", { name: "Alert rules" }).locator("tbody tr").filter({ hasText: name });
-    await expect(ruleRow).toContainText("forge-01");
+    await expect(ruleRow).toContainText("1 server");
+    await expect(ruleRow).not.toContainText("1 servers");
 
     await expect
       .poll(async () => (await alertFor(name))?.state ?? "none", { timeout: TICKS, intervals: [5000] })

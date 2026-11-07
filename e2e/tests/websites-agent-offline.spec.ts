@@ -87,6 +87,8 @@ test("work queued against a disconnected host waits for it and then runs", async
     timeout: 30_000,
   });
   await page.keyboard.press("Escape");
+  /* Search rather than scan: the suite has made more sites than a page holds. */
+  await page.getByRole("searchbox", { name: "Search sites" }).fill(name);
   const row = rowWith(page.getByRole("table", { name: "Sites" }), name);
   await expect(row).toContainText("Provisioning");
   await expect(row).toContainText("Disconnected");

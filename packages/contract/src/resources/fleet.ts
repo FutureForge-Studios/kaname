@@ -7,6 +7,7 @@ import {
   isoDate,
   listQuery,
   percent,
+  queryBoolean,
   uuid,
 } from "../primitives.js";
 import {
@@ -152,7 +153,8 @@ export type Service = z.infer<typeof service>;
 export const serviceListQuery = listQuery.extend({
   server_id: uuid.optional(),
   active_state: serviceActiveState.optional(),
-  enabled: z.coerce.boolean().optional(),
+  /** queryBoolean: `enabled=false` must mean disabled units, not every unit. */
+  enabled: queryBoolean.optional(),
 });
 
 export const serviceAction = z.enum(["start", "stop", "restart", "reload", "enable", "disable"]);
@@ -286,7 +288,8 @@ export type MonitoringOverview = z.infer<typeof monitoringOverview>;
 
 export const alertRule = z.object({
   id: uuid,
-  name: z.string(),
+  /** Required: a rule with an empty name fires as an alert nobody can identify. */
+  name: z.string().trim().min(1).max(96),
   metric: metricName,
   comparator: alertComparator,
   threshold: z.number(),

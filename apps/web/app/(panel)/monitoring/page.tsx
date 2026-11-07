@@ -1008,7 +1008,8 @@ function RulesTab({ tabs }: { tabs: React.ReactNode }) {
             </Badge>
           ) : (
             <span className="kn-num text-[var(--kn-text-2)]">
-              {formatCount(rule.scope.server_ids.length)} servers
+              {formatCount(rule.scope.server_ids.length)}{" "}
+              {rule.scope.server_ids.length === 1 ? "server" : "servers"}
             </span>
           ),
       },

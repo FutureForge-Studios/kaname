@@ -6,6 +6,7 @@ import {
   ipAddress,
   isoDate,
   listQuery,
+  queryBoolean,
   slug,
   uuid,
 } from "../primitives.js";
@@ -97,7 +98,8 @@ export type TerminalSessionRecord = z.infer<typeof terminalSessionRecord>;
 export const terminalSessionListQuery = listQuery.extend({
   server_id: uuid.optional(),
   user_id: uuid.optional(),
-  active: z.coerce.boolean().optional(),
+  /** queryBoolean: the history's "Closed" filter sends `active=false`. */
+  active: queryBoolean.optional(),
 });
 export type TerminalSessionListQuery = z.infer<typeof terminalSessionListQuery>;
 

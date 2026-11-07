@@ -87,11 +87,19 @@ export async function enqueueServerJob(
     targetLabel?: string;
     params?: Record<string, unknown>;
     correlationId?: string;
+    /**
+     * Overrides JOB_SPECS[type].permission when one job type serves
+     * several permission sets. Every db.* spec names the MySQL set, so a
+     * PostgreSQL job was authorised against databases.mysql:* — a
+     * PostgreSQL-only role could do nothing, and its database row was
+     * already inserted when the enqueue refused.
+     */
+    permission?: Permission;
   },
 ): Promise<Job> {
   const h = helpers(req);
   const spec = JOB_SPECS[opts.type];
-  const principal = h.authorize(spec.permission, opts.server.id);
+  const principal = h.authorize(opts.permission ?? spec.permission, opts.server.id);
 
   const job = await req.ctx.queue.enqueue({
     type: opts.type,

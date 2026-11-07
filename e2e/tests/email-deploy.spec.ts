@@ -217,7 +217,7 @@ test("a direct deploy lands, the host re-announces Yunori, and the setup secrets
   const row = (await mailServerOn(api, DIRECT_HOST))!;
   const jobs = await api.data<JobRow[]>(`/jobs?type=mail.server.deploy&server_id=${row.server_id}&per_page=5`);
   const job = jobs.find((candidate) => candidate.status === "succeeded")!;
-  expect(job.params).toMatchObject({ domain: DIRECT_DOMAIN, hostname: `mail.${DIRECT_DOMAIN}`, sending: "direct" });
+  expect(job).toMatchObject({ target_label: `mail.${DIRECT_DOMAIN}`, server_name: DIRECT_HOST });
 
   /* The agent re-announced itself: the capability arrived over a fresh
    * hello, nothing was restarted, and the reconciler read the new server. */
@@ -371,12 +371,20 @@ test("a relay deploy carries its password to the host and nowhere else", async (
 
   const job = (await api.data<JobRow[]>(`/jobs?type=mail.server.deploy&server_id=${row.server_id}&per_page=5`))[0]!;
   expect(job.status).toBe("succeeded");
-  const relayParams = job.params["relay"] as Record<string, unknown>;
-  expect(relayParams).toMatchObject({ provider: "ses", region: "eu-west-1", username: "AKIAE2EEXAMPLE", port: 587 });
-  expect(relayParams["password_ref"]).toEqual(expect.any(String));
-  expect(relayParams).not.toHaveProperty("password");
 
-  const everything = [JSON.stringify(job), await api.jobLog(job.id), await api.auditTrail()];
+  /* The request is on the record with everything but the password: the
+   * audit event carries the relay as the job got it, a reference where
+   * the password would be. */
+  const trail = await api.auditTrail();
+  const requested = trail
+    .split("\n")
+    .filter((line) => line.includes("mail.server.deploy.requested") && line.includes(job.id));
+  expect(requested).toHaveLength(1);
+  expect(requested[0]).toContain("eu-west-1");
+  expect(requested[0]).toContain("AKIAE2EEXAMPLE");
+  expect(requested[0]).toContain("password_ref");
+
+  const everything = [JSON.stringify(job), await api.jobLog(job.id), trail];
   for (const text of everything) expect(text).not.toContain(RELAY_PASSWORD);
 
   /* Its own secrets, once. */

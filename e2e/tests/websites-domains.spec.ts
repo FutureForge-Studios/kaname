@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { missingId } from "../support/config.js";
-import { cellAt, columnIndex } from "../support/ui.js";
+import { columnIndex } from "../support/ui.js";
 import {
   api,
   choose,
@@ -80,14 +80,13 @@ test("the mail filter means what it says in both directions", async ({ page }) =
   await page.goto("/websites/domains");
   const table = await domainsTable(page);
   const column = await columnIndex(table, "Domain");
-  /* The Domain cell also carries the Mail badge, so take its first line. */
-  const names = async () => {
-    const out: string[] = [];
-    for (const row of await table.locator("tbody tr").all()) {
-      out.push((await cellAt(row, column).innerText()).split("\n")[0]!.trim());
-    }
-    return out;
-  };
+  /* One snapshot of the column, so a list shrinking under the filter
+   * cannot leave a read waiting on a row that has gone. The cell also
+   * carries the Mail badge; a domain name has no spaces. */
+  const names = async () =>
+    (await table.locator(`tbody tr td:nth-child(${column + 1})`).allInnerTexts()).map(
+      (text) => text.trim().split(/\s+/)[0]!,
+    );
 
   await page.getByRole("combobox", { name: "Mail" }).selectOption("true");
   await expect.poll(names).toEqual(["futureforge.dev"]);
@@ -95,10 +94,17 @@ test("the mail filter means what it says in both directions", async ({ page }) =
   /* "No mail" must exclude the domain that carries mail — a query-string
    * "false" read as true used to return exactly that one. */
   await page.getByRole("combobox", { name: "Mail" }).selectOption("false");
-  await expect.poll(async () => (await names()).length).toBeGreaterThan(0);
-  expect(await names()).not.toContain("futureforge.dev");
-  for (const row of await table.locator("tbody tr").all()) {
-    await expect(cellAt(row, column)).not.toContainText("Mail");
+  /* Wait for the refetched page itself: the previous rows already
+   * satisfy "non-empty". */
+  await expect(page).toHaveURL(/has_mail=false/);
+  await expect
+    .poll(async () => {
+      const shown = await names();
+      return shown.length > 1 && !shown.includes("futureforge.dev");
+    }, { message: '"No mail" kept returning the domain that carries mail' })
+    .toBe(true);
+  for (const cell of await table.locator(`tbody tr td:nth-child(${column + 1})`).allInnerTexts()) {
+    expect(cell).not.toMatch(/\bMail\b/);
   }
 });
 
