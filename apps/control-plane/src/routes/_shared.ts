@@ -103,6 +103,9 @@ export async function enqueueServerJob(
     correlationId: opts.correlationId,
     createdBy: principal.kind === "user" ? principal.id : null,
     createdByName: principal.name,
+    // Claimed only once the agent dials in, so say so from the start
+    // rather than letting the pill claim it is waiting for a worker.
+    blockedReason: req.ctx.hub.isConnected(opts.server.id) ? null : "agent_offline",
   });
 
   await req.ctx.audit.record({

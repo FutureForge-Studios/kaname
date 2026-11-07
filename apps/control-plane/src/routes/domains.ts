@@ -4,6 +4,7 @@ import { certificates, domains, servers, sites } from "@kaname/db/schema";
 import {
   createDomainInput,
   domainListQuery,
+  domainVerificationMethod,
   idParam,
   updateDomainInput,
   type Domain,
@@ -469,7 +470,7 @@ export function domainToApi(row: DomainApiRow): Domain {
     record_count: row.record_count,
     verified: {
       ok: d.verified,
-      method: (d.verificationMethod as DomainVerificationMethod | null) ?? "none",
+      method: verificationMethodOf(d.verificationMethod),
       checked_at: d.verifiedAt?.toISOString() ?? null,
     },
     has_mail: d.hasMail,
@@ -479,6 +480,19 @@ export function domainToApi(row: DomainApiRow): Domain {
 }
 
 /* ---------------------------- internals ---------------------------- */
+
+/**
+ * `verification_method` is free text in the schema, and rows written
+ * before the enum settled carry "dns" for a TXT proof. Casting it let
+ * that value through the contract, and the panel's verification badge
+ * had no label for it and threw, taking the whole domains list down
+ * (KD-021: raw rows are mapped, never cast).
+ */
+function verificationMethodOf(stored: string | null): DomainVerificationMethod {
+  if (stored === "dns") return "dns_txt";
+  const parsed = domainVerificationMethod.safeParse(stored);
+  return parsed.success ? parsed.data : "none";
+}
 
 /**
  * The stored lifecycle has four states; the API has five, because the

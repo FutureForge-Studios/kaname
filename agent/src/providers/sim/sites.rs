@@ -256,6 +256,48 @@ pub fn render_site_config(entry: &Site) -> String {
     b
 }
 
+const SITES_ENABLED: &str = "/etc/nginx/sites-enabled";
+
+/// The first syntax fault nginx would report in one vhost, phrased the
+/// way `nginx -t` phrases it. Deliberately shallow: it knows blocks and
+/// statements, not directive names, which is what makes an edit made in
+/// the file manager either load or not.
+fn vhost_fault(path: &str, content: &str) -> Option<String> {
+    let mut depth: i64 = 0;
+    for (index, raw) in content.lines().enumerate() {
+        let line_no = index + 1;
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        for ch in line.chars() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return Some(format!("nginx: [emerg] unexpected \"}}\" in {path}:{line_no}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !(line.ends_with(';') || line.ends_with('{') || line.ends_with('}')) {
+            return Some(format!(
+                "nginx: [emerg] directive \"{}\" is not terminated by \";\" in {path}:{line_no}",
+                line.split_whitespace().next().unwrap_or(line)
+            ));
+        }
+    }
+    if depth > 0 {
+        let last = content.lines().count();
+        return Some(format!(
+            "nginx: [emerg] unexpected end of file, expecting \"}}\" in {path}:{last}"
+        ));
+    }
+    None
+}
+
 pub struct SimSites(pub Arc<Sim>);
 
 #[async_trait]
@@ -377,7 +419,42 @@ impl Sites for SimSites {
         Ok(())
     }
 
+    /// `nginx -t` over what is really enabled. This used to answer "syntax
+    /// is ok" unconditionally, so a vhost broken in the file manager could
+    /// never fail the pre-reload check the control plane relies on to keep
+    /// one bad site from taking the whole host offline. It now reads every
+    /// file under sites-enabled and reports the first fault the way nginx
+    /// does: unbalanced braces and directives missing their semicolon.
     async fn test_config(&self, _ctx: &Ctx) -> PResult<SiteTestConfigResult> {
+        let faults = {
+            let fs = self.0.fs.read();
+            let enabled: Vec<String> = match fs.lookup(SITES_ENABLED, true) {
+                Ok((dir, _)) => dir.children.keys().cloned().collect(),
+                Err(_) => Vec::new(),
+            };
+            let mut faults = Vec::new();
+            for name in enabled {
+                let path = format!("{SITES_ENABLED}/{name}");
+                match fs.lookup(&path, true) {
+                    Ok((node, _)) => {
+                        if let Some(fault) = vhost_fault(&path, &String::from_utf8_lossy(&node.data)) {
+                            faults.push(fault);
+                        }
+                    }
+                    Err(_) => faults.push(format!(
+                        "nginx: [emerg] open() \"{path}\" failed (2: No such file or directory) in /etc/nginx/nginx.conf:60"
+                    )),
+                }
+            }
+            faults
+        };
+
+        if let Some(first) = faults.first() {
+            return Ok(SiteTestConfigResult {
+                valid: false,
+                output: format!("{first}\nnginx: configuration file /etc/nginx/nginx.conf test failed\n"),
+            });
+        }
         Ok(SiteTestConfigResult {
             valid: true,
             output: "nginx: the configuration file /etc/nginx/nginx.conf syntax is ok\n\
@@ -388,5 +465,43 @@ impl Sites for SimSites {
 
     async fn reload(&self, _ctx: &Ctx) -> PResult<()> {
         transition(&self.0, "nginx.service", "reload").map(|_| ())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rendered_vhosts_pass_the_syntax_check() {
+        for runtime in ["static", "php", "node", "python", "proxy", "container"] {
+            let entry = Site {
+                info: SiteInfo {
+                    name: "t".into(),
+                    webroot: "/var/www/t".into(),
+                    server_names: vec!["t.example.com".into()],
+                    runtime: runtime.into(),
+                    runtime_version: None,
+                    enabled: true,
+                    config_path: "/etc/nginx/sites-available/t".into(),
+                },
+                upstream: "http://127.0.0.1:3000".into(),
+                force_https: true,
+            };
+            assert_eq!(vhost_fault("/x", &render_site_config(&entry)), None, "{runtime}");
+        }
+    }
+
+    #[test]
+    fn faults_are_reported_like_nginx() {
+        let open = vhost_fault("/v", "server {\n    listen 80;\n");
+        assert!(open.unwrap().contains("unexpected end of file"));
+        let bare = vhost_fault("/v", "server {\n    listen 80\n}\n");
+        assert!(
+            bare.unwrap()
+                .contains("directive \"listen\" is not terminated by \";\" in /v:2")
+        );
+        let extra = vhost_fault("/v", "}\n");
+        assert!(extra.unwrap().contains("unexpected \"}\""));
     }
 }

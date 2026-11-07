@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { eq, sql } from "@kaname/db";
+import { and, eq, sql } from "@kaname/db";
 import { sessions, users } from "@kaname/db/schema";
 import {
   assessPassword,
@@ -170,20 +170,18 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       !user.inviteExpiresAt ||
       user.inviteExpiresAt.getTime() < Date.now()
     ) {
-      throw new ApiException("unauthenticated", "This invitation is not valid any more.", {
-        remediation: {
-          summary:
-            "Invitations are single-use and expire. Ask an administrator to invite you again.",
-          actions: [{ label: "Sign in", href: "/login" }],
-        },
-      });
+      throw inviteNotValid();
     }
 
     // Chosen by the invitee, so held to the same bar as the owner's.
     assertStrongPassword(body.password, user, "password");
 
     const now = new Date();
-    await req.ctx.db
+    const tokenHash = hashToken(body.token);
+    // Conditional on the invitation still being outstanding, so two
+    // concurrent accepts of one token cannot both win: the read above is
+    // a check, this is the claim. Whoever loses gets no row back.
+    const claimed = await req.ctx.db
       .update(users)
       .set({
         passwordHash: await req.ctx.auth.hashPassword(body.password),
@@ -192,7 +190,15 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         inviteExpiresAt: null,
         updatedAt: now,
       })
-      .where(eq(users.id, user.id));
+      .where(
+        and(
+          eq(users.id, user.id),
+          eq(users.status, "invited"),
+          eq(users.inviteTokenHash, tokenHash),
+        ),
+      )
+      .returning({ id: users.id });
+    if (claimed.length === 0) throw inviteNotValid();
 
     await req.ctx.audit.record({
       actor: actorFor(req, user),
@@ -663,6 +669,14 @@ const accountNotActive = (status: UserStatus) =>
           actions: [{ label: "Administration", href: "/administration/users" }],
         },
       });
+
+const inviteNotValid = () =>
+  new ApiException("unauthenticated", "This invitation is not valid any more.", {
+    remediation: {
+      summary: "Invitations are single-use and expire. Ask an administrator to invite you again.",
+      actions: [{ label: "Sign in", href: "/login" }],
+    },
+  });
 
 const wrongCurrentPassword = () =>
   new ApiException("unauthenticated", "Your current password is not correct.", {

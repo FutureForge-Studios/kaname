@@ -97,6 +97,11 @@ export async function boot(): Promise<void> {
       detail: () => started.map((m) => `--- ${m.name} ---\n${m.tail()}`).join("\n"),
     });
 
+    // The seeded fleet is an instance that has been running for weeks, so
+    // its owner has long since finished onboarding. Without this the panel
+    // (correctly) sends the owner back into the setup wizard on sign-in.
+    await finishOnboarding();
+
     const panel = keep(startPanel());
     await waitUntil(`the panel on ${webUrl}`, () => reachable(`${webUrl}/login`), {
       timeoutMs: PANEL_TIMEOUT_MS,
@@ -132,7 +137,7 @@ function resetDatabase(): Promise<void> {
  * `cargo build` leaves the binary in target/; it is copied to the
  * artifacts directory so the rest of the harness has one stable path.
  */
-async function buildAgent(): Promise<void> {
+export async function buildAgent(): Promise<void> {
   const agentDir = join(repoRoot, "agent");
   await run("agent-build", "cargo", ["build", "--quiet"], { cwd: agentDir });
   const built = join(
@@ -220,7 +225,7 @@ async function withPanelBuildSlot<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-function buildPanel(): Promise<void> {
+export function buildPanel(): Promise<void> {
   /*
    * Opt-in reuse for iterating on specs, which do not change the bundle.
    * Never set it after changing product code: the suite would test the
@@ -329,7 +334,7 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
 }
 
-function startPanel(): Managed {
+export function startPanel(): Managed {
   const [command, args] = nextCli("start", "--port", String(webPort));
   return launch("panel", command, args, {
     cwd: join(repoRoot, "apps", "web"),
@@ -385,6 +390,20 @@ async function startFleet(): Promise<Managed[]> {
   return agents;
 }
 
+/** Ends onboarding through the same call the wizard's last screen makes. */
+async function finishOnboarding(): Promise<void> {
+  const cookie = await signIn();
+  const res = await fetch(`${apiUrl}/api/v1/setup/complete`, {
+    method: "POST",
+    headers: { cookie, "content-type": "application/json" },
+    body: "{}",
+  });
+  // 409 means setup was already closed, which is the state we want.
+  if (!res.ok && res.status !== 409) {
+    throw new Error(`could not finish onboarding (${res.status}): ${await res.text()}`);
+  }
+}
+
 /* -------------------------------- probes -------------------------------- */
 
 interface HealthResponse {
@@ -392,14 +411,14 @@ interface HealthResponse {
   agents_connected: number;
 }
 
-async function healthy(agents = 0): Promise<boolean> {
+export async function healthy(agents = 0): Promise<boolean> {
   const res = await fetch(`${apiUrl}/health`);
   if (!res.ok) return false;
   const body = (await res.json()) as HealthResponse;
   return body.status === "ok" && body.agents_connected >= agents;
 }
 
-async function reachable(url: string): Promise<boolean> {
+export async function reachable(url: string): Promise<boolean> {
   const res = await fetch(url, { redirect: "manual" });
   return res.status < 500;
 }

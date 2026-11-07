@@ -307,7 +307,7 @@ async function defaultSources(req: FastifyRequest, server: ServerRow): Promise<s
  * mid-record; the tail of an incomplete line is held back until the rest
  * arrives.
  */
-function recordDecoder(
+export function recordDecoder(
   source: string,
   onRecord: (record: LogRecord) => void | Promise<void>,
 ): ChunkConsumer {

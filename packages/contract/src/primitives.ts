@@ -71,6 +71,16 @@ export const cronExpression = z
 export const sortOrder = z.enum(["asc", "desc"]);
 export type SortOrder = z.infer<typeof sortOrder>;
 
+/**
+ * A boolean that arrives as a query-string value. `z.coerce.boolean()`
+ * is `Boolean(value)`, so the string "false" reads as true and a
+ * "false" filter returns exactly the rows it was meant to exclude.
+ * Only the two spellings a URL actually carries are accepted.
+ */
+export const queryBoolean = z
+  .union([z.boolean(), z.enum(["true", "false"])])
+  .transform((value) => value === true || value === "true");
+
 export const listQuery = z.object({
   q: z.string().max(200).optional(),
   sort: z.string().max(64).optional(),
