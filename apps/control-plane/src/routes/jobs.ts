@@ -5,6 +5,7 @@ import { idParam, jobListQueryExtra, jobLogQuery, listQuery } from "@kaname/cont
 import { helpers, item, list, offset, paginate, parseParams, parseQuery } from "../http/plugin.js";
 import { notFound } from "../lib/errors.js";
 import { combine, scopeFilter } from "./_shared.js";
+import { releaseAbandoned } from "../jobs/threats.js";
 
 /* ------------------------------------------------------------------ *
  * Jobs.
@@ -121,6 +122,8 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
 
     const cancelled = await req.ctx.queue.cancel(id);
     if (cancelled) {
+      // A cancelled ban or unban will not settle its threat rows itself.
+      await releaseAbandoned(req.ctx.db, [{ id, reason: "the request was cancelled" }]);
       await req.ctx.audit.record({
         actor: h.actor(),
         action: "job.cancelled",
