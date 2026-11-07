@@ -61,7 +61,11 @@ export function launch(
     detachedChild.unref();
     const tailOfFile = (): string => {
       try {
-        return readFileSync(logPath, "utf8").split("\n").filter((l) => l.trim()).slice(-TAIL_LINES).join("\n");
+        return readFileSync(logPath, "utf8")
+          .split("\n")
+          .filter((l) => l.trim())
+          .slice(-TAIL_LINES)
+          .join("\n");
       } catch {
         return "";
       }

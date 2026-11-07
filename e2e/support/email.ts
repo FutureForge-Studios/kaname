@@ -1,6 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { expect, type Locator, type Page } from "@playwright/test";
@@ -54,7 +61,9 @@ function feedUrl(): URL {
 }
 
 /** Where the feed lives on disk; overridable so it can sit in a scratch dir. */
-const feedDir = resolve(process.env["KANAME_E2E_YUNORI_FEED_DIR"] ?? join(artifactsDir, "yunori-feed"));
+const feedDir = resolve(
+  process.env["KANAME_E2E_YUNORI_FEED_DIR"] ?? join(artifactsDir, "yunori-feed"),
+);
 
 /** Writes latest.json and both archives with their checksums. Returns the digests by asset. */
 export function writeFeed(): Record<string, string> {
@@ -89,7 +98,12 @@ export async function startFeed(): Promise<void> {
   const url = feedUrl();
   writeFeed();
   if (feedProcess) return;
-  if (await fetch(`${url.origin}/latest.json`).then((r) => r.ok).catch(() => false)) return;
+  if (
+    await fetch(`${url.origin}/latest.json`)
+      .then((r) => r.ok)
+      .catch(() => false)
+  )
+    return;
   feedProcess = spawn(
     "python3",
     ["-m", "http.server", url.port || "80", "--bind", "127.0.0.1", "--directory", feedDir],
@@ -97,10 +111,14 @@ export async function startFeed(): Promise<void> {
   );
   feedProcess.unref();
   if (feedProcess.pid) record(feedProcess.pid);
-  await waitUntil(`the release feed on ${url.origin}`, async () => {
-    const res = await fetch(`${url.origin}/latest.json`);
-    return res.ok;
-  }, { timeoutMs: 15_000 });
+  await waitUntil(
+    `the release feed on ${url.origin}`,
+    async () => {
+      const res = await fetch(`${url.origin}/latest.json`);
+      return res.ok;
+    },
+    { timeoutMs: 15_000 },
+  );
 }
 
 export async function stopFeed(): Promise<void> {
@@ -113,14 +131,18 @@ export async function stopFeed(): Promise<void> {
   }
   if (feedProcess?.pid) killTree(feedProcess.pid);
   feedProcess = null;
-  await waitUntil(`the release feed on ${url.origin} to go away`, async () => {
-    try {
-      await fetch(`${url.origin}/latest.json`, { signal: AbortSignal.timeout(1000) });
-      return false;
-    } catch {
-      return true;
-    }
-  }, { timeoutMs: 15_000 });
+  await waitUntil(
+    `the release feed on ${url.origin} to go away`,
+    async () => {
+      try {
+        await fetch(`${url.origin}/latest.json`, { signal: AbortSignal.timeout(1000) });
+        return false;
+      } catch {
+        return true;
+      }
+    },
+    { timeoutMs: 15_000 },
+  );
 }
 
 /* ---------------------------------- api ---------------------------------- */
@@ -155,7 +177,11 @@ export class Api {
     return new Api(cookie);
   }
 
-  async request<T = unknown>(method: string, path: string, body?: unknown): Promise<ApiResponse<T>> {
+  async request<T = unknown>(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<ApiResponse<T>> {
     const res = await fetch(`${apiUrl}/api/v1${path}`, {
       method,
       headers: {
@@ -309,23 +335,32 @@ export interface FleetRow {
   capabilities: string[];
 }
 
-export async function mailServerOn(api: Api, serverName: string): Promise<MailServerRow | undefined> {
+export async function mailServerOn(
+  api: Api,
+  serverName: string,
+): Promise<MailServerRow | undefined> {
   const rows = await api.data<MailServerRow[]>("/mail-servers?per_page=100");
   return rows.find((row) => row.server_name === serverName);
 }
 
 export async function mailDomainNamed(api: Api, name: string): Promise<MailDomainRow | undefined> {
-  const rows = await api.data<MailDomainRow[]>(`/mail-domains?per_page=200&q=${encodeURIComponent(name)}`);
+  const rows = await api.data<MailDomainRow[]>(
+    `/mail-domains?per_page=200&q=${encodeURIComponent(name)}`,
+  );
   return rows.find((row) => row.domain_name === name);
 }
 
 export async function mailboxAt(api: Api, address: string): Promise<MailboxRow | undefined> {
-  const rows = await api.data<MailboxRow[]>(`/mailboxes?per_page=200&q=${encodeURIComponent(address)}`);
+  const rows = await api.data<MailboxRow[]>(
+    `/mailboxes?per_page=200&q=${encodeURIComponent(address)}`,
+  );
   return rows.find((row) => row.address === address);
 }
 
 export async function aliasAt(api: Api, address: string): Promise<AliasRow | undefined> {
-  const rows = await api.data<AliasRow[]>(`/mail-aliases?per_page=200&q=${encodeURIComponent(address)}`);
+  const rows = await api.data<AliasRow[]>(
+    `/mail-aliases?per_page=200&q=${encodeURIComponent(address)}`,
+  );
   return rows.find((row) => row.address === address);
 }
 
@@ -336,7 +371,10 @@ export async function fleetServer(api: Api, name: string): Promise<FleetRow> {
   return row;
 }
 
-export async function kanameDomain(api: Api, name: string): Promise<{ id: string; name: string; has_mail: boolean }> {
+export async function kanameDomain(
+  api: Api,
+  name: string,
+): Promise<{ id: string; name: string; has_mail: boolean }> {
   const rows = await api.data<{ id: string; name: string; has_mail: boolean }[]>(
     `/domains?per_page=200&q=${encodeURIComponent(name)}`,
   );
@@ -403,9 +441,13 @@ export async function stopAgent(name: string): Promise<void> {
   if (!pid) throw new Error(`no running agent for ${name} in ${stackFile}`);
   killTree(pid);
   await waitUntil(`${name}'s agent to exit`, async () => !alive(pid), { timeoutMs: 15_000 });
-  await waitUntil(`${name} to read as disconnected`, async () => (await connection(name)) !== "connected", {
-    timeoutMs: 30_000,
-  });
+  await waitUntil(
+    `${name} to read as disconnected`,
+    async () => (await connection(name)) !== "connected",
+    {
+      timeoutMs: 30_000,
+    },
+  );
 }
 
 /**
@@ -503,7 +545,10 @@ function keepLog(name: string): void {
 export function processLog(name: string): string {
   if (!existsSync(logsDir)) return "";
   return readdirSync(logsDir)
-    .filter((file) => file === `${name}.log` || (file.startsWith(`${name}.`) && file.endsWith(".previous.log")))
+    .filter(
+      (file) =>
+        file === `${name}.log` || (file.startsWith(`${name}.`) && file.endsWith(".previous.log")),
+    )
     .map((file) => readFileSync(join(logsDir, file), "utf8"))
     .join("\n");
 }
@@ -511,7 +556,11 @@ export function processLog(name: string): string {
 /* ----------------------------------- ui ----------------------------------- */
 
 /** Waits for the job drawer entry with this label to reach Succeeded (or a failure). */
-export async function expectJobInDrawer(page: Page, label: string | RegExp, outcome = "Succeeded"): Promise<Locator> {
+export async function expectJobInDrawer(
+  page: Page,
+  label: string | RegExp,
+  outcome = "Succeeded",
+): Promise<Locator> {
   const drawer = page.getByRole("dialog", { name: "Job activity" });
   await expect(drawer).toBeVisible();
   const job = drawer.getByRole("listitem").filter({ hasText: label }).first();
@@ -542,7 +591,11 @@ export async function rowAction(page: Page, row: Locator, action: string): Promi
 }
 
 /** Picks an option in one of the kit's Comboboxes by its exact label. */
-export async function pickOption(scope: Page | Locator, combobox: string, label: string): Promise<void> {
+export async function pickOption(
+  scope: Page | Locator,
+  combobox: string,
+  label: string,
+): Promise<void> {
   const page = "page" in scope ? scope.page() : scope;
   const input = scope.getByRole("combobox", { name: combobox, exact: true });
   await input.click();
@@ -604,5 +657,8 @@ export function serverCard(page: Page, serverName: string): Locator {
 
 /** A definition in a <dl>, by its term. */
 export function definition(scope: Locator, term: string): Locator {
-  return scope.getByRole("term").filter({ hasText: new RegExp(`^${term}$`) }).locator("xpath=following-sibling::dd[1]");
+  return scope
+    .getByRole("term")
+    .filter({ hasText: new RegExp(`^${term}$`) })
+    .locator("xpath=following-sibling::dd[1]");
 }

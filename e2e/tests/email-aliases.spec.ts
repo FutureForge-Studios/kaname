@@ -69,7 +69,9 @@ test("an alias is created as a job and delivers into the mailbox it names", asyn
   expect((await aliasAt(api, address))?.status).toBe("active");
 });
 
-test("an alias cannot shadow a mailbox, duplicate an alias, or be a bad local part", async ({ page }) => {
+test("an alias cannot shadow a mailbox, duplicate an alias, or be a bad local part", async ({
+  page,
+}) => {
   await page.goto("/email/aliases?new=1");
   const dialog = page.getByRole("dialog", { name: "Add an alias" });
   const add = dialog.getByRole("button", { name: "Add alias" });
@@ -88,7 +90,9 @@ test("an alias cannot shadow a mailbox, duplicate an alias, or be a bad local pa
   await dialog.getByLabel("Alias").fill(local);
   await add.click();
   await expect(dialog).toContainText(`${address} is already an alias.`);
-  await expect(dialog).toContainText("Remove the alias first if this address should become a mailbox.");
+  await expect(dialog).toContainText(
+    "Remove the alias first if this address should become a mailbox.",
+  );
 
   const api = await owner();
   const aliases = await api.data<{ address: string }[]>(`/mail-aliases?per_page=200&q=ops%40`);
@@ -124,7 +128,11 @@ test("an alias that does not exist answers 404, and so does a missing target", a
   expect((await api.del(`/mail-aliases/${missingId}`)).status).toBe(404);
 
   const domain = (await mailboxAt(api, TARGET))!.mail_domain_id;
-  const res = await api.post("/mail-aliases", { mail_domain_id: domain, local_part: "orphan", mailbox_id: missingId });
+  const res = await api.post("/mail-aliases", {
+    mail_domain_id: domain,
+    local_part: "orphan",
+    mailbox_id: missingId,
+  });
   expect(res.status).toBe(404);
   expect(res.body.error?.message).toContain("Mailbox");
 });
