@@ -277,7 +277,7 @@ export function ToastProvider({ children, max = MAX_VISIBLE }: ToastProviderProp
           className={cn(
             // Above dialogs and drawers: a failure must not be hidden by
             // the modal that caused it.
-            "pointer-events-none fixed bottom-0 right-0 z-[60]",
+            "pointer-events-none fixed bottom-0 right-0 z-[55]",
             "flex w-full max-w-sm flex-col gap-2 p-4",
           )}
         >

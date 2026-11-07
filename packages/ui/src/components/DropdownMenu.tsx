@@ -29,7 +29,7 @@ const SUBMENU_OPEN_DELAY = 100;
 const SUBMENU_CLOSE_DELAY = 150;
 
 const PANEL_CLASS = [
-  "z-50 min-w-48 overflow-y-auto p-1 text-base text-[var(--kn-text)] outline-none",
+  "z-[70] min-w-48 overflow-y-auto p-1 text-base text-[var(--kn-text)] outline-none",
   "rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)]",
   "shadow-[var(--kn-shadow-md)] animate-[var(--animate-scale-in)]",
 ].join(" ");

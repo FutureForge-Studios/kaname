@@ -163,7 +163,7 @@ export function Tooltip({
             role="tooltip"
             style={style}
             className={cn(
-              "pointer-events-none z-50 max-w-64 text-sm text-[var(--kn-text)]",
+              "pointer-events-none z-[70] max-w-64 text-sm text-[var(--kn-text)]",
               "rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-surface-3)] px-2 py-1",
               "shadow-[var(--kn-shadow-md)]",
               !reducedMotion && "animate-[var(--animate-fade-in)]",
