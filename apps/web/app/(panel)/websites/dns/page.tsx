@@ -273,7 +273,11 @@ export default function DnsPage() {
                 domain && apply.mutate({ domainId: domain.id, domainName: domain.name })
               }
             >
-              {staged > 0 ? `Apply ${formatCount(staged)} staged` : "Apply staged"}
+              {/* A manual zone's records are all "drifted" until published by
+                hand; there is nothing to push, so no count either. */}
+              {staged > 0 && domain?.dns_provider !== "manual"
+                ? `Apply ${formatCount(staged)} staged`
+                : "Apply staged"}
             </Button>
             <Button
               variant="secondary"
