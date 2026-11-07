@@ -30,8 +30,10 @@ RUN pnpm --filter @kaname/control-plane build
 FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.24.1 AS agent
 ARG KANAME_VERSION=0.1.0
 WORKDIR /agent
-RUN rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 COPY agent/Cargo.toml agent/Cargo.lock agent/rust-toolchain.toml ./
+# After the toolchain file: it pins the compiler, and the targets have to
+# belong to that toolchain.
+RUN rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
 COPY agent/src ./src
 COPY agent/methods.json ./methods.json
 # Stamped with the release, the same way release.yml stamps the assets:

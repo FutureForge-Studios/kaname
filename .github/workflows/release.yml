@@ -133,6 +133,9 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           mkdir -p bin
+          # rust-toolchain.toml pins the compiler inside agent/, so the musl
+          # targets are added to that toolchain, not to the default one.
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
           cargo zigbuild --release --locked --target x86_64-unknown-linux-musl
           cargo zigbuild --release --locked --target aarch64-unknown-linux-musl
           cp target/x86_64-unknown-linux-musl/release/kanamed bin/kanamed-linux-amd64

@@ -1,3 +1,6 @@
+# Pinned so `cargo clippy -D warnings` checks the same compiler on every
+# machine and in CI. A floating "stable" let a new release's deprecation
+# turn a green commit red with no change to the code. Move this on purpose.
 [toolchain]
-channel = "stable"
+channel = "1.97.0"
 components = ["rustfmt", "clippy"]
