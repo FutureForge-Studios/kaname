@@ -38,8 +38,22 @@ interface DbUserRow {
 }
 
 const ENGINES = [
-  { group: "mysql", engine: "mariadb", title: "MySQL / MariaDB", port: 3306, scheme: "mysql", hostPatterns: true },
-  { group: "postgres", engine: "postgres", title: "PostgreSQL", port: 5432, scheme: "postgresql", hostPatterns: false },
+  {
+    group: "mysql",
+    engine: "mariadb",
+    title: "MySQL / MariaDB",
+    port: 3306,
+    scheme: "mysql",
+    hostPatterns: true,
+  },
+  {
+    group: "postgres",
+    engine: "postgres",
+    title: "PostgreSQL",
+    port: 5432,
+    scheme: "postgresql",
+    hostPatterns: false,
+  },
 ] as const;
 
 let serverId = "";
@@ -48,7 +62,10 @@ test.beforeAll(async () => {
 });
 
 async function instanceFor(engine: string): Promise<Instance> {
-  const rows = await data<Instance[]>("GET", `/db-instances?${qs({ server_id: serverId, per_page: 100 })}`);
+  const rows = await data<Instance[]>(
+    "GET",
+    `/db-instances?${qs({ server_id: serverId, per_page: 100 })}`,
+  );
   const found = rows.find((row) => row.engine === engine);
   if (!found) throw new Error(`no ${engine} instance on ${HOST}`);
   return found;
@@ -79,7 +96,9 @@ async function seedDatabase(instance: Instance, name: string): Promise<DatabaseR
 
 async function openSection(page: Page, group: string, view?: "users"): Promise<Locator> {
   await page.goto(`/databases/${group}?${qs({ server_id: serverId, view })}`);
-  const table = page.getByRole("table", { name: view === "users" ? "Database users" : "Databases" });
+  const table = page.getByRole("table", {
+    name: view === "users" ? "Database users" : "Databases",
+  });
   await expect(table).toBeVisible();
   return table;
 }
@@ -95,7 +114,10 @@ for (const meta of ENGINES) {
       const instance = await instanceFor(meta.engine);
       await openSection(page, meta.group);
 
-      const header = page.locator("section").filter({ has: page.getByRole("heading", { name: new RegExp(`^${meta.engine} `) }) }).first();
+      const header = page
+        .locator("section")
+        .filter({ has: page.getByRole("heading", { name: new RegExp(`^${meta.engine} `) }) })
+        .first();
       await expect(header).toContainText(`127.0.0.1:${meta.port}`);
       await expect(header).toContainText("reachable");
 
@@ -105,7 +127,9 @@ for (const meta of ENGINES) {
       /* The version is now the engine's own answer, not the seed's. */
       const synced = await instanceFor(meta.engine);
       expect(synced.id).toBe(instance.id);
-      await expect(page.getByRole("heading", { name: `${meta.engine} ${synced.version}` })).toBeVisible();
+      await expect(
+        page.getByRole("heading", { name: `${meta.engine} ${synced.version}` }),
+      ).toBeVisible();
 
       /* And every database the host reports is in the table. */
       const live = await databasesOn(instance.id);
@@ -116,7 +140,9 @@ for (const meta of ENGINES) {
       }
     });
 
-    test("creates a database with its own user and shows the credential exactly once", async ({ page }) => {
+    test("creates a database with its own user and shows the credential exactly once", async ({
+      page,
+    }) => {
       const instance = await instanceFor(meta.engine);
       const table = await openSection(page, meta.group);
       const name = unique("shop_");
@@ -128,43 +154,60 @@ for (const meta of ENGINES) {
 
       /* Identifiers are checked before anything is sent. */
       await dialog.getByLabel(/^Name/).fill("1shop");
-      await expect(dialog.getByText("must start with a letter or underscore, then letters, digits, _ or -")).toBeVisible();
+      await expect(
+        dialog.getByText("must start with a letter or underscore, then letters, digits, _ or -"),
+      ).toBeVisible();
       await expect(submit).toBeDisabled();
       await dialog.getByLabel(/^Name/).fill("shop db");
       await expect(submit).toBeDisabled();
       await dialog.getByLabel(/^Name/).fill(name);
 
       await dialog.getByLabel("Username").fill(username);
-      if (meta.hostPatterns) await expect(dialog.getByLabel("Host pattern")).toHaveValue("localhost");
+      if (meta.hostPatterns)
+        await expect(dialog.getByLabel("Host pattern")).toHaveValue("localhost");
       else await expect(dialog.getByLabel("Host pattern")).toHaveCount(0);
 
       /* A hand-typed password has a floor too. */
       await dialog.getByRole("switch", { name: "Generate a password" }).uncheck();
-      await dialog.getByLabel(/^Password( \(required\))?$/).fill("short-password");
+      await dialog.getByRole("textbox", { name: /^Password/ }).fill("short-password");
       await expect(dialog.getByText("at least 16 characters")).toBeVisible();
       await expect(submit).toBeDisabled();
       await dialog.getByRole("switch", { name: "Generate a password" }).check();
       await expect(submit).toBeEnabled();
       await submit.click();
 
+      /* Database, user and grant: three jobs, one operator action. The
+       * drawer that tracks them opens over the credentials, so it is
+       * read and dismissed first. */
+      await jobSucceeds(page, "Create database", name);
+      const drawer = page.getByRole("dialog", { name: "Job activity" });
+      await page
+        .getByRole("button", { name: /^Job activity/ })
+        .first()
+        .click();
+      for (const label of ["Create database user", "Apply database grants"]) {
+        const job = drawer
+          .getByRole("listitem")
+          .filter({ hasText: label })
+          .filter({ hasText: username })
+          .first();
+        await expect(job.locator('span[title^="Succeeded."]')).toBeVisible({ timeout: 60_000 });
+      }
+      await page.keyboard.press("Escape");
+      await expect(drawer).toBeHidden();
+
       const credentials = page.getByRole("dialog", { name: "Credentials — shown once" });
       await expect(credentials).toBeVisible();
       const password = ((await codeBlock(credentials, "Password").textContent()) ?? "").trim();
       expect(password.length).toBeGreaterThanOrEqual(16);
-      const connection = ((await codeBlock(credentials, "Connection string").textContent()) ?? "").trim();
-      expect(connection).toBe(`${meta.scheme}://${username}:${password}@127.0.0.1:${meta.port}/${name}`);
+      const connection = (
+        (await codeBlock(credentials, "Connection string").textContent()) ?? ""
+      ).trim();
+      expect(connection).toBe(
+        `${meta.scheme}://${username}:${password}@127.0.0.1:${meta.port}/${name}`,
+      );
       await credentials.getByRole("button", { name: "I have copied it" }).click();
       await expect(credentials).toBeHidden();
-
-      /* Database, user and grant: three jobs, one operator action. */
-      await jobSucceeds(page, "Create database", name);
-      const drawer = page.getByRole("dialog", { name: "Job activity" });
-      await page.getByRole("button", { name: /^Job activity/ }).first().click();
-      for (const label of ["Create database user", "Apply database grants"]) {
-        const row = drawer.getByRole("listitem").filter({ hasText: label }).filter({ hasText: username }).first();
-        await expect(row.locator('span[title^="Succeeded."]')).toBeVisible({ timeout: 60_000 });
-      }
-      await page.keyboard.press("Escape");
 
       await page.getByPlaceholder("Search databases").fill(name);
       const row = table.locator("tbody tr").filter({ hasText: name });
@@ -181,25 +224,45 @@ for (const meta of ENGINES) {
       expect(JSON.stringify(await call("GET", `/db-users/${user!.id}`))).not.toContain(password);
 
       /* A second database with the same name is refused by the panel, not the host. */
-      const dup = await call("POST", "/databases", { instance_id: instance.id, engine: meta.engine, name });
+      const dup = await call("POST", "/databases", {
+        instance_id: instance.id,
+        engine: meta.engine,
+        name,
+      });
       expect(dup.status).toBe(409);
-      expect(dup.body.error?.message).toBe(`${HOST} already has a ${meta.engine} database named "${name}".`);
+      expect(dup.body.error?.message).toBe(
+        `${HOST} already has a ${meta.engine} database named "${name}".`,
+      );
     });
 
     test("the create endpoint holds identifiers, engine and password by field", async () => {
       const instance = await instanceFor(meta.engine);
-      const spaced = await call("POST", "/databases", { instance_id: instance.id, engine: meta.engine, name: "has space" });
+      const spaced = await call("POST", "/databases", {
+        instance_id: instance.id,
+        engine: meta.engine,
+        name: "has space",
+      });
       expect(spaced.status).toBe(422);
       expect(spaced.body.error?.fields?.["name"]).toBe("must start with a letter or underscore");
 
-      const long = await call("POST", "/databases", { instance_id: instance.id, engine: meta.engine, name: `a${"b".repeat(63)}` });
+      const long = await call("POST", "/databases", {
+        instance_id: instance.id,
+        engine: meta.engine,
+        name: `a${"b".repeat(63)}`,
+      });
       expect(long.status).toBe(422);
       expect(long.body.error?.fields?.["name"]).toMatch(/at most 63/);
 
       const other = meta.engine === "postgres" ? "mariadb" : "postgres";
-      const wrong = await call("POST", "/databases", { instance_id: instance.id, engine: other, name: unique("x_") });
+      const wrong = await call("POST", "/databases", {
+        instance_id: instance.id,
+        engine: other,
+        name: unique("x_"),
+      });
       expect(wrong.status).toBe(400);
-      expect(wrong.body.error?.fields?.["engine"]).toBe(`must be "${meta.engine}" for this instance`);
+      expect(wrong.body.error?.fields?.["engine"]).toBe(
+        `must be "${meta.engine}" for this instance`,
+      );
 
       const weak = await call("POST", "/db-users", {
         instance_id: instance.id,
@@ -210,7 +273,9 @@ for (const meta of ENGINES) {
       expect(weak.body.error?.fields?.["password"]).toMatch(/at least 16/);
     });
 
-    test("creates a user with a grant, edits the grant, rotates its password and drops it", async ({ page }) => {
+    test("creates a user with a grant, edits the grant, rotates its password and drops it", async ({
+      page,
+    }) => {
       const instance = await instanceFor(meta.engine);
       const dbName = unique("grants_");
       await seedDatabase(instance, dbName);
@@ -220,10 +285,16 @@ for (const meta of ENGINES) {
       await page.getByRole("button", { name: "New user" }).first().click();
       const dialog = page.getByRole("dialog", { name: "New database user" });
       await dialog.getByLabel("Username").fill("bad name");
-      await expect(dialog.getByText("must start with a letter or underscore, then letters, digits, _ or -")).toBeVisible();
+      await expect(
+        dialog.getByText("must start with a letter or underscore, then letters, digits, _ or -"),
+      ).toBeVisible();
       await expect(dialog.getByRole("button", { name: "Create user" })).toBeDisabled();
       await dialog.getByLabel("Username").fill(username);
-      await expect(dialog.getByText("No grants. The user will exist and be able to authenticate, but reach nothing.")).toBeVisible();
+      await expect(
+        dialog.getByText(
+          "No grants. The user will exist and be able to authenticate, but reach nothing.",
+        ),
+      ).toBeVisible();
 
       await dialog.getByLabel("Add a database grant").click();
       await dialog.getByLabel("Add a database grant").fill(dbName);
@@ -231,11 +302,13 @@ for (const meta of ENGINES) {
       await expect(dialog.getByLabel(`Privileges on ${dbName}`)).toBeVisible();
       await dialog.getByRole("button", { name: "Create user" }).click();
 
+      await jobSucceeds(page, "Create database user", username);
       const credentials = page.getByRole("dialog", { name: "Credentials — shown once" });
       await expect(credentials).toBeVisible();
-      await expect(codeBlock(credentials, "User")).toHaveText(meta.hostPatterns ? `${username}@localhost` : username);
+      await expect(codeBlock(credentials, "User")).toHaveText(
+        meta.hostPatterns ? `${username}@localhost` : username,
+      );
       await credentials.getByRole("button", { name: "I have copied it" }).click();
-      await jobSucceeds(page, "Create database user", username);
 
       await page.getByPlaceholder("Search users").fill(username);
       const row = table.locator("tbody tr").filter({ hasText: username });
@@ -254,7 +327,9 @@ for (const meta of ENGINES) {
       await jobSucceeds(page, "Apply database grants", username);
       await expect(row).toContainText(`${dbName}: SELECT`);
       const stored = (await usersOn(instance.id)).find((u) => u.username === username);
-      expect(stored?.grants).toEqual([expect.objectContaining({ database_name: dbName, privileges: ["SELECT"] })]);
+      expect(stored?.grants).toEqual([
+        expect.objectContaining({ database_name: dbName, privileges: ["SELECT"] }),
+      ]);
 
       /* Removing every grant revokes on the host, and the dialog says so first. */
       await rowAction(page, row, "Edit grants");
@@ -273,10 +348,10 @@ for (const meta of ENGINES) {
       const fresh = `rotated-${unique("")}-passphrase`;
       await rotate.getByLabel("New password").fill(fresh);
       await rotate.getByRole("button", { name: "Rotate password" }).click();
+      await jobSucceeds(page, "Update database user", username);
       const shown = page.getByRole("dialog", { name: "Credentials — shown once" });
       await expect(codeBlock(shown, "Password")).toHaveText(fresh);
       await shown.getByRole("button", { name: "I have copied it" }).click();
-      await jobSucceeds(page, "Update database user", username);
 
       /* Drop: typed confirmation, then the host no longer has it. */
       await rowAction(page, row, "Drop user");
@@ -302,7 +377,9 @@ for (const meta of ENGINES) {
       expect(moved.body.error?.code).toBe("precondition_failed");
     });
 
-    test("samples size live, dumps to a file on the host and restores from it", async ({ page }) => {
+    test("samples size live, dumps to a file on the host and restores from it", async ({
+      page,
+    }) => {
       const instance = await instanceFor(meta.engine);
       const name = unique("dump_");
       const database = await seedDatabase(instance, name);
@@ -311,10 +388,20 @@ for (const meta of ENGINES) {
       await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
 
       /* Size is a live read: the endpoint answers from the engine. */
-      const size = await data<{ size_bytes: number; table_count: number }>("GET", `/databases/${database.id}/size`);
-      const sizeCard = page.locator("section").filter({ has: page.getByRole("heading", { name: "Size and tables" }) });
+      const size = await data<{ size_bytes: number; table_count: number }>(
+        "GET",
+        `/databases/${database.id}/size`,
+      );
+      const sizeCard = page
+        .locator("section")
+        .filter({ has: page.getByRole("heading", { name: "Size and tables" }) });
       await sizeCard.getByRole("button", { name: "Sample now" }).first().click();
-      await expect(sizeCard.getByRole("img").or(sizeCard.getByText(/One sample|samples/)).first()).toBeVisible();
+      await expect(
+        sizeCard
+          .getByRole("img")
+          .or(sizeCard.getByText(/One sample|samples/))
+          .first(),
+      ).toBeVisible();
       expect(size.size_bytes).toBeGreaterThan(0);
 
       /* Dump. */
@@ -353,14 +440,20 @@ for (const meta of ENGINES) {
       await restore.getByLabel(/to confirm/).fill(name);
       await armed.click();
       await jobSucceeds(page, "Restore database", name);
-      await expect(history.locator("tbody tr").filter({ hasText: "Restore" }).first()).toBeVisible();
+      await expect(
+        history.locator("tbody tr").filter({ hasText: "Restore" }).first(),
+      ).toBeVisible();
 
       /* A restore from a file that is not there fails on the host, visibly. */
-      const missing = await data<{ job: { id: string } }>("POST", `/databases/${database.id}/restore`, {
-        source: `/var/backups/kaname/${name}-missing.sql`,
-        database_name: name,
-        confirm_name: name,
-      });
+      const missing = await data<{ job: { id: string } }>(
+        "POST",
+        `/databases/${database.id}/restore`,
+        {
+          source: `/var/backups/kaname/${name}-missing.sql`,
+          database_name: name,
+          confirm_name: name,
+        },
+      );
       const failed = await settle(missing.job.id);
       expect(failed.status).toBe("failed");
       expect(failed.error?.code).toBe("not_found");
@@ -372,7 +465,9 @@ for (const meta of ENGINES) {
         confirm_name: "something-else",
       });
       expect(mismatch.status).toBe(422);
-      expect(mismatch.body.error?.fields?.["confirm_name"]).toBe("confirmation must match the database name exactly");
+      expect(mismatch.body.error?.fields?.["confirm_name"]).toBe(
+        "confirmation must match the database name exactly",
+      );
       const stale = await call("POST", `/databases/${database.id}/restore`, {
         source: file,
         database_name: "other_db",
@@ -381,7 +476,9 @@ for (const meta of ENGINES) {
       expect(stale.status).toBe(412);
     });
 
-    test("drops a database only after its name is typed, and the host loses it", async ({ page }) => {
+    test("drops a database only after its name is typed, and the host loses it", async ({
+      page,
+    }) => {
       const instance = await instanceFor(meta.engine);
       const name = unique("drop_");
       await seedDatabase(instance, name);

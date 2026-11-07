@@ -6,6 +6,7 @@ import {
   idParam,
   isoDate,
   listQuery,
+  queryBoolean,
   serverIdQuery,
   uuid,
   type Container,
@@ -90,8 +91,11 @@ const lifecycleInput = z
   .default({});
 
 const removeQuery = z.object({
-  force: z.coerce.boolean().default(false),
-  remove_volumes: z.coerce.boolean().default(false),
+  // queryBoolean, not z.coerce.boolean(): coercion is Boolean(value), so
+  // the panel's `force=false` read as true and a running container was
+  // killed and removed after the operator had unticked "force".
+  force: queryBoolean.default(false),
+  remove_volumes: queryBoolean.default(false),
 });
 
 const pruneInput = z.object({
@@ -102,7 +106,8 @@ const pruneInput = z.object({
 
 const logsQuery = z.object({
   lines: z.coerce.number().int().min(1).max(10000).default(200),
-  follow: z.coerce.boolean().default(false),
+  // queryBoolean, not z.coerce.boolean(): the latter reads "false" as true.
+  follow: queryBoolean.default(false),
   since: isoDate.optional(),
 });
 

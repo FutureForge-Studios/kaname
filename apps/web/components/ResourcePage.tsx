@@ -166,8 +166,7 @@ export function useResourceListState(options: ResourceListStateOptions = {}): Re
     setPerPage: (next) => update({ per_page: String(next), page: null }),
     filters,
     setFilter: (key, value) => update({ [key]: value, page: null }),
-    clearFilters: () =>
-      update(Object.fromEntries(Object.keys(filters).map((key) => [key, null]))),
+    clearFilters: () => update(Object.fromEntries(Object.keys(filters).map((key) => [key, null]))),
     activeFilterCount: Object.keys(filters).length,
     selected,
     setSelected,
@@ -473,7 +472,14 @@ export function ResourcePage<T>({
               />
             )
           }
-          className="min-h-0 flex-1"
+          /*
+           * A floor, not min-h-0: with header cards above it (the database
+           * instance and connection cards) the table was squeezed to its
+           * header row at a 720px-tall window — rows rendered underneath
+           * the sticky header and could not be clicked. With a floor the
+           * page scrolls instead.
+           */
+          className="min-h-72 flex-1"
         />
       </div>
     </div>

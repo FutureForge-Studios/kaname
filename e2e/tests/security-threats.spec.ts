@@ -77,7 +77,7 @@ test.describe("threat protection", () => {
       .toBe(true);
 
     await page.getByPlaceholder("Search address, target or kind").fill("198.18.255.254");
-    await expect(page.getByText("Nothing recorded in this window")).toBeVisible();
+    await expect(page.getByText("Nothing in this list matches the current search and filters.")).toBeVisible();
   });
 
   test("an address is banned on one host and then unbanned, each as a job", async ({ page }) => {
@@ -113,10 +113,12 @@ test.describe("threat protection", () => {
 
     await rowAction(page, row, "Unban this address");
     await page.getByRole("dialog", { name: `Unban ${ip}` }).getByRole("button", { name: "Unban" }).click();
-    await drawerJobs(page, 1);
+    await expect(page.getByRole("dialog", { name: "Job activity" })).toBeVisible();
+    await page.keyboard.press("Escape");
     await expect.poll(() => disposition(ip, "forge-01")).toBe("observed");
     const unbans = await api.get<JobRow[]>(`/jobs?server_id=${forge.id}&type=fw.unban&per_page=1`);
-    expect(unbans[0]?.status, JSON.stringify(unbans[0]?.error)).toBe("succeeded");
+    const unbanned = await settled(unbans[0]!.id);
+    expect(unbanned.status, JSON.stringify(unbanned.error)).toBe("succeeded");
   });
 
   test("a fleet-wide ban fans out to every host in scope", async ({ page }) => {

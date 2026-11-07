@@ -292,8 +292,9 @@ for (const role of ["developer", "viewer"] as const) {
     await expect(nav.getByRole("link", { name: /^Mailboxes/ })).toHaveCount(0);
 
     await page.goto("/email/mailboxes");
-    await expect(page.getByRole("main")).toContainText("You do not have email.mailboxes:read.");
-    await expect(page.getByRole("table", { name: "Mailboxes" })).toHaveCount(0);
+    const table = page.getByRole("table", { name: "Mailboxes" });
+    await expect(table).toContainText("You do not have email.mailboxes:read.");
+    await expect(table).not.toContainText("@futureforge.dev");
     await page.goto("/email");
     await expect(page.getByRole("main")).toContainText("You do not have email.servers:read.");
     await page.context().close();

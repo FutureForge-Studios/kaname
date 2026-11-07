@@ -32,13 +32,13 @@ test.describe("logs", () => {
     const sources = await api.get<Source[]>(`/logs/sources?server_id=${forge.id}&per_page=200`);
     expect(sources.length).toBeGreaterThan(0);
     for (const source of sources) expect(source.server_name).toBe("forge-01");
-    const source = sources.find((s) => s.kind === "journal") ?? sources[0]!;
+    const source = sources.find((s) => s.id === "journal") ?? sources[0]!;
 
     await page.goto(`/logs?server_id=${forge.id}&source=${encodeURIComponent(source.id)}&range=24h`);
     await expect(page.getByRole("heading", { level: 1, name: "Logs" })).toBeVisible();
     const viewer = page.getByRole("log", { name: `${source.id} log output` });
     await expect(viewer).toBeVisible();
-    await expect(page.getByText(/^\d+ lines$/)).not.toHaveText("0 lines");
+    await expect(page.getByText(/^[\d,]+ lines$/)).not.toHaveText("0 lines");
 
     /* Level is pushed down to the host: nothing below it comes back. */
     await page.getByLabel("Minimum level").selectOption("warn");
@@ -46,8 +46,19 @@ test.describe("logs", () => {
     const warn = await api.get<Line[]>(
       `/logs/search?server_id=${forge.id}&source=${encodeURIComponent(source.id)}&level=warn&limit=200`,
     );
+    expect(warn.length, "the host has warnings in its backlog").toBeGreaterThan(0);
     for (const line of warn) {
       expect(LEVEL_RANK.indexOf(line.level), line.message).toBeGreaterThanOrEqual(LEVEL_RANK.indexOf("warn"));
+    }
+    /* "warn and above" includes the errors, it does not mean "exactly warn". */
+    const all = await api.get<Line[]>(
+      `/logs/search?server_id=${forge.id}&source=${encodeURIComponent(source.id)}&limit=500&since=${encodeURIComponent(new Date(Date.now() - 86_400_000).toISOString())}`,
+    );
+    if (all.some((line) => line.level === "error")) {
+      const worse = await api.get<Line[]>(
+        `/logs/search?server_id=${forge.id}&source=${encodeURIComponent(source.id)}&level=warn&limit=500&since=${encodeURIComponent(new Date(Date.now() - 86_400_000).toISOString())}`,
+      );
+      expect(worse.some((line) => line.level === "error")).toBe(true);
     }
 
     /* A substring nobody logs empties the view, and says why. */
@@ -65,7 +76,7 @@ test.describe("logs", () => {
     const forge = await server("forge-01");
     const api = await owner();
     const sources = await api.get<Source[]>(`/logs/sources?server_id=${forge.id}&per_page=200`);
-    const source = sources.find((s) => s.kind === "journal") ?? sources[0]!;
+    const source = sources.find((s) => s.id === "journal") ?? sources[0]!;
 
     await page.goto(`/logs?server_id=${forge.id}&source=${encodeURIComponent(source.id)}`);
     const live = page.getByRole("button", { name: "Live tail" });
@@ -73,8 +84,8 @@ test.describe("logs", () => {
     await live.click();
     await expect(page.getByText("streaming")).toBeVisible();
 
-    const counter = page.getByText(/^\d+ lines$/);
-    const count = async () => Number((await counter.innerText()).split(" ")[0]);
+    const counter = page.getByText(/^[\d,]+ lines$/);
+    const count = async () => Number((await counter.innerText()).split(" ")[0]!.replace(/,/g, ""));
     await expect.poll(count, { timeout: 45_000 }).toBeGreaterThan(0);
     const first = await count();
     await expect.poll(count, { timeout: 60_000, message: "the tail opened but never followed" }).toBeGreaterThan(first);

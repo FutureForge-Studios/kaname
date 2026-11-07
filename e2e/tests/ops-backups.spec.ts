@@ -104,7 +104,7 @@ test.describe("backups", () => {
     await dialog.getByRole("textbox", { name: /^Name/ }).fill("e2e panel repository");
     await dialog.getByLabel("Kind").selectOption("local");
     await dialog.getByRole("combobox", { name: /^Server/ }).click();
-    await page.getByRole("option", { name: /forge-01/ }).click();
+    await page.getByRole("listbox").getByRole("option", { name: /forge-01/ }).click();
 
     /* A relative path is refused by name. */
     await dialog.getByLabel("Directory").fill("var/backups");
@@ -114,7 +114,8 @@ test.describe("backups", () => {
     /* A path that is not there is reported as unreachable, with the host's reason. */
     await dialog.getByLabel("Directory").fill("/nonexistent/e2e");
     await dialog.getByRole("button", { name: "Test connection" }).click();
-    await expect(dialog.getByText("Not reachable")).toBeVisible();
+    await expect(dialog.getByText("Not reachable", { exact: true })).toBeVisible();
+    await expect(dialog.getByText(/\/nonexistent\/e2e is not reachable on forge-01/)).toBeVisible();
 
     await dialog.getByLabel("Directory").fill(DIR);
     await dialog.getByRole("button", { name: "Test connection" }).click();
@@ -153,9 +154,9 @@ test.describe("backups", () => {
 
     await dialog.getByRole("textbox", { name: /^Name/ }).fill("e2e invalid");
     await dialog.getByRole("combobox", { name: /^Server/ }).click();
-    await page.getByRole("option", { name: /forge-01/ }).click();
+    await page.getByRole("listbox").getByRole("option", { name: /forge-01/ }).click();
     await dialog.getByRole("combobox", { name: /^Destination/ }).click();
-    await page.getByRole("option", { name: /e2e local repository/ }).click();
+    await page.getByRole("listbox").getByRole("option", { name: /e2e local repository/ }).click();
     await dialog.getByLabel("Scope 1 selectors").fill("/etc");
 
     await dialog.getByLabel("Cron expression").fill("61 2 * * *");
@@ -229,8 +230,11 @@ test.describe("backups", () => {
     expect(await drawerSettles(page, "forge-01")).toContain("Succeeded");
     await expect.poll(() => hostFile(forge.id, "/srv/e2e-restore/etc/.restored-from")).toContain(`taken`);
 
-    const restoreJob = (await api.get<(JobRow & { result: unknown })[]>(`/jobs?server_id=${forge.id}&type=backup.restore&per_page=1`))[0]!;
-    expect((restoreJob as unknown as { params?: { overwrite: boolean } }).params?.overwrite ?? false).toBe(false);
+    /* What was sent to the host is on record: no overwrite, this target. */
+    const [requested] = await api.get<{ metadata: { params: { overwrite: boolean; target: string } } }[]>(
+      "/audit?action=backup.restore.requested&per_page=1&sort=seq&order=desc",
+    );
+    expect(requested?.metadata.params).toMatchObject({ overwrite: false, target: "/srv/e2e-restore" });
 
     /* The label is retyped and checked against the row, not the browser. */
     const wrong = await api.call("POST", "/backups/restore", {

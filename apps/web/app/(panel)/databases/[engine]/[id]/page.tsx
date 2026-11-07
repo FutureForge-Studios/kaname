@@ -236,7 +236,8 @@ export default function DatabaseDetailPage() {
               variant="secondary"
               size="sm"
               icon={Download}
-              disabled={!can(meta.read, row.server_id)}
+              // A dump writes a file on the host, so it needs write.
+              disabled={!mayWrite}
               onClick={() => setDumping(true)}
             >
               Dump

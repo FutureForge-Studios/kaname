@@ -110,20 +110,34 @@ async function recordStorageSample(
   const used = disks.length > 0 ? disks.reduce((sum, d) => sum + d.used, 0) : usage.total;
   const sampledAt = new Date();
 
-  const categories = new Map<string, { label: string; path: string; bytes: number; kind: string }>();
+  const categories = new Map<
+    string,
+    { label: string; path: string; bytes: number; kind: string }
+  >();
   for (const category of STORAGE_CATEGORIES) {
     const entry = usage.entries.find((e) => e.path === category.prefix);
     if (!entry) continue;
     const existing = categories.get(category.label);
     if (existing) existing.bytes += entry.bytes;
-    else categories.set(category.label, { label: category.label, path: category.prefix, bytes: entry.bytes, kind: category.kind });
+    else
+      categories.set(category.label, {
+        label: category.label,
+        path: category.prefix,
+        bytes: entry.bytes,
+        kind: category.kind,
+      });
   }
 
   const largest = usage.entries
     .filter((e) => e.kind !== "category")
     .sort((a, b) => b.bytes - a.bytes)
     .slice(0, 100)
-    .map((e) => ({ path: e.path, bytes: e.bytes, kind: "directory", modified_at: sampledAt.toISOString() }));
+    .map((e) => ({
+      path: e.path,
+      bytes: e.bytes,
+      kind: "directory",
+      modified_at: sampledAt.toISOString(),
+    }));
 
   await ctx.db.insert(storageSamples).values({
     serverId,
@@ -449,18 +463,32 @@ export function registerJobHandlers(worker: JobWorker): void {
     "ftp.create": async (ctx) => {
       const serverId = requireServer(ctx);
       const p = params<{ ftp_account_id: string; username: string; home_dir: string }>(ctx);
-      await ctx.hub.call(
-        serverId,
-        "fs.mkdir",
-        { path: p.home_dir, parents: true },
-        { signal: ctx.signal },
-      );
-      await ctx.hub.call(
-        serverId,
-        "fs.chown",
-        { paths: [p.home_dir], owner: p.username, recursive: true },
-        { signal: ctx.signal },
-      );
+      try {
+        await ctx.hub.call(
+          serverId,
+          "fs.mkdir",
+          { path: p.home_dir, parents: true },
+          { signal: ctx.signal },
+        );
+        await ctx.hub.call(
+          serverId,
+          "fs.chown",
+          { paths: [p.home_dir], owner: p.username, recursive: true },
+          { signal: ctx.signal },
+        );
+      } catch (err) {
+        // The row was written as "provisioning" before the job ran and
+        // nothing else ever moves it, so a refused home directory left the
+        // account provisioning for ever (the same trap siteWrite closes).
+        // An offline agent is a wait, not a failure (KD-008).
+        if (!(err instanceof AgentOfflineError)) {
+          await ctx.db
+            .update(ftpAccounts)
+            .set({ status: "error", updatedAt: new Date() })
+            .where(eq(ftpAccounts.id, p.ftp_account_id));
+        }
+        throw err;
+      }
       await ctx.db
         .update(ftpAccounts)
         .set({ status: "active", lastSyncedAt: new Date(), updatedAt: new Date() })

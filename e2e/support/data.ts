@@ -1,7 +1,13 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
+import {
+  expect,
+  type Browser,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import {
   agentBinary,
   agentStateRoot,
@@ -11,6 +17,7 @@ import {
   ownerPassword,
   repoRoot,
   stackFile,
+  webUrl,
 } from "./config.js";
 import { jobStatusPill } from "./ui.js";
 
@@ -22,11 +29,10 @@ import { jobStatusPill } from "./ui.js";
  * - read the host's state back independently of the page under test
  *   (an owner-session API client), so "the editor said saved" is checked
  *   against the bytes the agent actually holds;
- * - act as each system role. Invited users cannot set a password yet
- *   (there is no invite-acceptance route), so a role is exercised through
- *   an API key minted by the owner with exactly that role's grants — the
- *   control plane evaluates a key's scopes with the same `can()` it uses
- *   for a session, and the panel accepts a bearer key in place of a cookie;
+ * - act as each system role: a member is invited with the role and
+ *   accepts the invitation with their own password, exactly as a person
+ *   would, and the session that leaves behind is used for the API and the
+ *   browser alike;
  * - take one simulated agent off the network and bring it back.
  * ------------------------------------------------------------------ */
 
@@ -58,16 +64,15 @@ async function signInOwner(): Promise<string> {
   return set;
 }
 
-/** One API call, as the owner unless a bearer token is given. Never throws on status. */
+/** One API call, as the owner unless a member is given. Never throws on status. */
 export async function call<T = unknown>(
   method: string,
   path: string,
   body?: unknown,
-  token?: string,
+  as?: Member,
 ): Promise<ApiResult<T>> {
   const headers: Record<string, string> = {};
-  if (token) headers["authorization"] = `Bearer ${token}`;
-  else headers["cookie"] = await signInOwner();
+  headers["cookie"] = as ? as.cookie : await signInOwner();
   if (body !== undefined) headers["content-type"] = "application/json";
   const res = await fetch(`${apiUrl}/api/v1${path}`, {
     method,
@@ -128,7 +133,11 @@ export async function settle(jobId: string, timeoutMs = 60_000): Promise<JobRow>
  * the job's label and target. Waits for that row's pill to say Succeeded,
  * then closes the drawer so the page underneath is usable again.
  */
-export async function jobSucceeds(page: Page, label: string, target: string | RegExp): Promise<void> {
+export async function jobSucceeds(
+  page: Page,
+  label: string,
+  target: string | RegExp,
+): Promise<void> {
   const drawer = page.getByRole("dialog", { name: "Job activity" });
   await expect(drawer).toBeVisible();
   const row = drawer
@@ -143,7 +152,11 @@ export async function jobSucceeds(page: Page, label: string, target: string | Re
 }
 
 /** Same, for a job that is meant to fail: returns the error line the drawer shows. */
-export async function jobFails(page: Page, label: string, target: string | RegExp): Promise<Locator> {
+export async function jobFails(
+  page: Page,
+  label: string,
+  target: string | RegExp,
+): Promise<Locator> {
   const drawer = page.getByRole("dialog", { name: "Job activity" });
   await expect(drawer).toBeVisible();
   const row = drawer
@@ -166,57 +179,80 @@ interface RoleRow {
   grants: { permission: string }[];
 }
 
-const roleKeys = new Map<string, string>();
+/** A signed-in member: their session cookie, as `name=value`. */
+export interface Member {
+  email: string;
+  cookie: string;
+}
+
+const PASSWORD = "E2e-Files-Strong-Passphrase-42!";
 
 export async function systemRoles(): Promise<RoleRow[]> {
   return data<RoleRow[]>("GET", "/roles?per_page=100");
 }
 
 /**
- * Creates (invites) a user holding the role, the way an owner would, and
- * mints an API key carrying exactly that role's permissions. Returns the
- * key's bearer token.
+ * Invites a member holding exactly these roles, accepts the invitation
+ * the way the invitee would (choosing their own password), and returns
+ * the session that acceptance signs them into.
  */
-export async function actAs(slug: RoleSlug, tag: string): Promise<string> {
-  const cached = roleKeys.get(`${slug}:${tag}`);
-  if (cached) return cached;
-
-  const role = (await systemRoles()).find((r) => r.slug === slug);
-  if (!role) throw new Error(`no system role ${slug}`);
-
-  const stamp = `${tag}-${slug}-${Date.now().toString(36)}`;
-  await data("POST", "/users", {
-    email: `${stamp}@e2e.kaname.local`,
-    name: `E2E ${slug}`,
-    role_ids: [role.id],
+export async function inviteMember(tag: string, roleIds: string[]): Promise<Member> {
+  const email = `${unique(`${tag}-`)}@e2e.kaname.local`;
+  const invited = await data<{ invite: { url: string } }>("POST", "/users", {
+    email,
+    name: `E2E ${tag}`,
+    role_ids: roleIds,
     send_invite: false,
   });
-
-  const scopes = [...new Set(role.grants.map((g) => g.permission))];
-  const key = await data<{ token: string }>("POST", "/api-keys", {
-    name: `e2e ${stamp}`,
-    scopes,
-    scope_kind: "global",
+  const token = decodeURIComponent(invited.invite.url.split("/invite/")[1] ?? "");
+  const res = await fetch(`${apiUrl}/api/v1/auth/invite/accept`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token, password: PASSWORD }),
   });
-  roleKeys.set(`${slug}:${tag}`, key.token);
-  return key.token;
+  if (!res.ok)
+    throw new Error(`invite accept for ${email} failed (${res.status}): ${await res.text()}`);
+  const cookie = res.headers.getSetCookie()[0]?.split(";")[0];
+  if (!cookie) throw new Error(`accepting ${email}'s invite set no session`);
+  return { email, cookie };
 }
 
-/** A key with an arbitrary set of scopes, for the cases no system role covers. */
-export async function keyWith(name: string, scopes: string[]): Promise<string> {
-  const key = await data<{ token: string }>("POST", "/api-keys", {
-    name: `e2e ${name} ${Date.now().toString(36)}`,
-    scopes,
-    scope_kind: "global",
-  });
-  return key.token;
+/** A member holding one system role. */
+export async function memberWithRole(slug: RoleSlug, tag: string): Promise<Member> {
+  const role = (await systemRoles()).find((r) => r.slug === slug);
+  if (!role) throw new Error(`no system role ${slug}`);
+  return inviteMember(`${tag}-${slug}`, [role.id]);
 }
 
-/** A browser context with no session cookie that authenticates every request with the key. */
-export async function contextFor(browser: Browser, token: string): Promise<BrowserContext> {
+/** A member holding a custom role made of exactly these permissions, globally. */
+export async function memberWithPermissions(tag: string, permissions: string[]): Promise<Member> {
+  const role = await data<{ id: string }>("POST", "/roles", {
+    name: `E2E ${unique(tag)}`,
+    grants: permissions.map((permission) => ({ permission, scope: { kind: "global" } })),
+  });
+  return inviteMember(tag, [role.id]);
+}
+
+/** A browser context signed in as the member. */
+export async function contextFor(browser: Browser, member: Member): Promise<BrowserContext> {
+  const [name, ...rest] = member.cookie.split("=");
+  const url = new URL(webUrl);
   return browser.newContext({
-    storageState: { cookies: [], origins: [] },
-    extraHTTPHeaders: { authorization: `Bearer ${token}` },
+    storageState: {
+      cookies: [
+        {
+          name: name!,
+          value: rest.join("="),
+          domain: url.hostname,
+          path: "/",
+          expires: -1,
+          httpOnly: true,
+          secure: false,
+          sameSite: "Lax",
+        },
+      ],
+      origins: [],
+    },
   });
 }
 
@@ -228,9 +264,13 @@ function stateDirOf(name: string): string {
 
 /** Pids of the `kanamed run` process serving this host in this stack, if any. */
 export function agentPids(name: string): number[] {
-  const out = spawnSync("pgrep", ["-f", `${agentBinary} run --simulate --state-dir ${stateDirOf(name)} `], {
-    encoding: "utf8",
-  });
+  const out = spawnSync(
+    "pgrep",
+    ["-f", `${agentBinary} run --simulate --state-dir ${stateDirOf(name)} `],
+    {
+      encoding: "utf8",
+    },
+  );
   return out.stdout
     .split("\n")
     .map((line) => Number(line.trim()))
@@ -322,4 +362,21 @@ export function codeBlock(scope: Locator, label: string): Locator {
   return scope
     .getByRole("button", { name: `Copy ${label}`, exact: true })
     .locator("xpath=ancestor::div[code][1]/code");
+}
+
+/** Uploads real bytes through POST /files/upload as the owner; returns the HTTP status. */
+export async function uploadBytes(
+  serverId: string,
+  directory: string,
+  name: string,
+  bytes: Buffer,
+): Promise<number> {
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(bytes)]), name);
+  const res = await fetch(
+    `${apiUrl}/api/v1/files/upload?${qs({ server_id: serverId, path: directory, size: bytes.length })}`,
+    { method: "POST", headers: { cookie: await signInOwner() }, body: form },
+  );
+  await res.arrayBuffer();
+  return res.status;
 }

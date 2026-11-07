@@ -89,7 +89,7 @@ test.describe("notifications", () => {
     await section.getByLabel(`Channel ${n} target`).fill(`${hook.url}/kaname`);
     await section.getByLabel(`Channel ${n} signing secret`).fill("e2e-signing-secret");
     await section.getByRole("button", { name: "Save" }).click();
-    await expect(section.getByRole("button", { name: "Save" })).toBeHidden();
+    await expect(section.getByRole("button", { name: "Save" })).toBeDisabled();
     expect((await channels()).find((c) => c.name === "e2e webhook")).toMatchObject({
       kind: "webhook",
       target: `${hook.url}/kaname`,

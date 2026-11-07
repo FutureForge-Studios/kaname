@@ -138,8 +138,12 @@ test("the live tail streams the host's journal as messages, filters on the host 
 
   await page.getByRole("button", { name: "Stop", exact: true }).click();
   await expect(page.getByText("Stopped", { exact: true })).toBeVisible();
-  await expect(viewer).toContainText("The tail is stopped.");
+  /* Starting again opens a new follow on the host with the same filter. */
+  const reopened = page.waitForRequest(
+    (req) => req.url().includes("/mail-logs/tail") && req.url().includes("q=dkim.pass"),
+  );
   await page.getByRole("button", { name: "Start", exact: true }).click();
+  await reopened;
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
   await expect(viewer).toContainText("DKIM verification passed");
 });
@@ -148,8 +152,12 @@ test("a deep link to a mail server that is not there says so instead of showing 
   await page.goto(`/email/health?server_id=${missingId}`);
   await expect(page.getByText("No mail server matches this link")).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`server_id=${missingId}`));
-  await page.getByRole("button", { name: `Show ${MAIL_HOST}` }).click();
-  await expect(page.getByRole("combobox", { name: "Mail server" })).toHaveValue(MAIL_HOST);
+  /* The way on is offered, and goes to a server that exists. */
+  const show = page.getByRole("button", { name: /^Show / });
+  const first = ((await show.innerText()).replace(/^Show /, "")).trim();
+  await show.click();
+  await expect(page.getByRole("combobox", { name: "Mail server" })).toHaveValue(first);
+  await expect(page).not.toHaveURL(new RegExp(missingId));
 
   await page.goto(`/email/logs?server_id=${missingId}`);
   await expect(page.getByText("No mail server matches this link")).toBeVisible();

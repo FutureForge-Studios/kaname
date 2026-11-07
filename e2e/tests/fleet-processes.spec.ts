@@ -101,6 +101,7 @@ test("the tree view nests children under their parent", async ({ page }) => {
   await expect(page).toHaveURL(/view=tree/);
 
   const table = page.getByRole("table", { name: "Processes" });
+  await expect(table.locator("tbody tr").first()).toBeVisible();
   const pid = await columnIndex(table, "PID");
   /* The root of the tree is init, unindented. */
   const first = table.locator("tbody tr").first();
@@ -127,6 +128,7 @@ test("pid 1 cannot be signalled from the table, and the API refuses it too", asy
   const host = await server(HOST);
   await page.goto(`/infrastructure/processes?server_id=${host.id}&sort=pid`);
   const table = page.getByRole("table", { name: "Processes" });
+  await expect(table.locator("tbody tr").first()).toBeVisible();
   const pid = await columnIndex(table, "PID");
   const init = table.locator("tbody tr").first();
   await expect(cellAt(init, pid)).toHaveText("1");

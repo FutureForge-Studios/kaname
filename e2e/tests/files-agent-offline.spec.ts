@@ -43,10 +43,16 @@ test("the file manager reports a vanished agent and a queued change lands when i
 
     /* The editor and a download fail the same way, fast. */
     const started = Date.now();
-    const read = await call("GET", `/files/read?${qs({ server_id: server.id, path: "/etc/hostname" })}`);
+    const read = await call(
+      "GET",
+      `/files/read?${qs({ server_id: server.id, path: "/etc/hostname" })}`,
+    );
     expect(read.body.error?.code).toBe("agent_offline");
     expect(Date.now() - started).toBeLessThan(10_000);
-    const dl = await call("GET", `/files/download?${qs({ server_id: server.id, path: "/etc/hostname" })}`);
+    const dl = await call(
+      "GET",
+      `/files/download?${qs({ server_id: server.id, path: "/etc/hostname" })}`,
+    );
     expect(dl.body.error?.code).toBe("agent_offline");
 
     /* A mutation is accepted and waits — it is not an error to want it. */
@@ -55,10 +61,19 @@ test("the file manager reports a vanished agent and a queued change lands when i
       path: dir,
     });
     await expect
-      .poll(async () => (await data<{ status: string; blocked_reason: string | null }>("GET", `/jobs/${queued.job.id}`)).blocked_reason, {
-        timeout: 30_000,
-        message: "a job for an offline host was never marked as waiting for it",
-      })
+      .poll(
+        async () =>
+          (
+            await data<{ status: string; blocked_reason: string | null }>(
+              "GET",
+              `/jobs/${queued.job.id}`,
+            )
+          ).blocked_reason,
+        {
+          timeout: 30_000,
+          message: "a job for an offline host was never marked as waiting for it",
+        },
+      )
       .toBe("agent_offline");
     const pending = await data<{ status: string }>("GET", `/jobs/${queued.job.id}`);
     expect(pending.status).toBe("queued");
@@ -71,7 +86,10 @@ test("the file manager reports a vanished agent and a queued change lands when i
     await startAgent(HOST, server.id);
 
     expect((await settle(queued.job.id, 120_000)).status).toBe("succeeded");
-    const listing = await data<{ entries: { name: string }[] }>("GET", `/files?${qs({ server_id: server.id, path: "/srv" })}`);
+    const listing = await data<{ entries: { name: string }[] }>(
+      "GET",
+      `/files?${qs({ server_id: server.id, path: "/srv" })}`,
+    );
     expect(listing.entries.map((e) => e.name)).toContain(dir.slice("/srv/".length));
 
     /* And the page recovers on retry, with no reload. */
@@ -95,12 +113,18 @@ test("an upload to a host that is offline is refused before a byte is sent", asy
       mimeType: "text/plain",
       buffer: Buffer.from("too late\n"),
     });
-    const item = page.getByRole("region", { name: "Uploads" }).getByRole("listitem").filter({ hasText: "late.txt" });
+    const item = page
+      .getByRole("region", { name: "Uploads" })
+      .getByRole("listitem")
+      .filter({ hasText: "late.txt" });
     await expect(item).toContainText(/unreachable|offline|not connected/i, { timeout: 30_000 });
   } finally {
     await startAgent(HOST, server.id);
   }
 
-  const listing = await data<{ entries: { name: string }[] }>("GET", `/files?${qs({ server_id: server.id, path: "/srv" })}`);
+  const listing = await data<{ entries: { name: string }[] }>(
+    "GET",
+    `/files?${qs({ server_id: server.id, path: "/srv" })}`,
+  );
   expect(listing.entries.map((e) => e.name)).not.toContain("late.txt");
 });

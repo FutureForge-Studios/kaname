@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { api, field, get, rowWith, unique } from "../support/websites.js";
+import { api, dismissToasts, field, get, rowWith, unique } from "../support/websites.js";
 
 /* ------------------------------------------------------------------ *
  * Websites — DNS.
@@ -97,6 +97,7 @@ test("a manual zone's records are created, edited and deleted from the DNS page"
   const edit = page.getByRole("dialog", { name: /^Edit A / });
   await expect(edit.getByLabel("IPv4 address")).toHaveValue("203.0.113.10");
   await edit.getByLabel("IPv4 address").fill("203.0.113.20");
+  await dismissToasts(page);
   await edit.getByRole("button", { name: "Save record" }).click();
   await expect(edit).toBeHidden();
   await expect(rowWith(table, "203.0.113.20")).toBeVisible();

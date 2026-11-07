@@ -38,7 +38,10 @@ async function openFtp(page: Page): Promise<Locator> {
 }
 
 async function accountNamed(username: string): Promise<Account | undefined> {
-  const rows = await data<Account[]>("GET", `/ftp-accounts?${qs({ server_id: serverId, q: username, per_page: 50 })}`);
+  const rows = await data<Account[]>(
+    "GET",
+    `/ftp-accounts?${qs({ server_id: serverId, q: username, per_page: 50 })}`,
+  );
   return rows.find((row) => row.username === username);
 }
 
@@ -48,7 +51,7 @@ async function createViaUi(page: Page, username: string, home?: string): Promise
   await expect(dialog).toBeVisible();
   await dialog.getByLabel("Username").fill(username);
   if (home) await dialog.getByLabel("Home directory").fill(home);
-  const password = await dialog.getByLabel(/^Password( \(required\))?$/).inputValue();
+  const password = await dialog.getByRole("textbox", { name: /^Password/ }).inputValue();
   await dialog.getByRole("button", { name: "Create account" }).click();
   await expect(dialog).toBeHidden();
   return password;
@@ -68,7 +71,7 @@ test("creates an account whose home directory really appears on the host, owned 
   await expect(dialog.getByLabel("Home directory")).toHaveValue(`/home/${username}`);
 
   /* A generated credential, shown in full while it can still be copied. */
-  const passwordField = dialog.getByLabel(/^Password( \(required\))?$/);
+  const passwordField = dialog.getByRole("textbox", { name: /^Password/ });
   const password = await passwordField.inputValue();
   expect(password.length).toBeGreaterThanOrEqual(16);
   await expect(dialog.getByText("Kaname shows this once.")).toBeVisible();
@@ -124,10 +127,10 @@ test("validates the username, the password floor, duplicates and SSH keys by fie
   await dialog.getByLabel("Home directory").fill("/home/somewhere");
 
   /* Fifteen characters is one short of the contract's floor. */
-  await dialog.getByLabel(/^Password( \(required\))?$/).fill("a".repeat(15));
+  await dialog.getByRole("textbox", { name: /^Password/ }).fill("a".repeat(15));
   await expect(dialog.getByText("15 characters")).toBeVisible();
   await expect(create).toBeDisabled();
-  await dialog.getByLabel(/^Password( \(required\))?$/).fill("a".repeat(16));
+  await dialog.getByRole("textbox", { name: /^Password/ }).fill("a".repeat(16));
   await expect(create).toBeEnabled();
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
@@ -172,7 +175,9 @@ test("validates the username, the password floor, duplicates and SSH keys by fie
   await page.getByRole("button", { name: "New account" }).first().click();
   await dialog.getByLabel("Username").fill(username);
   await dialog.getByRole("button", { name: "Create account" }).click();
-  await expect(dialog.getByRole("alert")).toContainText(`${HOST} already has an account named "${username}".`);
+  await expect(dialog.getByRole("alert")).toContainText(
+    `${HOST} already has an account named "${username}".`,
+  );
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
@@ -213,11 +218,14 @@ test("resets a password, showing the new one exactly once, then deletes the acco
   await expect(reset.getByText("This is the only time this password is shown.")).toBeVisible();
 
   await reset.getByRole("button", { name: "Reset password" }).click();
+  await jobSucceeds(page, "Reset FTP password", username);
   const queued = page.getByRole("dialog", { name: "Password reset queued" });
   await expect(queued).toBeVisible();
-  /* Still on screen while the job runs: closing is the only way to lose it. */
+  /* Still on screen after the job: closing is the only way to lose it. */
   await expect(codeBlock(queued, `New password for ${username}`)).toHaveText(password);
-  await page.keyboard.press("Escape");
+  await expect(queued.locator('span[title^="Succeeded."]')).toBeVisible();
+  await queued.getByRole("button", { name: "Done" }).click();
+  await expect(queued).toBeHidden();
 
   /* Reopening never shows the old one again — it mints a new candidate. */
   await row.getByRole("button", { name: "Row actions" }).click();
@@ -238,7 +246,10 @@ test("resets a password, showing the new one exactly once, then deletes the acco
 
   await expect(table.locator("tbody tr").filter({ hasText: username })).toHaveCount(0);
   expect(await accountNamed(username)).toBeUndefined();
-  const home = await data<{ entries: { name: string }[] }>("GET", `/files?${qs({ server_id: serverId, path: "/home" })}`);
+  const home = await data<{ entries: { name: string }[] }>(
+    "GET",
+    `/files?${qs({ server_id: serverId, path: "/home" })}`,
+  );
   expect(home.entries.map((entry) => entry.name)).toContain(username);
 });
 

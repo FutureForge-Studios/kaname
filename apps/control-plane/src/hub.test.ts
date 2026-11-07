@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import type { WebSocket } from "ws";
 import { MAX_CHUNK_BYTES, MAX_DEADLINE_MS, STREAM_WINDOW } from "@kaname/contract/agent";
-import { AgentHub, AgentRpcError } from "./agent/hub.js";
+import { AGENT_FRAME_LIMIT, AgentHub, AgentRpcError } from "./agent/hub.js";
 
 /* ------------------------------------------------------------------ *
  * The hub's side of the contract with agent/internal/rpc/conn.go:
@@ -96,6 +96,31 @@ afterEach(() => {
 });
 
 describe("agent hub", () => {
+  /* ------------------------- request size -------------------------- */
+
+  it("refuses a request too large for the agent instead of sending it", async () => {
+    const { hub, socket } = connect();
+    // A file the editor may open (up to 1 MiB) is larger than one agent
+    // frame. Sending it made the agent drop the whole connection.
+    const content = "x".repeat(AGENT_FRAME_LIMIT);
+    const call = hub.call(SERVER_ID, "fs.write", {
+      path: "/srv/big.txt",
+      content,
+      encoding: "utf8",
+      create_parents: false,
+    });
+    await expect(call).rejects.toMatchObject({
+      agentError: { code: "invalid_params" },
+    });
+    expect(socket.frames("req")).toHaveLength(0);
+    expect(socket.closedWith).toBeNull();
+    expect(hub.isConnected(SERVER_ID)).toBe(true);
+
+    // Everything that fits still goes.
+    void hub.call(SERVER_ID, "fs.stat", { path: "/srv" }).catch(() => undefined);
+    expect(socket.frames("req")).toHaveLength(1);
+  });
+
   /* --------------------------- upstream ---------------------------- */
 
   it("pauses an upload at STREAM_WINDOW unacknowledged chunks and resumes on ack", async () => {

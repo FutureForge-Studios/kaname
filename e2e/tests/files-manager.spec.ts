@@ -4,7 +4,16 @@ import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { serverNamed } from "../support/api.js";
 import { agentStateRoot } from "../support/config.js";
-import { binaryBytes, call, data, jobSucceeds, qs, settle, unique } from "../support/data.js";
+import {
+  binaryBytes,
+  call,
+  connectionOf,
+  data,
+  jobSucceeds,
+  qs,
+  settle,
+  unique,
+} from "../support/data.js";
 import { cellAt, columnIndex } from "../support/ui.js";
 
 /* ------------------------------------------------------------------ *
@@ -25,7 +34,15 @@ let serverId = "";
 let root = "";
 
 interface Listing {
-  entries: { name: string; path: string; kind: string; size: number; mode: string; owner: string; group: string }[];
+  entries: {
+    name: string;
+    path: string;
+    kind: string;
+    size: number;
+    mode: string;
+    owner: string;
+    group: string;
+  }[];
 }
 interface Content {
   content: string;
@@ -67,8 +84,9 @@ async function writeText(path: string, content: string): Promise<void> {
 }
 
 async function listing(path: string): Promise<Listing["entries"]> {
-  return (await data<Listing>("GET", `/files?${qs({ server_id: serverId, path, show_hidden: true })}`))
-    .entries;
+  return (
+    await data<Listing>("GET", `/files?${qs({ server_id: serverId, path, show_hidden: true })}`)
+  ).entries;
 }
 
 async function readBack(path: string): Promise<Content> {
@@ -232,10 +250,12 @@ test("creates a file, edits it in the editor and saves it byte for byte", async 
 
   /* Reopening reads the host again, not the discarded draft. */
   await rowFor(table, `${dir}/app.conf`).click();
-  await expect(page.getByRole("region", { name: `File ${dir}/app.conf` }).locator(".cm-content")).toHaveText(
-    /listen 8080;/,
+  await expect(
+    page.getByRole("region", { name: `File ${dir}/app.conf` }).locator(".cm-content"),
+  ).toHaveText(/listen 8080;/);
+  await expect(page.getByRole("region", { name: `File ${dir}/app.conf` })).not.toContainText(
+    "# draft",
   );
-  await expect(page.getByRole("region", { name: `File ${dir}/app.conf` })).not.toContainText("# draft");
 });
 
 /* --------------------------- upload/download ------------------------- */
@@ -267,8 +287,12 @@ test("uploads text and binary files and downloads both back identical", async ({
   ]);
 
   const uploads = page.getByRole("region", { name: "Uploads" });
-  await expect(uploads.getByRole("listitem").filter({ hasText: "notes.txt" })).toContainText("Uploaded");
-  await expect(uploads.getByRole("listitem").filter({ hasText: "blob.bin" })).toContainText("Uploaded");
+  await expect(uploads.getByRole("listitem").filter({ hasText: "notes.txt" })).toContainText(
+    "Uploaded",
+  );
+  await expect(uploads.getByRole("listitem").filter({ hasText: "blob.bin" })).toContainText(
+    "Uploaded",
+  );
 
   await expect(rowFor(table, `${dir}/notes.txt`)).toBeVisible();
   await expect(rowFor(table, `${dir}/blob.bin`)).toBeVisible();
@@ -297,9 +321,12 @@ test("a large upload streams through and comes back intact", async ({ page }) =>
   await upload(page, [{ name: "big.bin", mimeType: "application/octet-stream", buffer: big }]);
 
   const uploads = page.getByRole("region", { name: "Uploads" });
-  await expect(uploads.getByRole("listitem").filter({ hasText: "big.bin" })).toContainText("Uploaded", {
-    timeout: 180_000,
-  });
+  await expect(uploads.getByRole("listitem").filter({ hasText: "big.bin" })).toContainText(
+    "Uploaded",
+    {
+      timeout: 180_000,
+    },
+  );
   const entry = (await listing(dir)).find((e) => e.name === "big.bin");
   expect(entry?.size).toBe(big.length);
 
@@ -315,9 +342,14 @@ test("a binary file is never offered to the editor as text", async ({ page }) =>
 
   /* A .txt name with bytes that are not UTF-8: the extension says text,
    * the content says otherwise, and the content has to win. */
-  await upload(page, [{ name: "mislabelled.txt", mimeType: "text/plain", buffer: binaryBytes(4096, 3) }]);
+  await upload(page, [
+    { name: "mislabelled.txt", mimeType: "text/plain", buffer: binaryBytes(4096, 3) },
+  ]);
   await expect(
-    page.getByRole("region", { name: "Uploads" }).getByRole("listitem").filter({ hasText: "mislabelled.txt" }),
+    page
+      .getByRole("region", { name: "Uploads" })
+      .getByRole("listitem")
+      .filter({ hasText: "mislabelled.txt" }),
   ).toContainText("Uploaded");
 
   await rowFor(table, `${dir}/mislabelled.txt`).click();
@@ -328,7 +360,9 @@ test("a binary file is never offered to the editor as text", async ({ page }) =>
   await pane.getByRole("button", { name: "Close file" }).click();
 
   /* A file whose type is binary is a download, straight from the row. */
-  await upload(page, [{ name: "image.iso", mimeType: "application/octet-stream", buffer: binaryBytes(2048, 5) }]);
+  await upload(page, [
+    { name: "image.iso", mimeType: "application/octet-stream", buffer: binaryBytes(2048, 5) },
+  ]);
   const row = rowFor(table, `${dir}/image.iso`);
   await expect(row).toBeVisible();
   const pending = page.waitForEvent("download");
@@ -381,7 +415,11 @@ test("renames, copies and moves entries, and refuses to move a folder into itsel
   await move.getByLabel("Destination directory").fill(`${dir}/sub`);
   await move.getByRole("button", { name: "Move" }).click();
   const drawer = page.getByRole("dialog", { name: "Job activity" });
-  const failed = drawer.getByRole("listitem").filter({ hasText: "Move" }).filter({ hasText: `${dir}/b.txt` }).first();
+  const failed = drawer
+    .getByRole("listitem")
+    .filter({ hasText: "Move" })
+    .filter({ hasText: `${dir}/b.txt` })
+    .first();
   await expect(failed).toContainText(/already exists/, { timeout: 30_000 });
   await page.keyboard.press("Escape");
   await expect(rowFor(table, `${dir}/b.txt`)).toBeVisible();
@@ -405,7 +443,11 @@ test("renames, copies and moves entries, and refuses to move a folder into itsel
   });
   expect(intoItself.status).toBe(409);
   expect(intoItself.body.error?.message).toBe(`Cannot move ${dir}/sub into itself.`);
-  const same = await call("POST", "/files/move", { server_id: serverId, from: `${dir}/sub`, to: `${dir}/sub` });
+  const same = await call("POST", "/files/move", {
+    server_id: serverId,
+    from: `${dir}/sub`,
+    to: `${dir}/sub`,
+  });
   expect(same.status).toBe(400);
   expect(same.body.error?.fields?.["to"]).toBe("must differ from `from`");
 });
@@ -438,7 +480,11 @@ test("changes mode and ownership, with bad modes and owners refused by field", a
   expect((await listing(dir)).find((e) => e.name === "secret.key")?.mode).toMatch(/^0?600$/);
 
   /* The API holds the same line the dialog does, by field. */
-  const badMode = await call("POST", "/files/chmod", { server_id: serverId, paths: [`${dir}/secret.key`], mode: "0888" });
+  const badMode = await call("POST", "/files/chmod", {
+    server_id: serverId,
+    paths: [`${dir}/secret.key`],
+    mode: "0888",
+  });
   expect(badMode.status).toBe(422);
   expect(badMode.body.error?.fields?.["mode"]).toBe("must be an octal mode like 0644");
 
@@ -455,9 +501,14 @@ test("changes mode and ownership, with bad modes and owners refused by field", a
   await jobSucceeds(page, "Change ownership", `${dir}/secret.key`);
   await expect(cellAt(row, ownerColumn)).toHaveText("www-data:deploy");
 
-  const neither = await call("POST", "/files/chown", { server_id: serverId, paths: [`${dir}/secret.key`] });
+  const neither = await call("POST", "/files/chown", {
+    server_id: serverId,
+    paths: [`${dir}/secret.key`],
+  });
   expect(neither.status).toBe(422);
-  expect(JSON.stringify(neither.body.error?.fields)).toContain("specify an owner, a group, or both");
+  expect(JSON.stringify(neither.body.error?.fields)).toContain(
+    "specify an owner, a group, or both",
+  );
 });
 
 /* -------------------------- archive / extract ------------------------ */
@@ -496,7 +547,11 @@ for (const format of ["tar.gz", "tar.zst", "zip"] as const) {
     await extract.getByRole("button", { name: "Extract" }).click();
     const drawer = page.getByRole("dialog", { name: "Job activity" });
     await expect(
-      drawer.getByRole("listitem").filter({ hasText: "Extract archive" }).filter({ hasText: `${dir}/site.${format}` }).first(),
+      drawer
+        .getByRole("listitem")
+        .filter({ hasText: "Extract archive" })
+        .filter({ hasText: `${dir}/site.${format}` })
+        .first(),
     ).toContainText(/already exists/, { timeout: 30_000 });
     await page.keyboard.press("Escape");
   });
@@ -527,7 +582,9 @@ test("deletes only after the name is typed, and warns about a directory's conten
   /* Cancelling leaves everything where it was. */
   await rowAction(page, rowFor(table, `${dir}/tree`), "Delete");
   const tree = page.getByRole("dialog", { name: "Delete tree?" });
-  await expect(tree.getByText("One of these is a directory and will be removed with everything inside.")).toBeVisible();
+  await expect(
+    tree.getByText("One of these is a directory and will be removed with everything inside."),
+  ).toBeVisible();
   await tree.getByRole("button", { name: "Cancel" }).click();
   await expect(tree).toBeHidden();
   expect((await listing(dir)).map((e) => e.name)).toContain("tree");
@@ -559,7 +616,11 @@ test("traversal and the agent's own key directory are refused at every verb", as
   expect(traversal.status).toBe(422);
   expect(traversal.body.error?.fields?.["path"]).toBe("path traversal is not allowed");
 
-  const relative = await call("POST", "/files/write", { server_id: serverId, path: "etc/passwd", content: "x" });
+  const relative = await call("POST", "/files/write", {
+    server_id: serverId,
+    path: "etc/passwd",
+    content: "x",
+  });
   expect(relative.status).toBe(422);
   expect(relative.body.error?.fields?.["path"]).toBe("must be an absolute path");
 
@@ -574,10 +635,16 @@ test("traversal and the agent's own key directory are refused at every verb", as
   expect(listed.status).toBe(403);
   expect(listed.body.error?.message).toContain("path is reserved by the agent");
 
-  const read = await call("GET", `/files/read?${qs({ server_id: serverId, path: `${keyDir}/agent.key` })}`);
+  const read = await call(
+    "GET",
+    `/files/read?${qs({ server_id: serverId, path: `${keyDir}/agent.key` })}`,
+  );
   expect(read.status).toBe(403);
 
-  const dl = await call("GET", `/files/download?${qs({ server_id: serverId, path: `${keyDir}/agent.key` })}`);
+  const dl = await call(
+    "GET",
+    `/files/download?${qs({ server_id: serverId, path: `${keyDir}/agent.key` })}`,
+  );
   expect(dl.status).toBe(403);
 
   /* A write is a job; the job fails on the guard, and nothing lands. */
@@ -617,4 +684,23 @@ test("a directory cannot be downloaded or read as a file", async () => {
   const read = await call("GET", `/files/read?${qs({ server_id: serverId, path: "/etc" })}`);
   expect(read.status).toBe(400);
   expect(read.body.error?.fields?.["path"]).toBe("expected a file");
+});
+
+test("a write too large for one agent request fails on its own and leaves the host connected", async () => {
+  /* The editor opens files up to 1 MiB, but one agent request is capped
+   * at 512 KiB. Sending more used to make the agent drop its whole
+   * connection, failing everything else in flight on the host. */
+  const path = `${root}/${unique("huge-")}.txt`;
+  const { job } = await data<{ job: { id: string } }>("POST", "/files/write", {
+    server_id: serverId,
+    path,
+    content: "x".repeat(700 * 1024),
+  });
+  const settled = await settle(job.id);
+  expect(settled.status).toBe("failed");
+  expect(settled.error?.code).toBe("invalid_params");
+  expect(settled.error?.message).toMatch(/the agent accepts at most \d+ bytes in one request/);
+
+  expect(await connectionOf(serverId)).toBe("connected");
+  expect((await listing(root)).map((e) => e.path)).not.toContain(path);
 });

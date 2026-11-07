@@ -561,7 +561,8 @@ export const JOB_SPECS: Record<JobType, JobTypeSpec> = {
   },
   "db.dump": {
     label: "Dump database",
-    permission: "databases.mysql:read",
+    /* Writes a file on the host at a caller-chosen path. */
+    permission: "databases.mysql:write",
     idempotent: true,
     maxAttempts: 1,
     timeoutMs: 60 * M,

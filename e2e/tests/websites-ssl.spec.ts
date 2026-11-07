@@ -317,9 +317,16 @@ test("turning auto-renew off is saved and the renewal filter finds it", async ({
   await page.goto("/websites/ssl");
   await page.getByRole("combobox", { name: "Renewal" }).selectOption("false");
   await expect(rowWith(table, domain.name)).toBeVisible();
-  for (const row of await table.locator("tbody tr").all()) {
-    await expect(row.getByRole("switch")).not.toBeChecked();
-  }
+  /* Every row of the settled, filtered page — not of the page before it. */
+  await expect
+    .poll(async () => {
+      const rows = await table.locator("tbody tr").all();
+      const states = await Promise.all(
+        rows.map((row) => row.getByRole("switch").isChecked({ timeout: 1_000 }).catch(() => null)),
+      );
+      return states.length > 0 && states.every((checked) => checked === false);
+    }, { message: '"Auto-renew off" listed a certificate that renews automatically' })
+    .toBe(true);
   await page.getByRole("combobox", { name: "Renewal" }).selectOption("true");
   await expect(rowWith(table, domain.name)).toHaveCount(0);
 });
