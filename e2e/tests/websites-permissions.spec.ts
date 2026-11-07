@@ -104,10 +104,7 @@ test("a viewer is not shown Websites and is refused at the URL", async ({ page, 
 
 /* ------------------------------- auditor ----------------------------- */
 
-test("an auditor reads every Websites page and is offered no change", async ({
-  page,
-  context,
-}) => {
+test("an auditor reads every Websites page and is offered no change", async ({ page, context }) => {
   await signInAs(context, people["auditor"]!);
   const table = await sitesPage(page);
   await expect(rowWith(table, "futureforge-www")).toBeVisible();
@@ -115,7 +112,13 @@ test("an auditor reads every Websites page and is offered no change", async ({
 
   const item = await rowActionsOf(page, table, "futureforge-www");
   await expect(item("Open")).toBeEnabled();
-  for (const label of ["Deploy", "Reload web server", "Issue certificate", "Edit site", "Delete site"]) {
+  for (const label of [
+    "Deploy",
+    "Reload web server",
+    "Issue certificate",
+    "Edit site",
+    "Delete site",
+  ]) {
     await expect(item(label)).toBeDisabled();
   }
   await page.keyboard.press("Escape");
@@ -133,7 +136,9 @@ test("an auditor reads every Websites page and is offered no change", async ({
     await expect(page.getByRole("button", { name: action }).first()).toBeDisabled();
   }
   await page.goto("/websites/deployments");
-  await expect(page.getByRole("table", { name: "Deployments" }).locator("tbody tr").first()).toBeVisible();
+  await expect(
+    page.getByRole("table", { name: "Deployments" }).locator("tbody tr").first(),
+  ).toBeVisible();
 
   /* Read-only is enforced, not just drawn. */
   const write = await api(
@@ -182,12 +187,7 @@ test("a developer ships sites but does not delete them or touch domains and TLS"
   const created = (await get<{ id: string; name: string }[]>(`/sites?q=${name}`))[0]!;
   const del = await api("DELETE", `/sites/${created.id}`, undefined, dev.cookie);
   expect(del.status).toBe(403);
-  const domain = await api(
-    "POST",
-    "/domains",
-    { name: `${unique("dev")}.e2e.test` },
-    dev.cookie,
-  );
+  const domain = await api("POST", "/domains", { name: `${unique("dev")}.e2e.test` }, dev.cookie);
   expect(domain.status).toBe(403);
 });
 
@@ -198,7 +198,13 @@ test("an operator holds every Websites action", async ({ page, context }) => {
   await signInAs(context, op);
   const table = await sitesPage(page);
   const item = await rowActionsOf(page, table, "futureforge-www");
-  for (const label of ["Deploy", "Reload web server", "Issue certificate", "Edit site", "Delete site"]) {
+  for (const label of [
+    "Deploy",
+    "Reload web server",
+    "Issue certificate",
+    "Edit site",
+    "Delete site",
+  ]) {
     await expect(item(label)).toBeEnabled();
   }
   await page.keyboard.press("Escape");
@@ -230,7 +236,12 @@ test("a role scoped to forge-01 sees and changes only forge-01's sites", async (
   await expect(rowWith(table, "futureforge-www")).toBeVisible();
   await expect(rowWith(table, "kaname-panel")).toHaveCount(0);
   const listed = await get<{ server_name: string }[]>("/sites?per_page=200");
-  const own = await api<{ server_name: string }[]>("GET", "/sites?per_page=200", undefined, scoped.cookie);
+  const own = await api<{ server_name: string }[]>(
+    "GET",
+    "/sites?per_page=200",
+    undefined,
+    scoped.cookie,
+  );
   expect(own.data.length).toBeLessThan(listed.length);
   expect(new Set(own.data.map((s) => s.server_name))).toEqual(new Set(["forge-01"]));
 

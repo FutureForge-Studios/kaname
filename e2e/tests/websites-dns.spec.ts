@@ -79,7 +79,9 @@ test("a manual zone's records are created, edited and deleted from the DNS page"
   expect(await records(domain.id)).toEqual([
     expect.objectContaining({ type: "A", content: "203.0.113.10", ttl: 300 }),
   ]);
-  await expect.poll(async () => (await get<DomainRow>(`/domains/${domain.id}`)).record_count).toBe(1);
+  await expect
+    .poll(async () => (await get<DomainRow>(`/domains/${domain.id}`)).record_count)
+    .toBe(1);
 
   /* The same record twice is refused rather than duplicated. */
   const again = await openAddRecord(page, domain);
@@ -167,7 +169,9 @@ test("each record type is checked for the shape it needs", async ({ page }) => {
   await field(dialog, "Type").selectOption("CAA");
   await dialog.getByLabel("Authorisation").fill("issue letsencrypt.org");
   await expect(
-    dialog.getByText('Must read flags, tag and a quoted value, for example 0 issue "letsencrypt.org".'),
+    dialog.getByText(
+      'Must read flags, tag and a quoted value, for example 0 issue "letsencrypt.org".',
+    ),
   ).toBeVisible();
 
   await field(dialog, "Type").selectOption("SRV");
@@ -190,9 +194,7 @@ test("each record type is checked for the shape it needs", async ({ page }) => {
 
 /* -------------------------- API-driven zone -------------------------- */
 
-test("a Cloudflare zone with no token refuses writes and syncs, and says why", async ({
-  page,
-}) => {
+test("a Cloudflare zone with no token refuses writes and syncs, and says why", async ({ page }) => {
   const domains = await get<(DomainRow & { dns_provider: string })[]>(
     "/domains?q=docs.forgebase.dev",
   );

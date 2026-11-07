@@ -98,10 +98,13 @@ test("the mail filter means what it says in both directions", async ({ page }) =
    * satisfy "non-empty". */
   await expect(page).toHaveURL(/has_mail=false/);
   await expect
-    .poll(async () => {
-      const shown = await names();
-      return shown.length > 1 && !shown.includes("futureforge.dev");
-    }, { message: '"No mail" kept returning the domain that carries mail' })
+    .poll(
+      async () => {
+        const shown = await names();
+        return shown.length > 1 && !shown.includes("futureforge.dev");
+      },
+      { message: '"No mail" kept returning the domain that carries mail' },
+    )
     .toBe(true);
   for (const cell of await table.locator(`tbody tr td:nth-child(${column + 1})`).allInnerTexts()) {
     expect(cell).not.toMatch(/\bMail\b/);
@@ -177,7 +180,9 @@ test("a failed control check hands over the TXT record to publish", async ({ pag
   /* The remedy is the exact zone line, and it is the same token every
    * time, so it can be published before anyone presses the button. */
   await expect(error).toContainText(
-    new RegExp(`_kaname\\.${domain.name.replace(/\./g, "\\.")}\\. 300 IN TXT "kaname-verification=[A-Za-z0-9_-]{32}"`),
+    new RegExp(
+      `_kaname\\.${domain.name.replace(/\./g, "\\.")}\\. 300 IN TXT "kaname-verification=[A-Za-z0-9_-]{32}"`,
+    ),
   );
   await expect(error.getByRole("button", { name: "Copy the record" })).toBeVisible();
 
@@ -266,9 +271,9 @@ test("a domain still serving a site cannot be deleted; a free one can", async ({
   await confirm.getByLabel(/to confirm/).fill(attached);
   await confirm.getByRole("button", { name: "Delete domain" }).click();
   /* Deleting it would leave the vhost advertising a name nobody tracks. */
-  await expect(page.getByRole("alert").filter({ hasText: "still answers on a site" })).toContainText(
-    `${attached} still answers on a site.`,
-  );
+  await expect(
+    page.getByRole("alert").filter({ hasText: "still answers on a site" }),
+  ).toContainText(`${attached} still answers on a site.`);
   await page.keyboard.press("Escape");
   expect((await domainNamed(attached)).site_id).not.toBeNull();
 

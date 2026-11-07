@@ -327,9 +327,7 @@ export default function DnsPage() {
           <Combobox
             options={domainOptions}
             value={domainId ?? ""}
-            onValueChange={(next) =>
-              setDomainId(next && next.length > 0 ? next : null)
-            }
+            onValueChange={(next) => setDomainId(next && next.length > 0 ? next : null)}
             placeholder={domainOptions.length === 0 ? "No domains in scope" : "All zones"}
             emptyMessage="No domain matches that name."
             loading={domains.isLoading}
