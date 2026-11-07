@@ -511,7 +511,7 @@ export const Combobox = React.forwardRef<HTMLDivElement, ComboboxProps>(
               aria-busy={loading || undefined}
               style={popoverStyle}
               className={cn(
-                "z-50 overflow-y-auto py-1 text-base text-[var(--kn-text)]",
+                "z-[70] overflow-y-auto py-1 text-base text-[var(--kn-text)]",
                 "border border-[var(--kn-border-strong)] bg-[var(--kn-surface)]",
                 "rounded-[var(--kn-r-md)] shadow-[var(--kn-shadow-md)]",
                 "animate-[var(--animate-rise)]",
