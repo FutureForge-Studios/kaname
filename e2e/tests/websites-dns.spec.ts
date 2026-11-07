@@ -113,10 +113,15 @@ test("a manual zone's records are created, edited and deleted from the DNS page"
   );
   await again.getByRole("button", { name: "Cancel" }).click();
   await expect(again).toBeHidden();
-  await page.getByRole("list", { name: "Notifications" }).getByRole("button", { name: "Dismiss" }).first().click({ timeout: 8000 }); // G4DEBUG
-  /* The refusal's toast is dismissed here: once the edit dialog is open
-   * it is modal and the toast stack behind it no longer takes a click. */
-  await dismissToasts(page);
+  /* The refusal's toast is closed by its own button, which waits for it
+   * to be clickable; dismissToasts' one-shot pass could miss it while the
+   * stack was still settling, and it then sat over the edit dialog. */
+  const refusal = page
+    .getByRole("list", { name: "Notifications" })
+    .getByRole("listitem")
+    .filter({ hasText: "already has that exact A record" });
+  await refusal.getByRole("button", { name: "Dismiss" }).click();
+  await expect(refusal).toHaveCount(0);
 
   /* Edit in place. */
   await row.getByRole("button", { name: "Row actions" }).click();
