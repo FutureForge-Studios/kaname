@@ -138,6 +138,63 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     return completeLogin(req, reply, user, remember);
   });
 
+  /* -------------------------- accept invite ------------------------- */
+
+  /*
+   * POST /users mints an invitation link, but nothing ever redeemed it:
+   * an invited account could never set a password, so no one but the
+   * bootstrap owner could ever sign in. This is the other half of that
+   * link — the token proves the invitation, the password is chosen here
+   * by the invitee and never seen by the inviter, and the account becomes
+   * active with whatever roles it was invited with.
+   */
+  app.post("/auth/invite/accept", LOGIN_RATE_LIMIT, async (req, reply) => {
+    const body = parseBody(req, acceptInviteInput);
+    const rows = await req.ctx.db
+      .select()
+      .from(users)
+      .where(eq(users.inviteTokenHash, hashToken(body.token)))
+      .limit(1);
+    const user = rows[0];
+    if (
+      !user ||
+      user.status !== "invited" ||
+      !user.inviteExpiresAt ||
+      user.inviteExpiresAt.getTime() < Date.now()
+    ) {
+      throw new ApiException("unauthorized", "This invitation is not valid any more.", {
+        remediation: {
+          summary:
+            "Invitations are single-use and expire. Ask an administrator to invite you again.",
+          actions: [{ label: "Sign in", href: "/login" }],
+        },
+      });
+    }
+
+    const now = new Date();
+    await req.ctx.db
+      .update(users)
+      .set({
+        passwordHash: await req.ctx.auth.hashPassword(body.password),
+        status: "active",
+        inviteTokenHash: null,
+        inviteExpiresAt: null,
+        updatedAt: now,
+      })
+      .where(eq(users.id, user.id));
+
+    await req.ctx.audit.record({
+      actor: actorFor(req, user),
+      action: "user.invite_accepted",
+      targetType: "user",
+      targetId: user.id,
+      targetLabel: user.email,
+    });
+    req.ctx.events.publish("audit", "user.invite_accepted", { user_id: user.id });
+
+    return completeLogin(req, reply, { ...user, status: "active" }, false);
+  });
+
   /* ----------------------------- logout ----------------------------- */
 
   app.post("/auth/logout", async (req, reply) => {
