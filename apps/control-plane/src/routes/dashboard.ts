@@ -109,7 +109,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
     /* -------------------------- disk pressure ------------------------ */
 
-    for (const server of fleetRows) {
+    /*
+     * A revoked host keeps its last synced rows, but nothing on it is the
+     * operator's to fix any more, so it raises no attention items.
+     */
+    const liveRows = fleetRows.filter((s) => s.connection !== "revoked");
+
+    for (const server of liveRows) {
       // Reuse the reconciler's own thresholds so this page and the
       // server's health badge can never disagree about what is full.
       for (const reason of server.healthReasons) {
@@ -144,6 +150,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         .where(
           combine(
             eq(services.activeState, "failed"),
+            ne(servers.connection, "revoked"),
             scopeFilter(req, "infra.services:read", services.serverId),
           ),
         )
@@ -188,6 +195,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
             scopeFilter(req, "websites.ssl:read", certificates.serverId),
             isNotNull(certificates.expiresAt),
             lte(certificates.expiresAt, horizon),
+            // Matches /certificates/expiring: a revoked certificate is done.
+            ne(certificates.status, "revoked"),
+            ne(servers.connection, "revoked"),
           ),
         )
         .orderBy(asc(certificates.expiresAt))
@@ -497,7 +507,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
      * new panel features.
      */
     const panelVersion = process.env.npm_package_version ?? "0.1.0";
-    for (const server of fleetRows) {
+    for (const server of liveRows) {
       if (!server.agentVersion || !isOlder(server.agentVersion, panelVersion)) continue;
       attention.push({
         kind: "update_available",

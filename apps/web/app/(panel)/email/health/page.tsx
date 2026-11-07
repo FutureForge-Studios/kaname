@@ -141,7 +141,8 @@ export default function MailHealthPage() {
           )}
         </div>
 
-        <JobActivityBar types={HEALTH_JOB_TYPES} />
+        {/* shrink-0 for the same reason as the setup panel: squeezed to a hairline otherwise. */}
+        <JobActivityBar types={HEALTH_JOB_TYPES} className="shrink-0" />
 
         {query.isError ? (
           <PageError error={query.error} onRetry={() => void query.refetch()} context="Mail health" />

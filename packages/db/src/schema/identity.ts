@@ -30,6 +30,11 @@ export const users = pgTable(
     /** Envelope-encrypted TOTP secret; never readable in a query result. */
     totpSecretEnc: text("totp_secret_enc"),
     totpEnabled: boolean("totp_enabled").notNull().default(false),
+    /**
+     * The 30-second step of the last accepted code. A code is refused unless
+     * its step is newer, so one code cannot be replayed inside its window.
+     */
+    totpLastStep: integer("totp_last_step"),
     recoveryCodesEnc: text("recovery_codes_enc"),
     status: text("status", { enum: ["active", "invited", "suspended"] })
       .notNull()
