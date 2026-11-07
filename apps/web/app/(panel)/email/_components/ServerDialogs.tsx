@@ -2,7 +2,14 @@
 
 import * as React from "react";
 import { ExternalLink, KeyRound, Link2, TriangleAlert } from "lucide-react";
-import type { Domain, Job, MailRelayProvider, MailSendingMode, Server } from "@kaname/contract";
+import type {
+  Domain,
+  Job,
+  MailRelayInput,
+  MailRelayProvider,
+  MailSendingMode,
+  Server,
+} from "@kaname/contract";
 import {
   Button,
   Combobox,
@@ -46,9 +53,9 @@ import { RELAY_PROVIDERS, RELAY_PROVIDER_LABELS } from "./status";
  * password. Both are shown here and nowhere else, ever (KD-024).
  * ------------------------------------------------------------------ */
 
-const LOCAL_PART = /^[A-Za-z0-9._%+-]+$/;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const HOSTNAME = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+export const LOCAL_PART = /^[A-Za-z0-9._%+-]+$/;
+export const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const HOSTNAME = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 
 /** Providers whose SMTP host follows from the region, so the field is hidden. */
 const REGION_PROVIDERS = new Set<MailRelayProvider>(["ses", "resend"]);
@@ -169,7 +176,7 @@ export interface DeployDialogProps {
   onQueued: (job: Job, serverId: string) => void;
 }
 
-interface RelayDraft {
+export interface RelayDraft {
   provider: MailRelayProvider;
   region: string;
   host: string;
@@ -178,7 +185,7 @@ interface RelayDraft {
   password: string;
 }
 
-const EMPTY_RELAY: RelayDraft = {
+export const EMPTY_RELAY: RelayDraft = {
   provider: "ses",
   region: "",
   host: "",
@@ -226,17 +233,7 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
   const emailOnOwnDomain =
     domain !== null && adminEmail.toLowerCase().endsWith(`@${domain.name.toLowerCase()}`);
   const mailboxValid = LOCAL_PART.test(firstMailbox);
-  const relayPort = Number.parseInt(relay.port, 10);
-  const relayValid =
-    sending === "direct" ||
-    (relay.password.length > 0 &&
-      Number.isFinite(relayPort) &&
-      relayPort >= 1 &&
-      relayPort <= 65535 &&
-      (!REGION_PROVIDERS.has(relay.provider) || relay.region.trim().length > 0) &&
-      (HOST_HIDDEN_PROVIDERS.has(relay.provider) ||
-        REGION_PROVIDERS.has(relay.provider) ||
-        relay.host.trim().length > 0));
+  const relayValid = sending === "direct" || relayDraftValid(relay);
 
   const canSubmit =
     serverId !== null &&
@@ -261,24 +258,7 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
         sending,
         force: false,
         skip_ptr: false,
-        ...(sending === "relay"
-          ? {
-              relay: {
-                provider: relay.provider,
-                port: relayPort,
-                ...(REGION_PROVIDERS.has(relay.provider) && relay.region.trim()
-                  ? { region: relay.region.trim() }
-                  : {}),
-                ...(!HOST_HIDDEN_PROVIDERS.has(relay.provider) && relay.host.trim()
-                  ? { host: relay.host.trim() }
-                  : {}),
-                ...(!FIXED_USERNAME_PROVIDERS.has(relay.provider) && relay.username.trim()
-                  ? { username: relay.username.trim() }
-                  : {}),
-                password: relay.password,
-              },
-            }
-          : {}),
+        ...(sending === "relay" ? { relay: relayInput(relay) } : {}),
       },
       {
         onSuccess: (jobs) => {
@@ -443,13 +423,46 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
   );
 }
 
-interface RelayFieldsProps {
+/** Whether a relay draft has everything its provider needs. */
+export function relayDraftValid(relay: RelayDraft): boolean {
+  const port = Number.parseInt(relay.port, 10);
+  return (
+    relay.password.length > 0 &&
+    Number.isFinite(port) &&
+    port >= 1 &&
+    port <= 65535 &&
+    (!REGION_PROVIDERS.has(relay.provider) || relay.region.trim().length > 0) &&
+    (HOST_HIDDEN_PROVIDERS.has(relay.provider) ||
+      REGION_PROVIDERS.has(relay.provider) ||
+      relay.host.trim().length > 0)
+  );
+}
+
+/** The `relay` part of deployMailServerInput, from a draft. */
+export function relayInput(relay: RelayDraft): MailRelayInput {
+  return {
+    provider: relay.provider,
+    port: Number.parseInt(relay.port, 10),
+    ...(REGION_PROVIDERS.has(relay.provider) && relay.region.trim()
+      ? { region: relay.region.trim() }
+      : {}),
+    ...(!HOST_HIDDEN_PROVIDERS.has(relay.provider) && relay.host.trim()
+      ? { host: relay.host.trim() }
+      : {}),
+    ...(!FIXED_USERNAME_PROVIDERS.has(relay.provider) && relay.username.trim()
+      ? { username: relay.username.trim() }
+      : {}),
+    password: relay.password,
+  };
+}
+
+export interface RelayFieldsProps {
   value: RelayDraft;
   onChange: (next: RelayDraft) => void;
   fields: Record<string, string>;
 }
 
-function RelayFields({ value, onChange, fields }: RelayFieldsProps) {
+export function RelayFields({ value, onChange, fields }: RelayFieldsProps) {
   const set = <K extends keyof RelayDraft>(key: K, next: RelayDraft[K]) =>
     onChange({ ...value, [key]: next });
 
