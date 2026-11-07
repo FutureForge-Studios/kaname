@@ -401,7 +401,16 @@ export class UpdateService {
     try {
       manifest = await this.fetchManifest(policy.manifest_url);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      // fetch() says only "fetch failed" and keeps the reason (refused,
+      // unresolvable, TLS) in `cause`; that reason is what the Updates
+      // page has to show, or a dead manifest URL looks like a flaky one.
+      const cause = err instanceof Error && err.cause instanceof Error ? err.cause : null;
+      const message =
+        err instanceof Error
+          ? cause && err.message === "fetch failed"
+            ? `${policy.manifest_url} could not be reached: ${cause.message}`
+            : err.message
+          : String(err);
       // A failed check is state, not a swallowed exception: an instance
       // that has silently stopped checking looks identical to one that is
       // up to date, which is the failure nobody notices. `last_checked_at`

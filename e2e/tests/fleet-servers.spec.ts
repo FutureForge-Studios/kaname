@@ -221,7 +221,10 @@ test("an agent that dies reads as disconnected everywhere, and recovers on its o
   const attention = sectionNamed(page, "Needs attention");
   const item = attention.getByRole("link").filter({ hasText: `${CRASH_HOST} is disconnected` });
   await expect(item).toBeVisible();
-  await expect(page.getByText(/^3\/\d+ agents connected$/)).toBeVisible();
+  const fleet = await ownerCall<ServerRow[]>("GET", "/servers?per_page=100");
+  const up = fleet.filter((s) => s.connection === "connected").length;
+  expect(up).toBe(fleet.length - 1);
+  await expect(page.getByText(`${up}/${fleet.length} agents connected`)).toBeVisible();
 
   /* And it links to the host, not to a list. */
   await item.click();
@@ -302,13 +305,20 @@ test("filters, tabs and the back button keep the operator where they were", asyn
   const table = page.getByRole("table", { name: "Servers" });
   await expect(tableRow(table, "forge-01")).toBeVisible();
 
-  /* Filter state lives in the URL, so a reload is not a reset. */
+  /* Filter state lives in the URL, so a reload is not a reset. The
+   * expected rows are what the API says, since the capability list is
+   * whatever the agents themselves advertised on connect. */
+  const docker = await ownerCall<ServerRow[]>("GET", "/servers?capability=docker&per_page=100");
+  expect(docker.map((s) => s.name)).toContain("forge-01");
   await page.getByLabel("Filter by capability").selectOption("docker");
+  await page.getByLabel("Search servers").fill("forge");
   await expect(page).toHaveURL(/capability=docker/);
-  await expect(table.locator("tbody tr")).toHaveCount(2); // forge-01 and mail-01
+  await expect(page).toHaveURL(/q=forge/);
+  await expect(table.locator("tbody tr")).toHaveCount(1);
   await page.reload();
   await expect(page.getByLabel("Filter by capability")).toHaveValue("docker");
-  await expect(table.locator("tbody tr")).toHaveCount(2);
+  await expect(page.getByLabel("Search servers")).toHaveValue("forge");
+  await expect(table.locator("tbody tr")).toHaveCount(1);
 
   /* Into a host, onto a tab — the tab is part of the address too. */
   await tableRow(table, "forge-01").getByText("forge-01", { exact: true }).click();
@@ -325,7 +335,8 @@ test("filters, tabs and the back button keep the operator where they were", asyn
   await page.goBack();
   await expect(page).toHaveURL(/\/infrastructure\/servers\?.*capability=docker/);
   await expect(page.getByLabel("Filter by capability")).toHaveValue("docker");
-  await expect(table.locator("tbody tr")).toHaveCount(2);
+  await expect(page.getByLabel("Search servers")).toHaveValue("forge");
+  await expect(table.locator("tbody tr")).toHaveCount(1);
 
   /* A search that matches nothing says so, and offers the way out. */
   await page.getByLabel("Search servers").fill("no-such-host-anywhere");
