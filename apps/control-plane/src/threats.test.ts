@@ -3,11 +3,11 @@ import pino from "pino";
 import { and, createDb, eq, type DbHandle } from "@kaname/db";
 import { migrateHandle } from "@kaname/db/migrate";
 import { seedDemo } from "@kaname/db/seed";
-import { ipBlocks, servers, threatEvents } from "@kaname/db/schema";
+import { ipBlocks, jobs, servers, threatEvents } from "@kaname/db/schema";
 import { AgentOfflineError, AgentRpcError, type AgentHub } from "./agent/hub.js";
 import { loadConfig, resetConfigForTests } from "./config.js";
 import { createContext, type AppContext } from "./context.js";
-import { banHandler, markPending, unbanHandler } from "./jobs/threats.js";
+import { banHandler, markPending, releaseAbandoned, unbanHandler } from "./jobs/threats.js";
 import type { JobContext, JobHandler } from "./jobs/worker.js";
 
 /* ------------------------------------------------------------------ *
@@ -220,5 +220,55 @@ describe("ban disposition", () => {
     const second = await markPending(ctx.db, serverId, "192.0.2.60/32");
     expect(first.map((r) => r.id)).toEqual([id]);
     expect(second).toEqual([]);
+  });
+});
+
+describe("a ban that ends without its handler", () => {
+  it("releases its rows when cancelled or expired, and leaves settled rows alone", async () => {
+    const cancelledRow = await threat("198.51.100.71");
+    const revert = await markPending(ctx.db, serverId, "198.51.100.71/32");
+    const cancelled = await ctx.queue.enqueue({
+      type: "fw.ban",
+      serverId,
+      params: { target: "198.51.100.71/32", duration_seconds: 3600, revert },
+    });
+    expect((await state(cancelledRow)).disposition).toBe("pending");
+    expect(await ctx.queue.cancel(cancelled.id)).toBe(true);
+    await releaseAbandoned(ctx.db, [{ id: cancelled.id, reason: "the request was cancelled" }]);
+    expect(await state(cancelledRow)).toEqual({
+      disposition: "observed",
+      error: "the request was cancelled",
+    });
+
+    const expiredRow = await threat("198.51.100.72");
+    const expiredRevert = await markPending(ctx.db, serverId, "198.51.100.72/32");
+    const expiring = await ctx.queue.enqueue({
+      type: "fw.ban",
+      serverId,
+      params: { target: "198.51.100.72/32", duration_seconds: 3600, revert: expiredRevert },
+    });
+    await handle.db
+      .update(jobs)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(jobs.id, expiring.id));
+    const expired = await ctx.queue.expireStale();
+    const ended = expired.filter((j) => j.id === expiring.id);
+    expect(ended).toHaveLength(1);
+    await releaseAbandoned(
+      ctx.db,
+      ended.map((j) => ({ id: j.id, reason: j.error?.message ?? "" })),
+    );
+    expect(await state(expiredRow)).toEqual({
+      disposition: "observed",
+      error: "the target agent never came back online",
+    });
+
+    // A row a later request already settled is not reopened.
+    await handle.db
+      .update(threatEvents)
+      .set({ disposition: "banned", dispositionError: null })
+      .where(eq(threatEvents.id, cancelledRow));
+    await releaseAbandoned(ctx.db, [{ id: cancelled.id, reason: "again" }]);
+    expect(await state(cancelledRow)).toEqual({ disposition: "banned", error: null });
   });
 });
