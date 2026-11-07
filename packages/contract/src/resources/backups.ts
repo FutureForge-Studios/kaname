@@ -7,6 +7,7 @@ import {
   identifier,
   isoDate,
   listQuery,
+  queryBoolean,
   port,
   remediation,
   uuid,
@@ -212,7 +213,7 @@ export const backupScheduleListQuery = listQuery.extend({
   server_id: uuid.optional(),
   destination_id: uuid.optional(),
   scope_kind: backupScopeKind.optional(),
-  enabled: z.coerce.boolean().optional(),
+  enabled: queryBoolean.optional(),
   last_run_status: backupRunStatus.optional(),
 });
 export type BackupScheduleListQuery = z.infer<typeof backupScheduleListQuery>;
@@ -277,7 +278,7 @@ export const restorePointListQuery = listQuery.extend({
   server_id: uuid.optional(),
   schedule_id: uuid.optional(),
   scope_kind: backupScopeKind.optional(),
-  verified: z.coerce.boolean().optional(),
+  verified: queryBoolean.optional(),
 });
 export type RestorePointListQuery = z.infer<typeof restorePointListQuery>;
 

@@ -6,10 +6,7 @@ import {
   containers,
   dbDatabases,
   dbUsers,
-  deployments,
   firewallState,
-  ftpAccounts,
-  ipBlocks,
   restorePoints,
   servers,
   services,
@@ -26,7 +23,10 @@ import type {
   MethodResult,
 } from "@kaname/contract";
 import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
+import { ftpJobHandlers } from "./ftp.js";
 import { mailJobHandlers } from "./mail.js";
+import { websiteJobHandlers } from "./websites.js";
+import { banHandler, unbanHandler } from "./threats.js";
 import type { JobContext, JobHandler, JobWorker } from "./worker.js";
 
 /* ------------------------------------------------------------------ *
@@ -459,49 +459,8 @@ export function registerJobHandlers(worker: JobWorker): void {
       return result;
     },
 
-    /* ftp */
-    "ftp.create": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ ftp_account_id: string; username: string; home_dir: string }>(ctx);
-      try {
-        await ctx.hub.call(
-          serverId,
-          "fs.mkdir",
-          { path: p.home_dir, parents: true },
-          { signal: ctx.signal },
-        );
-        await ctx.hub.call(
-          serverId,
-          "fs.chown",
-          { paths: [p.home_dir], owner: p.username, recursive: true },
-          { signal: ctx.signal },
-        );
-      } catch (err) {
-        // The row was written as "provisioning" before the job ran and
-        // nothing else ever moves it, so a refused home directory left the
-        // account provisioning for ever (the same trap siteWrite closes).
-        // An offline agent is a wait, not a failure (KD-008).
-        if (!(err instanceof AgentOfflineError)) {
-          await ctx.db
-            .update(ftpAccounts)
-            .set({ status: "error", updatedAt: new Date() })
-            .where(eq(ftpAccounts.id, p.ftp_account_id));
-        }
-        throw err;
-      }
-      await ctx.db
-        .update(ftpAccounts)
-        .set({ status: "active", lastSyncedAt: new Date(), updatedAt: new Date() })
-        .where(eq(ftpAccounts.id, p.ftp_account_id));
-      return { ok: true };
-    },
-    "ftp.update": async (ctx) => ({ ok: true, params: params<Record<string, unknown>>(ctx) }),
-    "ftp.delete": async (ctx) => {
-      const p = params<{ ftp_account_id: string }>(ctx);
-      await ctx.db.delete(ftpAccounts).where(eq(ftpAccounts.id, p.ftp_account_id));
-      return { ok: true };
-    },
-    "ftp.reset_password": async () => ({ ok: true }),
+    /* ftp: real POSIX users and daemon config on the host (jobs/ftp.ts) */
+    ...ftpJobHandlers(),
 
     /* sites */
     "site.create": async (ctx) => {
@@ -542,7 +501,9 @@ export function registerJobHandlers(worker: JobWorker): void {
       await ctx.db
         .update(sites)
         .set({
-          status: "active",
+          // Editing a suspended site keeps it suspended: the route sends
+          // `enabled: false` for one, and the row must say what the host does.
+          status: rest.enabled === false ? "suspended" : "active",
           configPath: result.config_path,
           lastError: null,
           updatedAt: new Date(),
@@ -694,80 +655,8 @@ export function registerJobHandlers(worker: JobWorker): void {
       return result;
     },
 
-    /* dns */
-    "dns.sync": async (ctx) => params(ctx),
-    "dns.apply": async (ctx) => params(ctx),
-
-    /* deployments */
-    "deployment.run": async (ctx) => {
-      const p = params<{ deployment_id: string }>(ctx);
-      await ctx.db
-        .update(deployments)
-        .set({ status: "building", startedAt: new Date(), updatedAt: new Date() })
-        .where(eq(deployments.id, p.deployment_id));
-      const started = Date.now();
-      await ctx.log_("info", "deployment started");
-      await ctx.progress(10);
-      // The actual build/copy steps run as fs.* and site.* RPCs driven by
-      // the deployment service; this handler owns lifecycle and status.
-      await ctx.db
-        .update(deployments)
-        .set({
-          status: "succeeded",
-          finishedAt: new Date(),
-          durationMs: Date.now() - started,
-          updatedAt: new Date(),
-        })
-        .where(eq(deployments.id, p.deployment_id));
-      ctx.events.publish(
-        "deployments",
-        "deployment.finished",
-        { deployment_id: p.deployment_id },
-        ctx.job.serverId,
-      );
-      return { deployment_id: p.deployment_id };
-    },
-    /*
-     * A rollback is itself a deployment row (the route inserts it as
-     * "queued"). This handler used to return its params and leave that
-     * row queued for ever — and a queued row counts as in flight, so
-     * every later deploy or rollback of the site was refused with
-     * "already in flight". It owns the row's lifecycle the same way
-     * deployment.run does.
-     */
-    "deployment.rollback": async (ctx) => {
-      const p = params<{
-        deployment_id: string;
-        rollback_to_deployment_id: string;
-        release_path: string;
-      }>(ctx);
-      const started = Date.now();
-      await ctx.db
-        .update(deployments)
-        .set({ status: "deploying", startedAt: new Date(), updatedAt: new Date() })
-        .where(eq(deployments.id, p.deployment_id));
-      await ctx.log_("info", `rolling back to release ${p.release_path}`);
-      await ctx.progress(50);
-      await ctx.db
-        .update(deployments)
-        .set({
-          status: "succeeded",
-          finishedAt: new Date(),
-          durationMs: Date.now() - started,
-          updatedAt: new Date(),
-        })
-        .where(eq(deployments.id, p.deployment_id));
-      ctx.events.publish(
-        "deployments",
-        "deployment.finished",
-        { deployment_id: p.deployment_id },
-        ctx.job.serverId,
-      );
-      return {
-        deployment_id: p.deployment_id,
-        rollback_to_deployment_id: p.rollback_to_deployment_id,
-      };
-    },
+    /* suspend/resume, cert.install, dns and deployments: see ./websites.ts */
+    ...websiteJobHandlers(),
 
     /* mail (Yunori Mail Server): see ./mail.ts */
     ...mailJobHandlers(),
@@ -835,13 +724,35 @@ export function registerJobHandlers(worker: JobWorker): void {
       return result;
     },
     "db.grant.apply": passthrough("db.grant.apply"),
-    "db.dump": streaming("db.dump"),
+    "db.dump": async (ctx) => {
+      const result = await streaming("db.dump")(ctx);
+      // A dump is a backup of that database. Nothing ever wrote
+      // last_backup_at, so a database dumped a minute ago still read
+      // "never backed up". Only set once the agent says the dump is done.
+      if (ctx.job.targetType === "database" && ctx.job.targetId) {
+        await ctx.db
+          .update(dbDatabases)
+          .set({ lastBackupAt: new Date(), updatedAt: new Date() })
+          .where(eq(dbDatabases.id, ctx.job.targetId));
+        ctx.events.publish(
+          "servers",
+          "database.updated",
+          { database_id: ctx.job.targetId },
+          ctx.job.serverId,
+        );
+      }
+      return result;
+    },
     "db.restore": streaming("db.restore"),
 
     /* firewall & security */
     "fw.apply": async (ctx) => {
       const serverId = requireServer(ctx);
       const p = params<MethodParams<"fw.apply">>(ctx);
+      // The host arms its revert timer somewhere inside this call, so the
+      // window is dated from before it: the panel then never shows more
+      // time than the host will actually wait.
+      const calledAt = Date.now();
       const result = await ctx.hub.call(serverId, "fw.apply", p, {
         timeoutMs: ctx.job.timeoutMs,
         signal: ctx.signal,
@@ -857,7 +768,7 @@ export function registerJobHandlers(worker: JobWorker): void {
           lastAppliedAt: new Date(),
           pendingRollbackToken: result.rollback_token,
           pendingRollbackUntil: result.rollback_token
-            ? new Date(Date.now() + p.rollback_seconds * 1000)
+            ? new Date(calledAt + p.rollback_seconds * 1000)
             : null,
         })
         .onConflictDoUpdate({
@@ -869,7 +780,7 @@ export function registerJobHandlers(worker: JobWorker): void {
             lastAppliedAt: new Date(),
             pendingRollbackToken: result.rollback_token,
             pendingRollbackUntil: result.rollback_token
-              ? new Date(Date.now() + p.rollback_seconds * 1000)
+              ? new Date(calledAt + p.rollback_seconds * 1000)
               : null,
             updatedAt: new Date(),
           },
@@ -883,37 +794,16 @@ export function registerJobHandlers(worker: JobWorker): void {
       }
       return result;
     },
-    "fw.ban": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ target: string; duration_seconds: number; reason?: string }>(ctx);
-      const result = await ctx.hub.call(serverId, "fw.ban", p, { signal: ctx.signal });
-      await ctx.db
-        .insert(ipBlocks)
-        .values({
-          serverId,
-          cidr: p.target,
-          reason: p.reason ?? "",
-          source: "manual",
-          expiresAt: p.duration_seconds ? new Date(Date.now() + p.duration_seconds * 1000) : null,
-          createdBy: ctx.job.createdBy,
-        })
-        .onConflictDoNothing();
-      ctx.events.publish("threats", "ip.banned", { server_id: serverId, cidr: p.target }, serverId);
-      return result;
-    },
-    "fw.unban": async (ctx) => {
-      const serverId = requireServer(ctx);
-      const p = params<{ target: string }>(ctx);
-      const result = await ctx.hub.call(serverId, "fw.unban", p, { signal: ctx.signal });
-      await ctx.db
-        .delete(ipBlocks)
-        .where(and(eq(ipBlocks.serverId, serverId), eq(ipBlocks.cidr, p.target)));
-      return result;
-    },
+    // The disposition of the threat rows a ban touches follows the job's
+    // outcome, so these two live with that bookkeeping in ./threats.ts.
+    "fw.ban": banHandler,
+    "fw.unban": unbanHandler,
     "ssh.keys.apply": passthrough("ssh.keys.apply"),
     "ssh.config.apply": async (ctx) => {
       const serverId = requireServer(ctx);
       const p = params<MethodParams<"ssh.config.apply">>(ctx);
+      // Dated from before the call, as for fw.apply.
+      const calledAt = Date.now();
       const result = await ctx.hub.call(serverId, "ssh.config.apply", p, {
         timeoutMs: ctx.job.timeoutMs,
         signal: ctx.signal,
@@ -932,13 +822,15 @@ export function registerJobHandlers(worker: JobWorker): void {
             ? { pubkeyAuthentication: p.pubkey_authentication }
             : {}),
           ...(p.max_auth_tries !== undefined ? { maxAuthTries: p.max_auth_tries } : {}),
-          ...(p.allow_users && p.allow_users.length > 0 ? { allowUsers: p.allow_users } : {}),
-          ...(p.allow_groups && p.allow_groups.length > 0 ? { allowGroups: p.allow_groups } : {}),
+          // An empty list is "clear the directive" on the host now, so the
+          // cache follows it; only an omitted list leaves the value alone.
+          ...(p.allow_users !== undefined ? { allowUsers: p.allow_users } : {}),
+          ...(p.allow_groups !== undefined ? { allowGroups: p.allow_groups } : {}),
           ...(p.x11_forwarding !== undefined ? { x11Forwarding: p.x11_forwarding } : {}),
           lastAppliedAt: new Date(),
           pendingRollbackToken: result.rollback_token,
           pendingRollbackUntil: result.rollback_token
-            ? new Date(Date.now() + (p.rollback_seconds ?? 60) * 1000)
+            ? new Date(calledAt + (p.rollback_seconds ?? 60) * 1000)
             : null,
           updatedAt: new Date(),
         })
@@ -1058,6 +950,21 @@ export function registerJobHandlers(worker: JobWorker): void {
         .where(eq(backupRuns.id, run_id));
 
       await settleSchedule("succeeded");
+
+      // A database dumped into this snapshot is as backed up as one dumped
+      // by hand; without this a nightly-backed-up database read "never".
+      for (const database of rest.databases ?? []) {
+        await ctx.db
+          .update(dbDatabases)
+          .set({ lastBackupAt: new Date(), updatedAt: new Date() })
+          .where(
+            and(
+              eq(dbDatabases.serverId, serverId),
+              eq(dbDatabases.engine, database.engine as "mysql" | "mariadb" | "postgres"),
+              eq(dbDatabases.name, database.name),
+            ),
+          );
+      }
 
       ctx.events.publish(
         "backups",

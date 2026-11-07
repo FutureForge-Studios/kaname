@@ -1,0 +1,1 @@
+ALTER TABLE "threat_events" ADD COLUMN "disposition_error" text;

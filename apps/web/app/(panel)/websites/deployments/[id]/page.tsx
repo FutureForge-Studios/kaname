@@ -205,6 +205,14 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
                   >
                     {shortSha(deployment.commit_sha)}
                   </PropertyRow>
+                  <PropertyRow
+                    label="Release"
+                    mono
+                    copyValue={deployment.release_path ?? undefined}
+                    hint="The directory on the host that `current` points at while this release is live."
+                  >
+                    {deployment.release_path ?? "not on the host"}
+                  </PropertyRow>
                   <PropertyRow label="Author">{deployment.commit_author}</PropertyRow>
                   <PropertyRow label="Triggered by">
                     {deployment.triggered_by_name ?? "Automation"}

@@ -1,6 +1,13 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { and, asc, desc, eq, inArray, isNull, sql, type Database } from "@kaname/db";
-import { alertRules, alerts, serverMetrics, serverMetrics5m, servers } from "@kaname/db/schema";
+import {
+  alertRules,
+  alerts,
+  notificationChannels,
+  serverMetrics,
+  serverMetrics5m,
+  servers,
+} from "@kaname/db/schema";
 import {
   alertSeverity,
   alertState,
@@ -11,9 +18,11 @@ import {
   uuid,
   type Alert,
   type AlertRule,
+  type AlertRuleChannel,
   type MetricName,
   type MetricSeries,
   type MonitoringOverview,
+  queryBoolean,
 } from "@kaname/contract";
 import { z } from "zod";
 import {
@@ -113,11 +122,11 @@ const alertListQuery = listQuery.extend({
   server_id: uuid.optional(),
   state: alertState.optional(),
   severity: alertSeverity.optional(),
-  acknowledged: z.coerce.boolean().optional(),
+  acknowledged: queryBoolean.optional(),
 });
 
 const alertRuleListQuery = listQuery.extend({
-  enabled: z.coerce.boolean().optional(),
+  enabled: queryBoolean.optional(),
   severity: alertSeverity.optional(),
 });
 
@@ -326,6 +335,34 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
 
   /* --------------------------- alert rules -------------------------- */
 
+  /**
+   * The channels a rule can send to, for the rule form. Names and kinds
+   * only: a channel's address or webhook URL stays behind
+   * admin.settings:read, so a monitoring role can route its alerts
+   * without being shown where a Slack webhook points.
+   */
+  app.get("/monitoring/alert-channels", async (req, reply) => {
+    helpers(req).authorize("monitoring.alerts:read");
+    const rows = await req.ctx.db
+      .select({
+        id: notificationChannels.id,
+        name: notificationChannels.name,
+        kind: notificationChannels.kind,
+        enabled: notificationChannels.enabled,
+        events: notificationChannels.events,
+      })
+      .from(notificationChannels)
+      .orderBy(asc(notificationChannels.name));
+    const data: AlertRuleChannel[] = rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      kind: row.kind,
+      enabled: row.enabled,
+      receives_alerts: row.events.includes("alert_firing"),
+    }));
+    return list(reply, data, paginate(data.length, 1, Math.max(1, data.length)));
+  });
+
   app.get("/monitoring/alert-rules", async (req, reply) => {
     const q = parseQuery(req, alertRuleListQuery);
     helpers(req).authorize("monitoring.alerts:read");
@@ -378,6 +415,7 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     const h = helpers(req);
     h.authorize("monitoring.alerts:write");
     assertRuleScope(req, body.scope);
+    await assertChannelsExist(req, body.channels);
 
     const [row] = await req.ctx.db
       .insert(alertRules)
@@ -416,6 +454,7 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     const before = await loadRule(req, id);
     assertRuleScope(req, before.scope);
     if (body.scope) assertRuleScope(req, body.scope);
+    await assertChannelsExist(req, body.channels);
 
     const [row] = await req.ctx.db
       .update(alertRules)
@@ -641,6 +680,37 @@ async function loadRule(req: FastifyRequest, id: string): Promise<typeof alertRu
  * A fleet-wide rule fires on servers outside a scoped grant, so writing
  * one needs the permission across the whole fleet — not merely somewhere.
  */
+/**
+ * A rule's channels are ids, and an id that names no channel was stored
+ * happily and then matched nothing — so the rule told nobody while the
+ * form claimed it notified someone. Refused by name instead.
+ */
+async function assertChannelsExist(
+  req: FastifyRequest,
+  channels: readonly string[] | undefined,
+): Promise<void> {
+  if (!channels || channels.length === 0) return;
+  const unique = [...new Set(channels)];
+  const found = await req.ctx.db
+    .select({ id: notificationChannels.id })
+    .from(notificationChannels)
+    .where(inArray(notificationChannels.id, unique));
+  const known = new Set(found.map((row) => row.id));
+  const missing = unique.filter((id) => !known.has(id));
+  if (missing.length === 0) return;
+  throw new ApiException(
+    "validation_failed",
+    `${missing.length === 1 ? "A selected notification channel no longer exists" : `${missing.length} selected notification channels no longer exist`}.`,
+    {
+      fields: { channels: `unknown channel: ${missing.join(", ")}` },
+      remediation: {
+        summary: "Pick channels from the list, or add one under Settings → Notifications first.",
+        actions: [{ label: "Notification settings", href: "/administration/settings#notifications" }],
+      },
+    },
+  );
+}
+
 function assertRuleScope(req: FastifyRequest, scope: AlertRuleScope): void {
   const principal = helpers(req).requirePrincipal();
 

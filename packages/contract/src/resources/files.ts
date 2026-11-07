@@ -7,6 +7,7 @@ import {
   ipAddress,
   isoDate,
   listQuery,
+  queryBoolean,
   percent,
   sortOrder,
   uuid,
@@ -40,7 +41,7 @@ export type FileListing = z.infer<typeof fileListing>;
 export const browseQuery = z.object({
   server_id: uuid,
   path: absolutePath.default("/"),
-  show_hidden: z.coerce.boolean().default(false),
+  show_hidden: queryBoolean.default(false),
   sort: z.enum(["name", "size", "modified"]).default("name"),
   order: sortOrder.default("asc"),
 });
@@ -169,7 +170,14 @@ export const ftpAccountStatus = z.enum(["active", "provisioning", "suspended", "
 export type FtpAccountStatus = z.infer<typeof ftpAccountStatus>;
 
 /** Long because a transfer credential is pasted into a client once and then lives for years. */
-const transferPassword = z.string().min(16).max(256);
+const transferPassword = z
+  .string()
+  .min(16)
+  .max(256)
+  // The host sets it through chpasswd's `user:password` stdin lines, where
+  // a line break would start a second record; refused here, by field,
+  // rather than as a failed job later.
+  .regex(/^[^\r\n\0]*$/, "may not contain a line break or NUL");
 
 export const ftpAccount = z.object({
   id: uuid,
@@ -214,7 +222,7 @@ export const ftpAccountListQuery = listQuery.extend({
   server_id: uuid.optional(),
   protocol: transferProtocol.optional(),
   status: ftpAccountStatus.optional(),
-  over_quota: z.coerce.boolean().optional(),
+  over_quota: queryBoolean.optional(),
 });
 export type FtpAccountListQuery = z.infer<typeof ftpAccountListQuery>;
 
@@ -285,6 +293,6 @@ export const storageQuery = z.object({
   path: absolutePath.default("/"),
   depth: z.coerce.number().int().min(1).max(4).default(2),
   /** Forces a fresh walk instead of serving the last sample. */
-  refresh: z.coerce.boolean().default(false),
+  refresh: queryBoolean.default(false),
 });
 export type StorageQuery = z.infer<typeof storageQuery>;

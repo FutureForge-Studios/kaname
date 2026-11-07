@@ -110,6 +110,14 @@ export const terminalSessions = pgTable(
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     userName: text("user_name").notNull(),
     posixUser: text("posix_user").notNull().default("root"),
+    /*
+     * Set when the session is `container.exec` into a container rather
+     * than a host shell. Plain text, not a foreign key: the runtime id is
+     * what the socket hands the agent at redemption, and both survive the
+     * container being removed so the history still says where it ran.
+     */
+    containerRef: text("container_ref"),
+    containerName: text("container_name"),
     ticketHash: text("ticket_hash").notNull(),
     ip: inet("ip"),
     startedAt: ts("started_at"),

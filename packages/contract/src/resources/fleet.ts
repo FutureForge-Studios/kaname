@@ -332,6 +332,22 @@ export const createAlertRuleInput = alertRule
   .omit({ id: true, created_at: true, updated_at: true })
   .partial({ enabled: true, channels: true });
 
+/**
+ * A notification channel as the alert rule form sees it. The full
+ * channel (its address or webhook URL) is Settings' business and needs
+ * admin.settings:read; choosing where a rule's alerts go only needs to
+ * name one. `receives_alerts` says whether the channel is subscribed to
+ * alert events at all, because a rule's list only narrows that set.
+ */
+export const alertRuleChannel = z.object({
+  id: uuid,
+  name: z.string(),
+  kind: z.enum(["email", "webhook", "slack"]),
+  enabled: z.boolean(),
+  receives_alerts: z.boolean(),
+});
+export type AlertRuleChannel = z.infer<typeof alertRuleChannel>;
+
 /* ------------------------------------------------------------------ *
  * Command Center
  * ------------------------------------------------------------------ */

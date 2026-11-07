@@ -1,5 +1,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import { missingId } from "../support/config.js";
+import {
+  EXPIRED_CERT,
+  EXPIRED_KEY,
+  OTHER_CERT,
+  OTHER_KEY,
+  TEST_CA,
+  WILDCARD_CERT,
+  WILDCARD_KEY,
+} from "../support/certs.js";
 import { sectionNamed } from "../support/ui.js";
 import {
   api,
@@ -25,9 +34,10 @@ import {
  * page and the Command Center can see it, instead of the row sitting
  * on "pending" with the reason buried in a job log.
  *
- * Not covered: installing a custom (externally issued) certificate.
- * The agent implements cert.install, but no route or dialog reaches it,
- * so there is no PEM to validate yet.
+ * A certificate issued elsewhere is installed from the same page: the
+ * pair is checked on the control plane (parses, key matches, not
+ * expired, covers the domain) with a message on the field at fault, and
+ * the private key reaches the host sealed and is never shown again.
  * ------------------------------------------------------------------ */
 
 const HOST = "forge-01";
@@ -412,4 +422,134 @@ test("a certificate that does not exist says so by id", async ({ page }) => {
   await expect(page.getByRole("alert").filter({ hasText: "not_found" })).toContainText(
     `Certificate ${missingId} not found.`,
   );
+});
+
+/* ------------------------- custom certificates ----------------------- */
+
+interface InstalledCertRow extends CertRow {
+  issuer: string;
+  installed_path: string | null;
+}
+
+test("an externally issued certificate is checked field by field, then installed", async ({
+  page,
+}) => {
+  const { domain } = await siteWithDomain();
+  const forge = await serverNamed(HOST);
+
+  await page.goto("/websites/ssl");
+  await expect(page.getByRole("heading", { level: 1, name: "SSL / TLS" })).toBeVisible();
+  await page.getByRole("button", { name: "Install certificate" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Install certificate" });
+  await choose(page, field(dialog, "Domain"), domain.name);
+  await expect(field(dialog, "Server")).toHaveValue(HOST);
+  const chain = field(dialog, "Certificate chain");
+  const key = field(dialog, "Private key");
+  const install = dialog.getByRole("button", { name: "Install certificate" });
+
+  /* Empty boxes are caught before anything is sent. */
+  await install.click();
+  await expect(dialog.getByText("Paste the certificate chain, leaf first.")).toBeVisible();
+  await expect(
+    dialog.getByText("Paste the private key that belongs to the certificate."),
+  ).toBeVisible();
+
+  /* Each way a real pair is wrong comes back on the field at fault. */
+  const refusals: [string, string, string][] = [
+    [
+      EXPIRED_CERT,
+      EXPIRED_KEY,
+      "This certificate expired on 2021-01-01. Renew it with your certificate authority and paste the new one.",
+    ],
+    [
+      WILDCARD_CERT,
+      OTHER_KEY,
+      "This private key does not belong to the certificate: their public keys differ. Paste the key that was generated with the certificate's request.",
+    ],
+    [
+      OTHER_CERT,
+      OTHER_KEY,
+      `This certificate does not cover ${domain.name}; it is for other.example. Issue one that names ${domain.name}, or install it on the domain it was issued for.`,
+    ],
+    [
+      `${TEST_CA}${WILDCARD_CERT}`,
+      WILDCARD_KEY,
+      `The chain is out of order: it starts with a CA certificate. Put the certificate for ${domain.name} first, then each intermediate in turn.`,
+    ],
+  ];
+  for (const [cert, pem, message] of refusals) {
+    await chain.fill(cert);
+    await key.fill(pem);
+    await install.click();
+    await expect(dialog.getByText(message).first()).toBeVisible();
+  }
+  /* Nothing was recorded for any of them. */
+  expect(
+    (await get<CertRow[]>(`/certificates?q=${domain.name}`)).filter(
+      (c) => c.subject === domain.name,
+    ),
+  ).toEqual([]);
+
+  /* The wildcard, leaf first with its CA, is accepted and installed as a job. */
+  await chain.fill(`${WILDCARD_CERT}${TEST_CA}`);
+  await key.fill(WILDCARD_KEY);
+  await install.click();
+  await expect(dialog).toBeHidden();
+  const job = sectionNamed(page, "Certificate job");
+  await expectJobStatus(job, "Succeeded");
+
+  const cert = (await certificateFor(domain.name)) as InstalledCertRow;
+  expect(cert.status).toBe("active");
+  expect(cert.issuer).toBe("Kaname E2E Test CA");
+  expect(cert.expires_at?.slice(0, 10)).toBe("2126-01-01");
+  expect(cert.sans).toEqual(["*.e2e.test", "e2e.test"]);
+  /* Certbot has no lineage for it, so it does not pretend to renew it. */
+  expect(cert.auto_renew).toBe(false);
+  expect(cert.installed_path).toBe(`/etc/ssl/kaname/${domain.name}/fullchain.pem`);
+
+  /* The key is on the host, readable by root alone… */
+  const keyPath = `/etc/ssl/kaname/${domain.name}/privkey.pem`;
+  const stat = await api<{ mode: string }>(
+    "GET",
+    `/files/stat?server_id=${forge.id}&path=${encodeURIComponent(keyPath)}`,
+  );
+  expect(stat.status).toBe(200);
+  expect(stat.data.mode).toBe("0600");
+  /* …and nowhere the panel can hand it back: not the certificate, not
+   * the job that carried it. */
+  const detail = await api("GET", `/certificates/${cert.id}`);
+  expect(JSON.stringify(detail.data)).not.toContain("PRIVATE KEY");
+  const jobs = await get<JobRow[]>(`/jobs?type=cert.install&per_page=20`);
+  for (const row of jobs) {
+    expect(JSON.stringify(await get(`/jobs/${row.id}`))).not.toContain("PRIVATE KEY");
+  }
+
+  /* Renewing it would only fail on the host, so it is refused up front. */
+  const renew = await api("POST", `/certificates/${cert.id}/renew`, { force: true });
+  expect(renew.status).toBe(412);
+  expect(renew.error?.message).toBe(
+    `${domain.name} was installed from a certificate issued elsewhere, so Kaname cannot renew it.`,
+  );
+});
+
+test("the API applies the same certificate checks without the dialog", async () => {
+  const { domain } = await siteWithDomain();
+  const forge = await serverNamed(HOST);
+  const res = await api("POST", "/certificates/install", {
+    server_id: forge.id,
+    domain_id: domain.id,
+    certificate_pem: WILDCARD_CERT,
+    key_pem: "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----\n",
+  });
+  expect(res.status).toBe(422);
+  expect(res.error?.fields?.["key_pem"]).toMatch(/^Not a PEM private key\./);
+});
+
+/* The Command Center's attention items link with ?certificate_id=; the
+ * list must forward that to the certificate itself. */
+test("a ?certificate_id= link opens that certificate", async ({ page }) => {
+  const shop = await certificateFor("shop.futureforge.dev");
+  await page.goto(`/websites/ssl?certificate_id=${shop.id}`);
+  await expect(page).toHaveURL(new RegExp(`/websites/ssl/${shop.id}$`));
+  await expect(page.getByRole("heading", { level: 1, name: "shop.futureforge.dev" })).toBeVisible();
 });

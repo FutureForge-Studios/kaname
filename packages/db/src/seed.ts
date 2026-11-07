@@ -961,12 +961,21 @@ export async function seedDemo(db: Database): Promise<void> {
       .values({
         name: `${name} nightly`,
         serverId: id,
+        // Selectors the planner accepts: "*" is not a path or a database
+        // name, so these schedules could never run — not by hand, and not
+        // once the scheduler started firing them at 03:00. An empty
+        // selector list is "everything this kind covers".
         scope:
           name === "db-01"
-            ? [{ kind: "databases", selectors: ["*"] }]
+            ? [
+                {
+                  kind: "databases",
+                  selectors: [...pgDbs.map((db) => `postgres:${db}`), "mariadb:legacy_shop"],
+                },
+              ]
             : [
                 { kind: "files", selectors: ["/etc", "/var/www", "/home"] },
-                { kind: "config", selectors: ["*"] },
+                { kind: "config", selectors: [] },
               ],
         cron: "0 3 * * *",
         timezone: "UTC",
@@ -985,6 +994,16 @@ export async function seedDemo(db: Database): Promise<void> {
         nextRunAt: new Date(now + 15 * 3600_000),
       })
       .returning({ id: s.backupSchedules.id });
+
+    // Encrypted, so it names its repository password the way a schedule
+    // created through the API does. Without a ref the agent refuses every
+    // verify and restore of these points ("password_ref is required"),
+    // matching snapshot ids or not. The password itself lives on the host
+    // (the agent's backup secrets directory), never here.
+    await db
+      .update(s.backupSchedules)
+      .set({ passwordRef: `backup_schedule:${schedule!.id}` })
+      .where(sql`${s.backupSchedules.id} = ${schedule!.id}`);
 
     for (let i = 0; i < 7; i += 1) {
       const started = now - (i * 24 + 9) * 3600_000;
@@ -1011,10 +1030,10 @@ export async function seedDemo(db: Database): Promise<void> {
           scheduleId: schedule!.id,
           serverId: id,
           label: `${name}-${new Date(started).toISOString().slice(0, 10)}`,
-          snapshotId: Array.from(
-            { length: 16 },
-            () => "0123456789abcdef"[Math.floor(random() * 16)],
-          ).join(""),
+          // The simulated agent seeds the same repository with the same
+          // history (newest first, one a day), so day i here is its
+          // snapshot i. A random id verified and restored as "not found".
+          snapshotId: simSnapshotId(name, `b2:futureforge-backups:kaname/${name}`, i),
           takenAt: new Date(started + 480_000),
           bytes: Math.round(8 * 1024 ** 3 + random() * 4 * 1024 ** 3),
           fileCount: 40_000 + Math.round(random() * 20_000),
@@ -1053,6 +1072,46 @@ export async function seedDemo(db: Database): Promise<void> {
   });
 
   console.log(`seeded ${SERVERS.length} simulated servers with 48h of history`);
+}
+
+/* ------------------------------------------------------------------ *
+ * The simulated agent's restic history, reproduced.
+ *
+ * agent/src/providers/sim/backups.rs `snapshots_for` materialises a
+ * repository the first time it is asked about, with ids derived from
+ * the host's identity (its state directory's name, which is the server
+ * name in both the dev fleet and the e2e stack) and the repository
+ * string. These are the same FNV-1a and splitmix64 it uses, so a seeded
+ * restore point names a snapshot the simulated repository really holds.
+ * Change one side and the other must follow.
+ * ------------------------------------------------------------------ */
+
+const U64 = (1n << 64n) - 1n;
+/** `SIM_SEED` in agent/src/providers/sim/state.rs: "kaname". */
+const SIM_SEED = 0x6b616e616d65n;
+
+function fnv1a64(value: string): bigint {
+  let h = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(value)) {
+    h ^= BigInt(byte);
+    h = (h * 0x100000001b3n) & U64;
+  }
+  return h;
+}
+
+function splitmix64(input: bigint): bigint {
+  let x = (input + 0x9e3779b97f4a7c15n) & U64;
+  x = ((x ^ (x >> 30n)) * 0xbf58476d1ce4e5b9n) & U64;
+  x = ((x ^ (x >> 27n)) * 0x94d049bb133111ebn) & U64;
+  return x ^ (x >> 31n);
+}
+
+/** Snapshot `index` (0 = newest) of `repository` on the simulated host `identity`. */
+export function simSnapshotId(identity: string, repository: string, index: number): string {
+  const seed = fnv1a64(identity) ^ SIM_SEED ^ fnv1a64(repository);
+  const i = BigInt(index);
+  const hex = (v: bigint) => v.toString(16).padStart(16, "0");
+  return hex(splitmix64(seed ^ i ^ 0xe1n)) + hex(splitmix64(seed ^ i ^ 0xe2n));
 }
 
 function clamp(v: number, lo: number, hi: number): number {

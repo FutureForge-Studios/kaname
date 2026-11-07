@@ -77,10 +77,10 @@ pub(super) fn register(r: &mut Registry, h: &Arc<Handlers>) {
                     &["yes", "no", "prohibit-password", "forced-commands-only"],
                 )?;
             }
-            for user in &p.allow_users {
+            for user in p.allow_users.iter().flatten() {
                 check_identifier("allow_users", user)?;
             }
-            for group in &p.allow_groups {
+            for group in p.allow_groups.iter().flatten() {
                 check_identifier("allow_groups", group)?;
             }
             if !(0..=300).contains(&p.rollback_seconds) {

@@ -43,6 +43,10 @@ export const serverCapability = z.enum([
   "fail2ban",
   "certbot",
   "restic",
+  /** sshd is present, so SFTP transfer accounts can be chrooted under it. */
+  "sftp",
+  /** vsftpd is present, so FTPS transfer accounts can be served. */
+  "vsftpd",
   "simulated",
 ]);
 export type ServerCapability = z.infer<typeof serverCapability>;
@@ -238,7 +242,13 @@ export const threatKind = z.enum([
 ]);
 export type ThreatKind = z.infer<typeof threatKind>;
 
-export const threatDisposition = z.enum(["observed", "banned", "ignored"]);
+/**
+ * "pending" is a ban or unban that has been asked for but not yet
+ * carried out by the host. Without it the row read "banned" while the
+ * job was still queued, and kept reading it after the job failed.
+ */
+export const threatDisposition = z.enum(["observed", "pending", "banned", "ignored"]);
+export type ThreatDisposition = z.infer<typeof threatDisposition>;
 
 export const auditActorType = z.enum(["user", "api_key", "agent", "system"]);
 export type AuditActorType = z.infer<typeof auditActorType>;

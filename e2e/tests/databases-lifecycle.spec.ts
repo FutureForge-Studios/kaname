@@ -252,7 +252,8 @@ for (const meta of ENGINES) {
         name: `a${"b".repeat(63)}`,
       });
       expect(long.status).toBe(422);
-      expect(long.body.error?.fields?.["name"]).toMatch(/at most 63/);
+      // Either wording: the contract's field messages were reworded to "Must be N characters or fewer."
+      expect(long.body.error?.fields?.["name"]).toMatch(/at most 63|63 characters or fewer/);
 
       const other = meta.engine === "postgres" ? "mariadb" : "postgres";
       const wrong = await call("POST", "/databases", {
@@ -405,6 +406,10 @@ for (const meta of ENGINES) {
       ).toBeVisible();
       expect(size.size_bytes).toBeGreaterThan(0);
 
+      /* A fresh database has never been backed up, and says so. */
+      expect((await data<{ last_backup_at: string | null }>("GET", `/databases/${database.id}`)).last_backup_at).toBeNull();
+      await expect(page.getByText("never backed up").first()).toBeVisible();
+
       /* Dump. */
       await page.getByRole("button", { name: "Dump", exact: true }).click();
       const dump = page.getByRole("dialog", { name: `Dump ${name}` });
@@ -429,6 +434,15 @@ for (const meta of ENGINES) {
 
       const history = page.getByRole("table", { name: "Backup history" });
       await expect(history.locator("tbody tr").filter({ hasText: "Dump" }).first()).toBeVisible();
+
+      /* A successful dump is a backup: the database stops reading "never backed up". */
+      const backedUp = await data<{ last_backup_at: string | null }>("GET", `/databases/${database.id}`);
+      expect(backedUp.last_backup_at).not.toBeNull();
+      expect(Date.now() - Date.parse(backedUp.last_backup_at!)).toBeLessThan(10 * 60_000);
+      await page.reload();
+      await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+      await expect(page.getByText("never backed up")).toHaveCount(0);
+      await expect(page.getByText("This database has never been backed up by Kaname.")).toHaveCount(0);
 
       /* Restore needs the path and the name typed. */
       await page.getByRole("button", { name: "Restore", exact: true }).click();

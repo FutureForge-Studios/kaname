@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { webUrl } from "../support/config.js";
+import { authStatePath, webUrl } from "../support/config.js";
 import {
   accountWith,
   asOwner,
@@ -7,7 +7,9 @@ import {
   contextCookie,
   data,
   freshIp,
+  invite,
   login,
+  roleBySlug,
   signInThroughForm,
   signedInContext,
   STRONG_PASSWORD,
@@ -79,6 +81,50 @@ test.describe("sign in", () => {
     expect(unknown.body.error.message).toBe(wrong.body.error.message);
   });
 
+  test("an unaccepted invitation is not given away at the sign-in form", async ({ browser }) => {
+    const NOT_ACCEPTED = "This invitation hasn't been accepted yet.";
+    /*
+     * The invitee has no password yet, so anything they type is wrong.
+     * Saying "this invitation hasn't been accepted yet" here would tell
+     * anyone which addresses have been invited, so it is the generic
+     * answer, word for word the one an unknown address gets.
+     */
+    const { user } = await invite("pending", [(await roleBySlug("viewer")).id]);
+    const pending = await call<ErrorBody>("POST", "/auth/login", {
+      ip: freshIp(),
+      body: { email: user.email, password: STRONG_PASSWORD },
+    });
+    const unknown = await call<ErrorBody>("POST", "/auth/login", {
+      ip: freshIp(),
+      body: { email: uniqueEmail("ghost"), password: STRONG_PASSWORD },
+    });
+    expect(pending.status).toBe(401);
+    // Everything but the per-request id is identical.
+    const { request_id: _a, ...pendingError } = pending.body.error as ErrorBody["error"] & { request_id?: string };
+    const { request_id: _b, ...unknownError } = unknown.body.error as ErrorBody["error"] & { request_id?: string };
+    expect(pendingError).toEqual(unknownError);
+
+    const page = await freshPage(browser);
+    await signInThroughForm(page, user.email, STRONG_PASSWORD);
+    await expect(page.getByText(BAD_CREDENTIALS)).toBeVisible();
+    await expect(page.getByText(NOT_ACCEPTED, { exact: true })).toHaveCount(0);
+    await page.context().close();
+
+    /*
+     * Only a caller who presents the account's real password — which an
+     * account moved back to "invited" still has — learns the specific
+     * reason, because they plainly already know the account exists.
+     */
+    const account = await accountWith("reinvited", ["viewer"]);
+    data(await asOwner("PATCH", `/users/${account.id}`, { status: "invited" }), "move back");
+    // A fresh page, so the generic error from the first attempt cannot linger.
+    const second = await freshPage(browser);
+    await signInThroughForm(second, account.email, account.password);
+    await expect(second.getByText(NOT_ACCEPTED, { exact: true })).toBeVisible();
+    await expect(second.getByText(BAD_CREDENTIALS, { exact: true })).toHaveCount(0);
+    await second.context().close();
+  });
+
   test("an empty form and a malformed address are named under their fields", async ({
     browser,
   }) => {
@@ -86,15 +132,15 @@ test.describe("sign in", () => {
     await page.goto("/login");
     await page.getByRole("button", { name: "Sign in" }).click();
 
-    await expect(page.getByText("Invalid email")).toBeVisible();
-    await expect(page.getByText("String must contain at least 1 character(s)")).toBeVisible();
+    await expect(page.getByText("Enter a valid email address.")).toBeVisible();
+    await expect(page.getByText("This field is required.")).toBeVisible();
     await expect(page).toHaveURL(/\/login$/);
 
     await page.getByLabel("Email").fill("not-an-address");
     await page.getByLabel("Password").fill("something");
     await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByText("Invalid email")).toBeVisible();
-    await expect(page.getByText("String must contain at least 1 character(s)")).toHaveCount(0);
+    await expect(page.getByText("Enter a valid email address.")).toBeVisible();
+    await expect(page.getByText("This field is required.")).toHaveCount(0);
   });
 
   test("a deep link survives the sign-in it was interrupted by", async ({ browser }) => {
@@ -244,8 +290,41 @@ test.describe("account lockout", () => {
       page.getByText("This account is locked after too many failed sign-ins."),
     ).toBeVisible();
 
-    /* An owner lifts it by reactivating the account; it signs in again. */
-    data(await asOwner("POST", `/users/${account.id}/activate`), "reactivate");
+    /* The way out it names is one that exists: Unlock, not "reactivate". */
+    await expect(
+      page.getByText(/An owner can lift it sooner with Unlock in Administration > Users\./),
+    ).toBeVisible();
+
+    /*
+     * A locked account is still active, so the users page used to offer
+     * only Suspend for it. The owner sees it marked locked and unlocks it
+     * from the row menu; the unlock is audited on its own.
+     */
+    const ownerContext = await browser.newContext({ baseURL: webUrl, storageState: authStatePath });
+    const admin = await ownerContext.newPage();
+    await admin.goto(`/administration/users?q=${encodeURIComponent(account.email)}`);
+    const row = admin.getByRole("table", { name: "Users" }).locator("tbody tr").filter({
+      hasText: account.email,
+    });
+    await expect(row).toContainText("active");
+    await expect(row).toContainText("locked");
+    await row.getByRole("button", { name: "Row actions" }).click();
+    await expect(admin.getByRole("menuitem", { name: "Suspend" })).toBeVisible();
+    await admin.getByRole("menuitem", { name: "Unlock" }).click();
+    await expect(admin.getByText(`${account.email} unlocked.`)).toBeVisible();
+    await expect(row).not.toContainText("locked");
+    await row.getByRole("button", { name: "Row actions" }).click();
+    await expect(admin.getByRole("menuitem", { name: "Unlock" })).toHaveCount(0);
+    await admin.keyboard.press("Escape");
+    await ownerContext.close();
+
+    const audit = data<{ action: string }[]>(
+      await asOwner("GET", `/audit?action=user.unlocked&target_id=${account.id}`),
+      "audit",
+    );
+    expect(audit.map((entry) => entry.action)).toEqual(["user.unlocked"]);
+
+    /* And the person locked out signs straight in. */
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).not.toHaveURL(/\/login/);
   });
@@ -307,6 +386,27 @@ test.describe.serial("two-factor authentication", () => {
   let secret = "";
   let recovery: string[] = [];
 
+  /*
+   * Each 30-second step is accepted once (replay protection), and these
+   * tests sign in three times, often inside one step — so the same
+   * current code was refused the second time, depending on timing. This
+   * hands out a code for a step not used yet: the current one, or the
+   * next (the server allows one step of skew), and when both are spent
+   * it waits for the authenticator to move on, a real condition.
+   */
+  let lastStep = -Infinity;
+  async function unusedTotp(): Promise<string> {
+    await expect
+      .poll(() => Math.floor(Date.now() / 30_000) + 1 > lastStep, {
+        timeout: 60_000,
+        message: "the authenticator to issue an unused code",
+      })
+      .toBe(true);
+    const step = Math.max(Math.floor(Date.now() / 30_000), lastStep + 1);
+    lastStep = step;
+    return totp(secret, step * 30_000);
+  }
+
   test.beforeAll(async () => {
     account = await accountWith("totp", ["owner"]);
   });
@@ -344,7 +444,7 @@ test.describe.serial("two-factor authentication", () => {
     await expect(card.getByText("That authentication code is not valid.")).toBeVisible();
     await expect(card.getByText("not enrolled")).toBeVisible();
 
-    await field.fill(totp(secret));
+    await field.fill(await unusedTotp());
     await turnOn.click();
     await expect(page.getByText("Two-factor authentication is on.")).toBeVisible();
     await expect(card.getByText("enabled", { exact: true })).toBeVisible();
@@ -370,7 +470,7 @@ test.describe.serial("two-factor authentication", () => {
     await expect(page.getByText("That authentication code is not valid.")).toBeVisible();
     await expect(page.getByLabel("Code")).toHaveValue("");
 
-    await page.getByLabel("Code").fill(totp(secret));
+    await page.getByLabel("Code").fill(await unusedTotp());
     await page.getByRole("button", { name: "Verify" }).click();
     await expect(page).toHaveURL(`${webUrl}/`);
   });
@@ -417,7 +517,7 @@ test.describe.serial("two-factor authentication", () => {
   test("turning it off needs the password, then sign-in is one step again", async ({ browser }) => {
     const page = await freshPage(browser);
     await signInThroughForm(page, account.email, account.password);
-    await page.getByLabel("Code").fill(totp(secret));
+    await page.getByLabel("Code").fill(await unusedTotp());
     await page.getByRole("button", { name: "Verify" }).click();
     await expect(page).toHaveURL(`${webUrl}/`);
 
@@ -571,7 +671,7 @@ test("changing the password validates each field and ends every other session", 
   await next.fill("short");
   await repeat.fill("short");
   await submit.click();
-  await expect(page.getByText("String must contain at least 12 character(s)")).toBeVisible();
+  await expect(page.getByText("Must be at least 12 characters.")).toBeVisible();
 
   /* The same password again is not a change. */
   await next.fill(account.password);

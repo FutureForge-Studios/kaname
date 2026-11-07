@@ -8,6 +8,9 @@
  * registry in ./agent.
  * ------------------------------------------------------------------ */
 
+// First, so the plain-English error map is installed before any schema
+// in this package (or an importer's) is ever parsed.
+export * from "./messages.js";
 export * from "./primitives.js";
 export * from "./enums.js";
 export * from "./rbac.js";

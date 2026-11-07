@@ -1,5 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
-import { api, dismissToasts, field, get, rowWith, unique } from "../support/websites.js";
+import { startFakeCloudflare } from "../support/cloudflare.js";
+import { sectionNamed } from "../support/ui.js";
+import {
+  api,
+  dismissToasts,
+  expectJobStatus,
+  field,
+  get,
+  rowWith,
+  serverNamed,
+  unique,
+} from "../support/websites.js";
 
 /* ------------------------------------------------------------------ *
  * Websites — DNS.
@@ -10,7 +21,8 @@ import { api, dismissToasts, field, get, rowWith, unique } from "../support/webs
  * shows the exact zone line to publish. For an API-driven zone it
  * writes through the provider — and when it cannot (no token), the
  * operator must be told that, not shown a record that never left the
- * panel.
+ * panel. Zone sync and apply are jobs, exercised against a stand-in for
+ * Cloudflare on loopback.
  * ------------------------------------------------------------------ */
 
 interface DomainRow {
@@ -248,4 +260,124 @@ test("an unknown zone in the URL is not a crash", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: "DNS" })).toBeVisible();
   /* No zone matched, so nothing can be added to it. */
   await expect(page.getByRole("button", { name: "Add record" }).first()).toBeDisabled();
+});
+
+/* ------------------------ Cloudflare, end to end ---------------------- */
+
+/*
+ * Against a stand-in for Cloudflare on loopback (support/cloudflare.ts),
+ * reached through the provider client the control plane uses for real.
+ * Sync and apply are jobs: the token is saved through the domain dialog,
+ * a sync pulls the zone, a change made at the provider shows up as
+ * drift, and "Apply staged" writes Kaname's value back — including a
+ * record deleted at the provider, which is created again.
+ */
+test("a Cloudflare zone syncs as a job and apply pushes its staged drift back", async ({
+  page,
+}) => {
+  const forge = await serverNamed("forge-01");
+  const name = `${unique("cf")}.e2e.test`;
+  const token = `cf-e2e-${unique("token")}-0123456789`;
+  const cf = await startFakeCloudflare(name, token);
+  try {
+    cf.records.push(
+      { id: "seed-apex", type: "A", name, content: "203.0.113.10", ttl: 300, proxied: false },
+      { id: "seed-txt", type: "TXT", name, content: "v=spf1 -all", ttl: 300, proxied: false },
+    );
+    const created = await api<DomainRow>("POST", "/domains", {
+      name,
+      server_id: forge.id,
+      dns_provider: "cloudflare",
+    });
+    expect(created.status, created.error?.message).toBe(201);
+    const domain = created.data;
+
+    /* The token goes in through the domain dialog, write-only. */
+    await page.goto(`/websites/domains/${domain.id}`);
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "Edit domain" }).click();
+    const edit = page.getByRole("dialog", { name: `Edit ${name}` });
+    await field(edit, "API token").fill(token);
+    await edit.getByRole("button", { name: "Save changes" }).click();
+    await expect(edit).toBeHidden();
+    await expect(page.getByText(`API token saved for ${name}.`)).toBeVisible();
+
+    /* Sync is a job, watched in place; its summary is the job's result. */
+    await openZone(page, domain);
+    await page.getByRole("button", { name: "Sync zone" }).click();
+    const synced = page.locator("section").filter({ hasText: `${name} synced` });
+    await expect(synced).toBeVisible({ timeout: 60_000 });
+    await expect(synced).toContainText("2created");
+    const table = page.getByRole("table", { name: "DNS records" });
+    await expect(rowWith(table, "203.0.113.10")).toBeVisible();
+    /* Nothing Kaname manages has drifted, so there is nothing to apply. */
+    await expect(page.getByRole("button", { name: "Apply staged" })).toBeDisabled();
+
+    /* Two records Kaname writes through the provider… */
+    for (const [label, ip] of [
+      ["www", "203.0.113.50"],
+      ["api", "203.0.113.51"],
+    ]) {
+      const res = await api("POST", "/dns", {
+        domain_id: domain.id,
+        type: "A",
+        name: label,
+        content: ip,
+        ttl: 300,
+      });
+      expect(res.status, res.error?.message).toBe(201);
+    }
+    expect(cf.writes).toEqual([`POST www.${name} 203.0.113.50`, `POST api.${name} 203.0.113.51`]);
+
+    /* …then changed and deleted at Cloudflare, behind Kaname's back. */
+    cf.records.find((r) => r.name === `www.${name}`)!.content = "198.51.100.9";
+    cf.records.splice(
+      cf.records.findIndex((r) => r.name === `api.${name}`),
+      1,
+    );
+    await dismissToasts(page);
+    await page.getByRole("button", { name: "Sync zone" }).click();
+    await expect(synced).toContainText("2drifted", { timeout: 60_000 });
+    const www = (await records(domain.id)).find((r) => r.name === `www.${name}`)!;
+    expect(www.content).toBe("198.51.100.9");
+
+    /* Apply pushes Kaname's values back: an update and a re-create. */
+    cf.writes = [];
+    const apply = page.getByRole("button", { name: "Apply 2 staged" });
+    await expect(apply).toBeEnabled();
+    await apply.click();
+    await expectJobStatus(sectionNamed(page, "Apply job"), "Succeeded");
+    expect(cf.writes.sort()).toEqual(
+      [`POST api.${name} 203.0.113.51`, `PUT www.${name} 203.0.113.50`].sort(),
+    );
+    expect(cf.records.find((r) => r.name === `www.${name}`)!.content).toBe("203.0.113.50");
+    await expect
+      .poll(async () => (await get<RecordRow[]>(`/dns?domain_id=${domain.id}&drifted=true`)).length)
+      .toBe(0);
+    await expect(page.getByRole("button", { name: "Apply staged" })).toBeDisabled();
+
+    /* With nothing staged, the API refuses to queue an empty apply. */
+    const empty = await api("POST", "/dns/apply", { domain_id: domain.id });
+    expect(empty.status).toBe(409);
+    expect(empty.error?.message).toBe(`Nothing is staged for ${name}.`);
+  } finally {
+    await cf.close();
+  }
+});
+
+test("a manual zone refuses sync and apply with the reason", async ({ page }) => {
+  const domain = await manualZone();
+  await openZone(page, domain);
+  await expect(page.getByRole("button", { name: "Apply staged" })).toBeDisabled();
+
+  const sync = await api("POST", "/dns/sync", { domain_id: domain.id });
+  expect(sync.status).toBe(412);
+  expect(sync.error?.message).toBe(
+    `${domain.name} has no API-driven DNS provider, so there is no authoritative zone to pull.`,
+  );
+  const apply = await api("POST", "/dns/apply", { domain_id: domain.id });
+  expect(apply.status).toBe(412);
+  expect(apply.error?.message).toBe(
+    `${domain.name} has no API-driven DNS provider, so there is no authoritative zone to push to.`,
+  );
 });

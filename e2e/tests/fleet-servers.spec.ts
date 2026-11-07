@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { missingId } from "../support/config.js";
+import { missingId, offlineAfterSeconds } from "../support/config.js";
 import { sectionNamed } from "../support/ui.js";
 import {
   agentPids,
@@ -8,6 +8,7 @@ import {
   killAgent,
   ownerCall,
   server,
+  signedInContext,
   startAgent,
   tableRow,
   waitForConnection,
@@ -52,6 +53,7 @@ test.afterAll(() => {
   // the specs after this one, and the enrolled extra must not be.
   if (agentPids(CRASH_HOST).length === 0) startAgent(CRASH_HOST);
   for (const pid of agentPids(NEW_HOST)) process.kill(pid, "SIGKILL");
+  for (const pid of agentPids(LATE_HOST)) process.kill(pid, "SIGKILL");
 });
 
 test("the add-server form names the field that is wrong, before and after the API", async ({
@@ -81,14 +83,14 @@ test("the add-server form names the field that is wrong, before and after the AP
   await hostname.fill("ok.example.com");
   await submit.click();
   await expect(name).toHaveAttribute("aria-invalid", "true");
-  await expect(name).toHaveAccessibleDescription(/String must contain at least 1 character\(s\)/);
+  await expect(name).toHaveAccessibleDescription(/This field is required\./);
   await expect(hostname).not.toHaveAttribute("aria-invalid", "true");
 
   /* A hostname that cannot be one, and a name one character too long. */
   await name.fill("x".repeat(65));
   await hostname.fill("not a host!");
   await submit.click();
-  await expect(name).toHaveAccessibleDescription(/String must contain at most 64 character\(s\)/);
+  await expect(name).toHaveAccessibleDescription(/Must be 64 characters or fewer\./);
   await expect(hostname).toHaveAccessibleDescription(/must be a valid hostname/);
 
   /* The boundary itself is fine: 64 characters clears the name error. */
@@ -298,6 +300,122 @@ test("removing a server forgets it, and its old address answers not found", asyn
   await expect(error).toContainText(`Server ${target.id} not found.`);
 
   for (const pid of agentPids(NEW_HOST)) process.kill(pid, "SIGKILL");
+});
+
+/* ------------------------------------------------------------------ *
+ * Each simulated host names itself after its own identity. They used to
+ * draw from a shared pool, so db-01 could call itself edge-01 — and the
+ * hostname under a server's name contradicted it.
+ * ------------------------------------------------------------------ */
+
+test("every simulated host reports a hostname of its own", async () => {
+  const fleet = await ownerCall<ServerRow[]>("GET", "/servers?per_page=100");
+  for (const name of ["forge-01", "mail-01", "db-01", "edge-01"]) {
+    expect(fleet.find((s) => s.name === name)?.hostname).toBe(`${name}.kaname.internal`);
+  }
+  expect(new Set(fleet.map((s) => s.hostname)).size).toBe(fleet.length);
+});
+
+/* ------------------------------------------------------------------ *
+ * Degraded: connected, but silent past the offline window. It needs a
+ * socket that stays open while the heartbeats the control plane stamps
+ * last-seen from run late, which no seeded host does — so a host is
+ * enrolled with `--sim-heartbeat-delay`, and the stack runs a short
+ * offline window. Nothing here sleeps: it waits on the state changing.
+ * ------------------------------------------------------------------ */
+
+const LATE_HOST = "e2e-late-01";
+let lateAgent: Managed | null = null;
+
+test("a host whose heartbeats run late reads as degraded, not disconnected", async ({ page }) => {
+  const created = await ownerCall<ServerRow>("POST", "/servers", {
+    name: LATE_HOST,
+    hostname: `${LATE_HOST}.fleet.test`,
+  });
+  try {
+    const issued = await ownerCall<{ token: string; control_plane_url: string }>(
+      "POST",
+      `/servers/${created.id}/enroll-token`,
+      {},
+    );
+    await enrollAgent(LATE_HOST, issued.control_plane_url, issued.token);
+    lateAgent = startAgent(LATE_HOST, ["--sim-heartbeat-delay", "600"]);
+    await waitForConnection(LATE_HOST, "connected");
+    /* A fresh agent names itself too, over the hostname typed at creation. */
+    expect((await server(LATE_HOST)).hostname).toBe(`${LATE_HOST}.kaname.internal`);
+
+    await page.goto(`/infrastructure/servers/${created.id}`);
+    await expect(connectionLabel(header(page))).toHaveText("Connected");
+
+    /* Once the window passes with nothing heard, the sweep (every 15 s)
+     * moves it, and the open page follows without a reload. */
+    await waitForConnection(LATE_HOST, "degraded", (offlineAfterSeconds + 60) * 1000);
+    await expect(connectionLabel(header(page))).toHaveText("Degraded", { timeout: 30_000 });
+    /* Late, not gone: the agent is still running and never dropped. */
+    expect(agentPids(LATE_HOST)).toHaveLength(1);
+    expect(lateAgent.tail()).not.toContain("disconnected");
+
+    /* The fleet table can narrow to it... */
+    await page.goto("/infrastructure/servers");
+    await page.getByLabel("Filter by agent state").selectOption("degraded");
+    await expect(page).toHaveURL(/connection=degraded/);
+    const table = page.getByRole("table", { name: "Servers" });
+    await expect(table.locator("tbody tr")).toHaveCount(1);
+    await expect(tableRow(table, LATE_HOST)).toBeVisible();
+
+    /* ...and the Command Center flags it as a warning to look at. */
+    await page.goto("/");
+    const item = sectionNamed(page, "Needs attention")
+      .getByRole("link")
+      .filter({ hasText: `${LATE_HOST} is degraded` });
+    await expect(item).toBeVisible();
+    await item.click();
+    await expect(page).toHaveURL(new RegExp(`/infrastructure/servers/${created.id}$`));
+  } finally {
+    for (const pid of agentPids(LATE_HOST)) process.kill(pid, "SIGKILL");
+    await ownerCall("DELETE", `/servers/${created.id}`);
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * Getting Started on an instance with nothing paired: "Get every agent
+ * connected" is the same task as "Pair a server" until something is
+ * paired, so it is not shown. The seeded stack is long past that point,
+ * so the brand-new view is a teammate whose servers are one row whose
+ * agent has never enrolled.
+ * ------------------------------------------------------------------ */
+
+test("before anything is paired, the checklist asks for a server and nothing else", async ({
+  browser,
+}) => {
+  const key = `unpaired-${Date.now().toString(36)}`;
+  const pending = await ownerCall<ServerRow>("POST", "/servers", {
+    name: `e2e-${key}`,
+    hostname: `${key}.fleet.test`,
+  });
+  const role = await ownerCall<{ id: string }>("POST", "/roles", {
+    name: `Unpaired ${key}`,
+    slug: key,
+    description: "Holds one server row whose agent never enrolled.",
+    grants: ["infra.servers:read", "infra.servers:write"].map((permission) => ({
+      permission,
+      scope: { kind: "servers", server_ids: [pending.id] },
+    })),
+  });
+  const context = await signedInContext(browser, key, async () => [role.id]);
+  try {
+    const page = await context.newPage();
+    await page.goto("/");
+    const checklist = page.getByRole("region", { name: "Getting started" });
+    await expect(checklist).toBeVisible();
+    await expect(checklist.getByText("Pair a server")).toBeVisible();
+    await expect(checklist.getByText("Get every agent connected")).toHaveCount(0);
+  } finally {
+    await context.close();
+    // The role stays: it still has its holder, and the suite's database
+    // is reset on every boot.
+    await ownerCall("DELETE", `/servers/${pending.id}`);
+  }
 });
 
 test("filters, tabs and the back button keep the operator where they were", async ({ page }) => {

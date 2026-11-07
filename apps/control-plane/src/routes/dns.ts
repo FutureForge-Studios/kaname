@@ -10,6 +10,8 @@ import {
   sites,
 } from "@kaname/db/schema";
 import {
+  JOB_SPECS,
+  applyDnsInput,
   createDnsRecordInput,
   dnsRecordListQuery,
   idParam,
@@ -19,10 +21,13 @@ import {
   type DnsRecordType,
   type DnsValidationIssue,
   type DnsValidationResult,
+  type Job,
+  type JobType,
   type Permission,
   type Remediation,
 } from "@kaname/contract";
 import {
+  accepted,
   helpers,
   item,
   list,
@@ -34,15 +39,14 @@ import {
   parseQuery,
 } from "../http/plugin.js";
 import { ApiException, badRequest, conflict, notFound } from "../lib/errors.js";
+import { dnsProviderFor, PROXYABLE_TYPES, zoneLine } from "../services/dns-provider.js";
 import {
-  dnsProviderFor,
-  fqdn,
-  PROXYABLE_TYPES,
-  zoneLine,
-  type DnsProviderTarget,
-  type ProviderRecordDraft,
-  type ProviderWrite,
-} from "../services/dns-provider.js";
+  authoritativeProvider,
+  driftBetween,
+  providerTarget,
+  stagedDrift,
+  toDraft,
+} from "../services/dns-sync.js";
 import { combine, searchTerm, sortColumn } from "./_shared.js";
 import { domainScope, loadDomainRow, normalizeName } from "./domains.js";
 
@@ -73,7 +77,6 @@ const TTL_CUTOVER_TARGET = 300;
 /** Types that answer "where does this name point", for target lookups. */
 const ADDRESS_TYPES: readonly DnsRecordType[] = ["A", "AAAA", "CNAME"];
 
-type DriftColumn = (typeof dnsRecords.$inferInsert)["drift"];
 type RecordRow = typeof dnsRecords.$inferSelect;
 type DomainRow = typeof domains.$inferSelect;
 
@@ -312,6 +315,14 @@ export async function dnsRoutes(app: FastifyInstance): Promise<void> {
 
   /* ------------------------------ sync ------------------------------ */
 
+  /*
+   * A zone sync used to run inside this request: every page of the
+   * provider's zone, every row write, with the browser waiting and a slow
+   * or rate-limited provider turning into a gateway timeout. It is a
+   * `dns.sync` job now. What can be known without the provider — no
+   * token, a manual zone — is still refused here, before anything is
+   * queued, so the operator is told at once rather than by a failed job.
+   */
   app.post("/dns/sync", async (req, reply) => {
     const q = parseQuery(req, dnsRecordListQuery.pick({ domain_id: true }));
     // Defaulted so `POST /dns/sync?domain_id=...` needs no body at all.
@@ -322,164 +333,57 @@ export async function dnsRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const domain = await loadDomainRow(req, domainId, "websites.dns:read");
-    const h = helpers(req);
+    await authoritativeProvider(req.ctx, domain, "pull");
 
-    const provider = await dnsProviderFor(req.ctx, providerTarget(domain));
-    if (!provider.authoritative) {
-      throw new ApiException(
-        "precondition_failed",
-        `${domain.name} has no API-driven DNS provider, so there is no authoritative zone to pull.`,
-        {
-          remediation: {
-            summary:
-              "Kaname holds the intended records for a manual domain and nothing to compare them against. Move the zone to a supported provider to get drift detection and automatic dns-01 challenges.",
-            actions: [{ label: "Domain settings", href: `/websites/domains/${domain.id}` }],
-          },
-        },
-      );
-    }
-
-    const zone = await provider.zone();
-    const { records: live, unsupported } = await provider.listRecords();
-    const stored = await req.ctx.db
-      .select()
-      .from(dnsRecords)
-      .where(eq(dnsRecords.domainId, domain.id));
-
-    const byExternal = new Map(
-      stored
-        .filter((r): r is RecordRow & { externalId: string } => r.externalId !== null)
-        .map((r) => [r.externalId, r]),
-    );
-    const byShape = new Map(stored.map((r) => [shapeKey(r.type, r.name, r.content), r]));
-
-    const now = new Date();
-    const seen = new Set<string>();
-    let created = 0;
-    let updated = 0;
-    let adopted = 0;
-    let drifted = 0;
-    let removed = 0;
-
-    for (const rec of live) {
-      const match =
-        (rec.external_id ? byExternal.get(rec.external_id) : undefined) ??
-        byShape.get(shapeKey(rec.type, rec.name, rec.content));
-
-      if (!match) {
-        await req.ctx.db
-          .insert(dnsRecords)
-          .values({
-            domainId: domain.id,
-            type: rec.type,
-            name: rec.name,
-            content: rec.content,
-            ttl: rec.ttl,
-            priority: rec.priority,
-            proxied: rec.proxied,
-            managedBy: body.adopt_unmanaged ? "kaname" : "external",
-            externalId: rec.external_id,
-            lastSyncedAt: now,
-          })
-          .onConflictDoNothing();
-        created += 1;
-        if (body.adopt_unmanaged) adopted += 1;
-        continue;
-      }
-
-      seen.add(match.id);
-      // The provider is authoritative, so its copy wins and what Kaname
-      // wanted is preserved as the drift's expected value.
-      const diverged = match.content !== rec.content && match.managedBy === "kaname";
-      await req.ctx.db
-        .update(dnsRecords)
-        .set({
-          type: rec.type,
-          name: rec.name,
-          content: rec.content,
-          ttl: rec.ttl,
-          priority: rec.priority,
-          proxied: rec.proxied,
-          externalId: rec.external_id,
-          drift: diverged ? drift(match.content, rec.content) : null,
-          ...(body.adopt_unmanaged ? { managedBy: "kaname" as const } : {}),
-          lastSyncedAt: now,
-          updatedAt: now,
-        })
-        .where(eq(dnsRecords.id, match.id));
-      updated += 1;
-      if (diverged) drifted += 1;
-    }
-
-    for (const row of stored) {
-      if (seen.has(row.id)) continue;
-      if (row.managedBy === "external") {
-        await req.ctx.db.delete(dnsRecords).where(eq(dnsRecords.id, row.id));
-        removed += 1;
-        continue;
-      }
-      // Kaname asked for this record and the zone no longer has it.
-      await req.ctx.db
-        .update(dnsRecords)
-        .set({
-          drift: drift(row.content, null),
-          externalId: null,
-          lastSyncedAt: now,
-          updatedAt: now,
-        })
-        .where(eq(dnsRecords.id, row.id));
-      drifted += 1;
-    }
-
-    await req.ctx.db
-      .update(domains)
-      .set({
-        dnsZoneId: zone.id,
-        ...(zone.nameservers.length > 0 ? { nameservers: zone.nameservers } : {}),
-        lastSyncedAt: now,
-        updatedAt: now,
-      })
-      .where(eq(domains.id, domain.id));
-
-    await req.ctx.audit.record({
-      actor: h.actor(),
-      action: "dns.synced",
-      targetType: "domain",
-      targetId: domain.id,
-      targetLabel: domain.name,
-      serverId: domain.serverId,
-      metadata: { provider: provider.kind, created, updated, adopted, drifted, removed },
-    });
-    req.ctx.events.publish(
-      "servers",
-      "dns.synced",
-      { domain_id: domain.id, drifted, created, removed },
-      domain.serverId,
-    );
-
-    const refreshed = await req.ctx.db
-      .select(recordSelection)
-      .from(dnsRecords)
-      .innerJoin(domains, eq(dnsRecords.domainId, domains.id))
-      .where(eq(dnsRecords.domainId, domain.id))
-      .orderBy(asc(dnsRecords.name));
-
-    return item(reply, {
+    const job = await enqueueZoneJob(req, "dns.sync", domain, {
       domain_id: domain.id,
-      domain_name: domain.name,
-      zone_id: zone.id,
-      provider: provider.kind,
-      checked_at: now.toISOString(),
-      total: refreshed.length,
-      created,
-      updated,
-      adopted,
-      drifted,
-      removed,
-      // Reported rather than hidden: these stay untouched at the provider.
-      unsupported,
-      records: refreshed.map(recordToApi),
+      adopt_unmanaged: body.adopt_unmanaged,
     });
+    return accepted(reply, job);
+  });
+
+  /* ------------------------------ apply ----------------------------- */
+
+  /*
+   * Pushes what Kaname holds to the provider: any drafts and deletions in
+   * the body, and every staged drift — a record changed or removed at the
+   * provider goes back to Kaname's value. Refused up front when there is
+   * nothing to push, so the button cannot queue a job that does nothing.
+   */
+  app.post("/dns/apply", async (req, reply) => {
+    const body = parseBody(req, applyDnsInput);
+    const domain = await loadDomainRow(req, body.domain_id, "websites.dns:write");
+    await authoritativeProvider(req.ctx, domain, "push to");
+
+    // Shape errors are the operator's to fix now, not a job's to fail on.
+    for (const draft of body.records) {
+      toDraft(domain.name, {
+        type: draft.type,
+        name: draft.name,
+        content: draft.content,
+        ttl: draft.ttl,
+        priority: draft.priority ?? null,
+        proxied: draft.proxied,
+      });
+    }
+
+    const staged = await stagedDrift(req.ctx.db, domain.id);
+    if (body.records.length === 0 && body.delete_ids.length === 0 && staged.length === 0) {
+      throw conflict(`Nothing is staged for ${domain.name}.`, {
+        summary:
+          "Every record Kaname manages matches the provider. Sync the zone first if you expect a change made at the provider to show up here.",
+        actions: [{ label: "Sync zone", action: "dns.sync" }],
+      });
+    }
+
+    const job = await enqueueZoneJob(req, "dns.apply", domain, {
+      domain_id: domain.id,
+      records: body.records,
+      delete_ids: body.delete_ids,
+      fail_on_drift: body.fail_on_drift,
+      staged: staged.length,
+    });
+    return accepted(reply, job);
   });
 
   /* ---------------------------- validate ---------------------------- */
@@ -563,52 +467,43 @@ function recordToApi(row: RecordApiRow): DnsRecord {
 
 /* ---------------------------- internals ---------------------------- */
 
-function providerTarget(domain: DomainRow): DnsProviderTarget {
-  return {
-    id: domain.id,
-    name: domain.name,
-    dnsProvider: domain.dnsProvider,
-    dnsZoneId: domain.dnsZoneId,
-  };
-}
-
-function toDraft(zoneName: string, draft: ProviderRecordDraft): ProviderRecordDraft {
-  const normalized: ProviderRecordDraft = {
-    ...draft,
-    name: fqdn(zoneName, draft.name),
-    content: draft.content.trim(),
-  };
-  if ((normalized.type === "MX" || normalized.type === "SRV") && normalized.priority === null) {
-    throw new ApiException("validation_failed", `An ${normalized.type} record needs a priority.`, {
-      fields: { priority: "required" },
-      remediation: {
-        summary:
-          "Lower numbers are tried first. Use 10 for a single mail host, or 10 and 20 for a primary and a backup.",
-        actions: [],
-      },
-    });
-  }
-  return normalized;
-}
-
 /**
- * Drift is the gap between what Kaname asked for and what the zone
- * actually holds. A manual provider applied nothing, so everything it
- * accepts is drift until the operator publishes it.
+ * A zone job is control-plane work: the zone lives at the registrar, so
+ * the job carries no server and runs whether or not the domain's host is
+ * connected — `enqueueServerJob` would park it behind an agent that has
+ * nothing to do with it. It is still authorised against the domain's
+ * host, which is what DNS permissions are scoped by.
  */
-function driftBetween(draft: ProviderRecordDraft, write: ProviderWrite): DriftColumn {
-  if (write.manual) return drift(draft.content, null);
-  return write.record.content === draft.content ? null : drift(draft.content, write.record.content);
-}
-
-/** A record the provider no longer has is drift with no current value;
- *  the column's declared shape predates that case. */
-function drift(expected: string, actual: string | null): DriftColumn {
-  return { expected, actual, detected_at: new Date().toISOString() } as DriftColumn;
-}
-
-function shapeKey(type: string, name: string, content: string): string {
-  return `${type}|${normalizeName(name)}|${content.trim()}`;
+async function enqueueZoneJob(
+  req: FastifyRequest,
+  type: Extract<JobType, `dns.${string}`>,
+  domain: DomainRow,
+  params: Record<string, unknown>,
+): Promise<Job> {
+  const h = helpers(req);
+  const principal = h.authorize(JOB_SPECS[type].permission, domain.serverId);
+  const job = await req.ctx.queue.enqueue({
+    type,
+    serverId: null,
+    targetType: "domain",
+    targetId: domain.id,
+    targetLabel: domain.name,
+    params,
+    createdBy: principal.kind === "user" ? principal.id : null,
+    createdByName: principal.name,
+  });
+  await req.ctx.audit.record({
+    actor: h.actor(),
+    action: `${type}.requested`,
+    targetType: "domain",
+    targetId: domain.id,
+    targetLabel: domain.name,
+    serverId: domain.serverId,
+    jobId: job.id,
+    metadata: { params },
+  });
+  req.ctx.events.publish("jobs", "job.queued", job, domain.serverId);
+  return job;
 }
 
 /* ------------------------------------------------------------------ *

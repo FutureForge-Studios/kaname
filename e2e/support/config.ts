@@ -49,11 +49,26 @@ export const host = "127.0.0.1";
 export const apiUrl = `http://${host}:${apiPort}`;
 export const webUrl = `http://${host}:${webPort}`;
 
+/*
+ * The DNS specs stand in for Cloudflare on loopback, and the control
+ * plane is pointed at it from boot. Derived from the API port so stacks
+ * running side by side never share one; overridable like the rest.
+ */
+export const cloudflarePort = Number(process.env["KANAME_E2E_CLOUDFLARE_PORT"] ?? apiPort + 20000);
+export const cloudflareUrl = `http://${host}:${cloudflarePort}/client/v4`;
+
 /** Relative, so @kaname/db resolves it against the workspace root. */
 export const databaseUrl = process.env["KANAME_E2E_DATABASE_URL"] ?? "pglite://./.data/e2e";
 
 export const ownerEmail = process.env["KANAME_BOOTSTRAP_EMAIL"] ?? "owner@kaname.local";
 export const ownerPassword = process.env["KANAME_BOOTSTRAP_PASSWORD"] ?? "kaname-development-only";
+
+/**
+ * The control plane's offline window for this stack (Settings › Agents).
+ * Short enough that the Degraded state is reachable in a spec, long
+ * enough that hosts heartbeating every 15 s never touch it.
+ */
+export const offlineAfterSeconds = Number(process.env["KANAME_E2E_OFFLINE_AFTER_SECONDS"] ?? 30);
 
 /** The seed's demo fleet, every host of which gets a simulated agent. */
 export const fleetSize = 4;

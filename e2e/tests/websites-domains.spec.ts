@@ -19,11 +19,10 @@ import {
  * rather than a job. The one call that leaves the panel is "Check
  * control", which resolves from the managed host's own vantage point —
  * and on failure it must hand back the exact record to publish, not
- * "could not verify". The simulated host's resolver serves a fixed
- * zone, so a proof can never be published to it; that is why the
- * journeys here prove the failure path end to end and the happy path
- * only through the seeded domains that were verified when they were
- * added.
+ * "could not verify". On a simulated host the resolver stands in for
+ * public DNS and is handed the zone Kaname manages before each check,
+ * so publishing the proof as a record in Kaname is what makes it
+ * resolve — and both the failure and the success path run end to end.
  * ------------------------------------------------------------------ */
 
 interface DomainRow {
@@ -192,6 +191,39 @@ test("a failed control check hands over the TXT record to publish", async ({ pag
   expect(after.verified.ok).toBe(false);
   expect(after.verified.checked_at).not.toBeNull();
   await expect(page.getByText("Unverified").first()).toBeVisible();
+});
+
+test("publishing the TXT proof it asked for verifies the domain", async ({ page }) => {
+  const forge = await serverNamed("forge-01");
+  const domain = await addDomain({ name: `${unique("proof")}.e2e.test`, server_id: forge.id });
+
+  await page.goto(`/websites/domains/${domain.id}`);
+  await page.getByRole("button", { name: "Check control" }).click();
+  const error = page.getByRole("alert").filter({ hasText: "precondition_failed" });
+  await expect(error).toContainText(`cannot see proof that you control ${domain.name}`);
+  const proof = /"(kaname-verification=[A-Za-z0-9_-]{32})"/.exec(
+    (await error.textContent()) ?? "",
+  )?.[1];
+  expect(proof).toBeTruthy();
+
+  /* Publish exactly the record it handed over, as a record in Kaname. */
+  const published = await api("POST", "/dns", {
+    domain_id: domain.id,
+    type: "TXT",
+    name: "_kaname",
+    content: proof,
+    ttl: 300,
+  });
+  expect(published.status, published.error?.message).toBe(201);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Check control" }).click();
+  await expect.poll(async () => (await domainNamed(domain.name)).verified.ok).toBe(true);
+  const after = await domainNamed(domain.name);
+  expect(after.verified.method).toBe("dns_txt");
+  expect(after.status).toBe("active");
+  await expect(page.getByText("Verified").first()).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "precondition_failed" })).toHaveCount(0);
 });
 
 /* --------------------------- provider switch ------------------------- */

@@ -69,6 +69,12 @@ enum Command {
         /// Serve a deterministic fake host instead of this machine.
         #[arg(long)]
         simulate: bool,
+        /// Simulator only: send each metrics heartbeat this many seconds
+        /// late while the socket stays open and keeps answering pings. It
+        /// is how the suite reaches the Degraded state (connected, but
+        /// silent past the offline window) without waiting on a real fault.
+        #[arg(long, value_name = "SECONDS", requires = "simulate")]
+        sim_heartbeat_delay: Option<u64>,
         #[arg(long, default_value = "info")]
         log_level: String,
     },
@@ -86,6 +92,7 @@ fn main() {
         match cli.command.unwrap_or(Command::Run {
             state_dir: None,
             simulate: false,
+            sim_heartbeat_delay: None,
             log_level: "info".into(),
         }) {
             Command::Enroll {
@@ -100,10 +107,12 @@ fn main() {
             Command::Run {
                 state_dir,
                 simulate,
+                sim_heartbeat_delay,
                 log_level,
             } => {
                 init_logging(&log_level)?;
-                run_agent(state_dir, simulate).await
+                let heartbeat = heartbeat_schedule(simulate, sim_heartbeat_delay)?;
+                run_agent(state_dir, simulate, heartbeat).await
             }
             Command::Version => {
                 println!(
@@ -164,7 +173,11 @@ async fn run_enroll(token: String, url: String, state_dir: Option<PathBuf>) -> a
 
 /* ---------------------------------- run ------------------------------ */
 
-async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result<()> {
+async fn run_agent(
+    state_dir: Option<PathBuf>,
+    simulate: bool,
+    heartbeat: HeartbeatSchedule,
+) -> anyhow::Result<()> {
     // A fake fleet that can be mistaken for a real one is worse than no
     // fake fleet (KD-010).
     if simulate && std::env::var("KANAME_ENV").as_deref() == Ok("production") {
@@ -244,7 +257,7 @@ async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result
             registry: registry.clone(),
         };
 
-        let (lived, ended) = session(&stop, provider.clone(), opts).await;
+        let (lived, ended) = session(&stop, provider.clone(), opts, heartbeat).await;
         if stop.is_cancelled() {
             break;
         }
@@ -295,6 +308,7 @@ async fn session(
     stop: &CancellationToken,
     provider: ProviderRef,
     opts: conn::Options,
+    heartbeat: HeartbeatSchedule,
 ) -> (Duration, SessionEnd) {
     let started = Instant::now();
     let url = opts.connect_url.clone();
@@ -306,7 +320,12 @@ async fn session(
 
     let handle = conn.handle();
     let conn_stop = CancellationToken::new();
-    let metrics = tokio::spawn(push_metrics(handle.clone(), provider.clone(), conn_stop.clone()));
+    let metrics = tokio::spawn(push_metrics(
+        handle.clone(),
+        provider.clone(),
+        conn_stop.clone(),
+        heartbeat,
+    ));
     let events = tokio::spawn(forward_events(handle, provider.clone(), conn_stop.clone()));
 
     // A child of the process token: a shutdown still closes this session,
@@ -365,9 +384,23 @@ async fn forward_events(handle: conn::ConnHandle, provider: ProviderRef, stop: C
 /// Feeds the control plane's health axis. A host that cannot sample itself
 /// simply stops pushing rather than tearing the connection down: metrics are
 /// not why the socket exists.
-async fn push_metrics(handle: conn::ConnHandle, provider: ProviderRef, stop: CancellationToken) {
+async fn push_metrics(
+    handle: conn::ConnHandle,
+    provider: ProviderRef,
+    stop: CancellationToken,
+    heartbeat: HeartbeatSchedule,
+) {
     let ctx = Ctx::new(stop.child_token(), None);
-    let mut ticker = tokio::time::interval(METRICS_INTERVAL);
+    // A delayed heartbeat is late from the very first one: the connect
+    // itself already stamped last-seen, so an on-time first sample would
+    // only move the moment the host goes quiet.
+    if !heartbeat.first.is_zero() {
+        tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = tokio::time::sleep(heartbeat.first) => {}
+        }
+    }
+    let mut ticker = tokio::time::interval(heartbeat.every);
     loop {
         match provider.system().metrics(&ctx).await {
             Ok(sample) => {
@@ -388,6 +421,36 @@ async fn push_metrics(handle: conn::ConnHandle, provider: ProviderRef, stop: Can
         tokio::select! {
             _ = stop.cancelled() => return,
             _ = ticker.tick() => {}
+        }
+    }
+}
+
+/* ------------------------------ heartbeat ---------------------------- */
+
+/// When metrics — the heartbeat the control plane's last-seen is stamped
+/// from — go out: `first` after connecting, then every `every`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HeartbeatSchedule {
+    first: Duration,
+    every: Duration,
+}
+
+/// The normal cadence, or one made late on purpose for a simulated host.
+/// Lateness is refused on a real host: there it could only hide a host
+/// that is actually in trouble.
+fn heartbeat_schedule(simulate: bool, delay_seconds: Option<u64>) -> anyhow::Result<HeartbeatSchedule> {
+    match delay_seconds {
+        None => Ok(HeartbeatSchedule {
+            first: Duration::ZERO,
+            every: METRICS_INTERVAL,
+        }),
+        Some(_) if !simulate => bail!("--sim-heartbeat-delay only applies with --simulate"),
+        Some(seconds) => {
+            let delay = Duration::from_secs(seconds);
+            Ok(HeartbeatSchedule {
+                first: delay,
+                every: METRICS_INTERVAL + delay,
+            })
         }
     }
 }
@@ -413,5 +476,42 @@ impl Backoff {
 
     fn reset(&mut self) {
         self.attempt = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heartbeats_keep_the_normal_cadence_by_default() {
+        let schedule = heartbeat_schedule(false, None).unwrap();
+        assert_eq!(schedule.first, Duration::ZERO);
+        assert_eq!(schedule.every, METRICS_INTERVAL);
+        assert_eq!(heartbeat_schedule(true, None).unwrap(), schedule);
+    }
+
+    #[test]
+    fn a_delayed_heartbeat_is_late_from_the_first_one() {
+        let schedule = heartbeat_schedule(true, Some(600)).unwrap();
+        assert_eq!(schedule.first, Duration::from_secs(600));
+        assert_eq!(schedule.every, METRICS_INTERVAL + Duration::from_secs(600));
+    }
+
+    #[test]
+    fn a_real_host_cannot_be_made_to_go_quiet() {
+        assert!(heartbeat_schedule(false, Some(600)).is_err());
+        // And the command line says so before anything starts.
+        assert!(Cli::try_parse_from(["kanamed", "run", "--sim-heartbeat-delay", "600"]).is_err());
+        let parsed = Cli::try_parse_from(["kanamed", "run", "--simulate", "--sim-heartbeat-delay", "600"])
+            .expect("accepted with --simulate");
+        match parsed.command {
+            Some(Command::Run {
+                simulate: true,
+                sim_heartbeat_delay: Some(600),
+                ..
+            }) => {}
+            _ => panic!("the delay did not reach the run command"),
+        }
     }
 }

@@ -11,9 +11,7 @@ import {
   History,
   Plug,
   PlugZap,
-  RadioTower,
   Search,
-  ShieldAlert,
   SquareTerminal,
   Unplug,
 } from "lucide-react";
@@ -39,6 +37,7 @@ import {
 } from "@kaname/ui";
 import type { TerminalController, TerminalStatus } from "@/components/TerminalPane";
 import { PageError } from "@/components/PageError";
+import { RecordingNotice } from "@/components/RecordingNotice";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { api } from "@/lib/api";
 import { formatCount } from "@/lib/format";
@@ -390,40 +389,6 @@ export default function TerminalPage() {
   );
 }
 
-/* --------------------------- recording state ------------------------ */
-
-function RecordingNotice({ recorded, serverName }: { recorded: boolean; serverName: string }) {
-  if (recorded) {
-    return (
-      <div
-        role="status"
-        className="flex items-start gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-info)] bg-[var(--kn-info-soft)] p-2.5"
-      >
-        <RadioTower size={14} className="mt-0.5 shrink-0 text-[var(--kn-info)]" aria-hidden />
-        <p className="text-[var(--kn-text)]">
-          <span className="font-medium">This session is being recorded.</span> Everything typed and
-          everything printed on <MonoText>{serverName}</MonoText> is stored and replayable, and
-          reading that recording back is itself audited.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      role="status"
-      className="flex items-start gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-warn)] bg-[var(--kn-warn-soft)] p-2.5"
-    >
-      <ShieldAlert size={14} className="mt-0.5 shrink-0 text-[var(--kn-warn)]" aria-hidden />
-      <p className="text-[var(--kn-text)]">
-        <span className="font-medium">This session is not being recorded.</span> Session recording
-        is switched off for this install — the open and close are still audited, but what happens in
-        between is not.
-      </p>
-    </div>
-  );
-}
-
 /* --------------------------- session history ------------------------ */
 
 function SessionHistory() {
@@ -457,9 +422,19 @@ function SessionHistory() {
       {
         id: "server",
         header: "Server",
-        width: 140,
+        width: 160,
         mono: true,
-        accessor: (row) => row.server_name,
+        // A container exec is listed under its host, with the container it
+        // ran in, so the history says where every shell actually was.
+        cell: (row) =>
+          row.container_name ? (
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate">{row.server_name}</span>
+              <span className="truncate text-xs text-[var(--kn-text-3)]">{row.container_name}</span>
+            </span>
+          ) : (
+            row.server_name
+          ),
       },
       {
         id: "user",

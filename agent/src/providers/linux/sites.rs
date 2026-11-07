@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 
 use super::Shared;
 use super::certs::{certificate_paths, check_domain};
-use super::common::{conflict, invalid, is_not_exist, not_found, precondition};
-use super::exec::{ExecOptions, dir_exists, file_exists, run_combined, run_with, write_atomic};
+use super::common::{conflict, invalid, is_not_exist, not_found, precondition, unsupported};
+use super::exec::{ExecOptions, dir_exists, file_exists, has_binary, run_combined, run_with, write_atomic};
 use super::paths::{DEFAULT_DIR_MODE, is_protected_root, validate_path, wrap_fs_error};
 use crate::providers::*;
 
@@ -56,6 +56,15 @@ pub struct SiteMetadata {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub upstream: String,
     pub force_https: bool,
+    /// Set only where the layout has no enable step (conf.d): there the
+    /// file existing is what serves the site, so a suspended site keeps
+    /// its file but renders a vhost that answers 503 instead.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub suspended: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 pub struct SiteOps(pub Arc<Shared>);
@@ -124,6 +133,7 @@ impl Sites for SiteOps {
             runtime_version,
             upstream,
             force_https: p.force_https,
+            suspended: false,
         };
         self.install(ctx, &meta, true).await?;
         Ok(SiteConfigResult { config_path: target })
@@ -162,7 +172,13 @@ impl Sites for SiteOps {
             meta.force_https = force_https;
         }
 
-        let enabled = p.enabled.unwrap_or_else(|| is_enabled(&p.name));
+        // Suspending is `enabled: false`. With sites-enabled the link goes
+        // and nginx stops loading the vhost; a conf.d layout has no link to
+        // remove, so the vhost itself turns into a 503 (see `suspended`).
+        // An update that does not mention `enabled` keeps the site as it is.
+        let currently = is_enabled(&p.name) && !meta.suspended;
+        let enabled = p.enabled.unwrap_or(currently);
+        meta.suspended = !enabled && !dir_exists(SITES_ENABLED);
         self.install(ctx, &meta, enabled).await?;
         Ok(SiteConfigResult { config_path: target })
     }
@@ -233,6 +249,266 @@ impl Sites for SiteOps {
         run_with(ctx, ExecOptions::new("nginx", ["-s", "reload"]).c_locale()).await?;
         Ok(())
     }
+
+    async fn release(&self, ctx: &Ctx, p: SiteReleaseParams) -> PResult<SiteReleaseResult> {
+        check_site_name(&p.name)?;
+        let root = validate_path(&p.root)?;
+        let releases = format!("{root}/releases");
+        let target = format!("{releases}/{}", p.release);
+        if std::fs::symlink_metadata(&target).is_ok() {
+            return Err(conflict(format!("{target} already exists")));
+        }
+        mkdir_all(&releases, DEFAULT_DIR_MODE).map_err(|e| wrap_fs_error(&releases, e))?;
+
+        let mut log = Vec::new();
+        let written = match p.source.as_str() {
+            "git" => clone_release(ctx, &p, &target, &mut log).await,
+            _ => {
+                let source = p.upload_path.clone().unwrap_or_else(|| format!("{root}/upload"));
+                stage_upload(&source, &target, &mut log)
+            }
+        };
+        // A release that failed half way is removed, not left for a later
+        // rollback to switch onto.
+        let commit_sha = match written {
+            Ok(sha) => sha,
+            Err(err) => {
+                let _ = std::fs::remove_dir_all(&target);
+                return Err(err);
+            }
+        };
+
+        let manifest = serde_json::json!({
+            "site": p.name,
+            "release": p.release,
+            "source": p.source,
+            "repo_url": p.repo_url,
+            "branch": p.branch,
+            "commit_sha": commit_sha,
+        });
+        let manifest_path = format!("{target}/.kaname-release");
+        write_atomic(Path::new(&manifest_path), manifest.to_string().as_bytes(), 0o644)
+            .map_err(|e| wrap_fs_error(&manifest_path, e))?;
+
+        let current = format!("{root}/current");
+        swap_current(&root, &target)?;
+        log.push(format!("{current} -> {target}"));
+
+        let pruned = prune_releases(&releases, &target, p.keep.max(1) as usize)?;
+        for path in &pruned {
+            log.push(format!("pruned {path}"));
+        }
+        Ok(SiteReleaseResult {
+            release_path: target,
+            current_path: current,
+            commit_sha,
+            pruned,
+            log,
+        })
+    }
+
+    async fn activate(&self, _ctx: &Ctx, p: SiteActivateParams) -> PResult<SiteActivateResult> {
+        check_site_name(&p.name)?;
+        let root = validate_path(&p.root)?;
+        let target = validate_path(&p.release_path)?;
+        match std::fs::symlink_metadata(&target) {
+            Ok(meta) if meta.is_dir() => {}
+            _ => {
+                return Err(not_found(format!(
+                    "release directory {target} is not on this host"
+                )));
+            }
+        }
+        let previous = swap_current(&root, &target)?;
+        Ok(SiteActivateResult {
+            current_path: format!("{root}/current"),
+            release_path: target,
+            previous,
+        })
+    }
+}
+
+/* ------------------------------ releases ----------------------------- */
+
+/// Names never copied from a staged upload into a release: when the
+/// webroot is the deploy root, these are the releases themselves.
+const RELEASE_SKIP: [&str; 3] = ["releases", "current", ".kaname-release"];
+
+/// Clones into the release directory and returns the revision it holds.
+/// The repository and branch were refused upstream if git could read them
+/// as options; `--` ends option parsing anyway. `.git` is removed once the
+/// revision is known, so a static vhost can never serve the repository.
+async fn clone_release(
+    ctx: &Ctx,
+    p: &SiteReleaseParams,
+    target: &str,
+    log: &mut Vec<String>,
+) -> PResult<Option<String>> {
+    if !has_binary("git") {
+        return Err(unsupported("git is not installed on this host"));
+    }
+    let repo = p.repo_url.clone().unwrap_or_default();
+    let branch = p
+        .branch
+        .clone()
+        .filter(|b| !b.is_empty())
+        .unwrap_or_else(|| "main".into());
+    log.push(format!("cloning {repo} ({branch}) into {target}"));
+
+    let git = |args: Vec<String>| {
+        ExecOptions::new("git", args)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            // A host key or passphrase prompt would hang the job until its
+            // deadline; fail at once instead.
+            .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+            .c_locale()
+    };
+    run_with(
+        ctx,
+        git(vec![
+            "clone".into(),
+            "--quiet".into(),
+            "--no-tags".into(),
+            "--single-branch".into(),
+            "--branch".into(),
+            branch,
+            "--".into(),
+            repo,
+            target.into(),
+        ]),
+    )
+    .await?;
+    if let Some(sha) = p.commit_sha.as_deref().filter(|s| !s.is_empty()) {
+        run_with(
+            ctx,
+            git(vec![
+                "-C".into(),
+                target.into(),
+                "checkout".into(),
+                "--quiet".into(),
+                "--detach".into(),
+                sha.into(),
+            ]),
+        )
+        .await?;
+    }
+    let head = run_with(
+        ctx,
+        git(vec![
+            "-C".into(),
+            target.into(),
+            "rev-parse".into(),
+            "HEAD".into(),
+        ]),
+    )
+    .await?
+    .trim()
+    .to_string();
+    log.push(format!("checked out {head}"));
+    let dot_git = format!("{target}/.git");
+    std::fs::remove_dir_all(&dot_git).map_err(|e| wrap_fs_error(&dot_git, e))?;
+    Ok(Some(head))
+}
+
+fn stage_upload(source: &str, target: &str, log: &mut Vec<String>) -> PResult<Option<String>> {
+    let source = validate_path(source)?;
+    match std::fs::metadata(&source) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err(precondition(format!("{source} is not a directory"))),
+        Err(_) => return Err(precondition(format!("nothing has been uploaded to {source}"))),
+    }
+    let copied =
+        copy_tree(Path::new(&source), Path::new(target), true).map_err(|e| wrap_fs_error(target, e))?;
+    log.push(format!("copied {copied} entries from {source}"));
+    Ok(None)
+}
+
+/// Copies a tree without following symlinks: a link is recreated as a
+/// link, so a staged upload cannot pull files from outside itself into a
+/// release. Returns how many entries were written.
+pub fn copy_tree(from: &Path, to: &Path, top: bool) -> std::io::Result<u64> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().mode(DEFAULT_DIR_MODE).create(to)?;
+    let mut copied = 0;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if top && RELEASE_SKIP.iter().any(|skip| name == *skip) {
+            continue;
+        }
+        let dest = to.join(&name);
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, &dest)?;
+        } else if kind.is_dir() {
+            copied += copy_tree(&entry.path(), &dest, false)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), &dest)?;
+        } else {
+            continue;
+        }
+        copied += 1;
+    }
+    Ok(copied)
+}
+
+/// Points `<root>/current` at `target` with a rename over the old link,
+/// which is atomic: a request in flight sees either release, never
+/// neither. A real directory at `current` is a site's only copy of its
+/// files, not a release, so it is refused rather than replaced.
+pub fn swap_current(root: &str, target: &str) -> PResult<Option<String>> {
+    let current = format!("{root}/current");
+    let previous = match std::fs::symlink_metadata(&current) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::read_link(&current)
+            .ok()
+            .map(|t| t.to_string_lossy().into_owned()),
+        Ok(_) => {
+            return Err(precondition(format!(
+                "{current} is a real directory, not a release symlink; move it aside before deploying"
+            )));
+        }
+        Err(e) if is_not_exist(&e) => None,
+        Err(e) => return Err(wrap_fs_error(&current, e)),
+    };
+    let staging = format!(
+        "{root}/.current-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    );
+    std::os::unix::fs::symlink(target, &staging).map_err(|e| wrap_fs_error(&staging, e))?;
+    if let Err(e) = std::fs::rename(&staging, &current) {
+        let _ = std::fs::remove_file(&staging);
+        return Err(wrap_fs_error(&current, e));
+    }
+    Ok(previous)
+}
+
+/// Keeps the newest `keep` releases — names sort by time — and never the
+/// one just written or the one `current` points at.
+pub fn prune_releases(releases: &str, keep_path: &str, keep: usize) -> PResult<Vec<String>> {
+    let active = Path::new(releases)
+        .parent()
+        .and_then(|root| std::fs::read_link(root.join("current")).ok())
+        .map(|t| t.to_string_lossy().into_owned());
+    let mut names: Vec<String> = std::fs::read_dir(releases)
+        .map_err(|e| wrap_fs_error(releases, e))?
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names.reverse();
+    let mut pruned = Vec::new();
+    for name in names.into_iter().skip(keep) {
+        let path = format!("{releases}/{name}");
+        if path == keep_path || active.as_deref() == Some(path.as_str()) {
+            continue;
+        }
+        std::fs::remove_dir_all(&path).map_err(|e| wrap_fs_error(&path, e))?;
+        pruned.push(path);
+    }
+    pruned.sort();
+    Ok(pruned)
 }
 
 /* ------------------------------ rendering ---------------------------- */
@@ -343,6 +619,13 @@ pub fn render_site(meta: &SiteMetadata, certs: Option<(&str, &str)>) -> PResult<
     ));
     b.push_str("    client_max_body_size 64m;\n\n");
 
+    if meta.suspended {
+        // Validated like any other runtime, so a suspend cannot be the
+        // edit that fails `nginx -t`; the ACME path above stays reachable.
+        b.push_str("    location / {\n        return 503;\n    }\n}\n");
+        return Ok(b);
+    }
+
     match meta.runtime.as_str() {
         "static" => {
             b.push_str("    location / {\n        try_files $uri $uri/ =404;\n    }\n");
@@ -391,7 +674,7 @@ pub fn describe_site(name: &str, config_path: &str, raw: &str) -> SiteInfo {
             server_names: meta.server_names,
             runtime: meta.runtime,
             runtime_version: Some(meta.runtime_version).filter(|v| !v.is_empty()),
-            enabled: is_enabled(&meta.name),
+            enabled: is_enabled(&meta.name) && !meta.suspended,
             config_path: config_path.to_string(),
         };
     }
@@ -561,7 +844,25 @@ mod tests {
             runtime_version: String::new(),
             upstream: String::new(),
             force_https: false,
+            suspended: false,
         }
+    }
+
+    #[test]
+    fn a_suspended_vhost_answers_503_and_says_so_in_its_metadata() {
+        let mut m = meta("php");
+        m.runtime_version = "8.3".into();
+        m.suspended = true;
+        let rendered = render_site(&m, None).unwrap();
+        assert!(rendered.contains("    location / {\n        return 503;\n    }\n}\n"));
+        assert!(!rendered.contains("fastcgi_pass"));
+        assert!(rendered.contains("\"suspended\":true"));
+        let back = read_metadata(&rendered).unwrap();
+        assert!(back.suspended);
+        // A described suspended site is reported disabled whatever the layout.
+        assert!(!describe_site("shop.conf", "/x/shop.conf", &rendered).enabled);
+        // And an active site does not carry the flag at all.
+        assert!(!render_site(&meta("static"), None).unwrap().contains("suspended"));
     }
 
     #[test]
@@ -683,6 +984,88 @@ server {
         assert!(check_runtime_version("node", "20-alpine").is_ok());
         assert!(check_runtime_version("node", "20 alpine").is_err());
         assert!(check_runtime_version("node", "").is_ok());
+    }
+
+    #[test]
+    fn a_release_swap_replaces_the_link_and_refuses_a_real_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap().to_string();
+        let first = format!("{root}/releases/20261101T000000Z-a");
+        let second = format!("{root}/releases/20261102T000000Z-b");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+
+        assert_eq!(swap_current(&root, &first).unwrap(), None);
+        assert_eq!(
+            std::fs::read_link(format!("{root}/current")).unwrap().to_str(),
+            Some(first.as_str())
+        );
+        assert_eq!(swap_current(&root, &second).unwrap(), Some(first.clone()));
+        assert_eq!(
+            std::fs::read_link(format!("{root}/current")).unwrap().to_str(),
+            Some(second.as_str())
+        );
+        // Nothing staged is left behind by the rename.
+        let leftovers: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".current-"))
+            .collect();
+        assert!(leftovers.is_empty());
+
+        let other = tempfile::tempdir().unwrap();
+        let other_root = other.path().to_str().unwrap();
+        std::fs::create_dir_all(format!("{other_root}/current")).unwrap();
+        assert!(matches!(
+            swap_current(other_root, &first),
+            Err(ProviderError::PreconditionFailed(_))
+        ));
+    }
+
+    #[test]
+    fn retention_keeps_the_newest_and_the_active_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_str().unwrap().to_string();
+        let releases = format!("{root}/releases");
+        for n in 1..=5 {
+            std::fs::create_dir_all(format!("{releases}/2026110{n}T000000Z")).unwrap();
+        }
+        // The oldest is live (a rollback put it there), so it survives.
+        swap_current(&root, &format!("{releases}/20261101T000000Z")).unwrap();
+        let pruned = prune_releases(&releases, &format!("{releases}/20261105T000000Z"), 2).unwrap();
+        assert_eq!(
+            pruned,
+            vec![
+                format!("{releases}/20261102T000000Z"),
+                format!("{releases}/20261103T000000Z")
+            ]
+        );
+        assert!(Path::new(&format!("{releases}/20261101T000000Z")).is_dir());
+        assert!(Path::new(&format!("{releases}/20261104T000000Z")).is_dir());
+    }
+
+    #[test]
+    fn an_upload_release_copies_the_tree_but_not_earlier_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("index.html"), "hi").unwrap();
+        std::fs::write(root.join("assets/app.css"), "body{}").unwrap();
+        std::fs::create_dir_all(root.join("releases/old")).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", root.join("passwd")).unwrap();
+
+        let target = root.join("releases/new");
+        let copied = copy_tree(root, &target, true).unwrap();
+        assert_eq!(copied, 4); // index.html, assets/, assets/app.css, passwd link
+        assert_eq!(std::fs::read_to_string(target.join("index.html")).unwrap(), "hi");
+        assert!(!target.join("releases").exists());
+        // A link is copied as a link, never dereferenced into the release.
+        assert!(
+            std::fs::symlink_metadata(target.join("passwd"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

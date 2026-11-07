@@ -3,11 +3,13 @@ import { missingId } from "../support/config.js";
 import { jobStatusPill, sectionNamed } from "../support/ui.js";
 import {
   agentPids,
+  call,
   killAgent,
   ownerCall,
   server,
   service,
   settledJob,
+  signedInAs,
   startAgent,
   tableRow,
   waitForConnection,
@@ -198,4 +200,148 @@ test("a search with no hits says so instead of going blank", async ({ page }) =>
   await palette.getByRole("combobox", { name: "Search and commands" }).fill("zzzz-nothing-zzzz");
   await expect(palette.getByRole("option")).toHaveCount(0);
   await expect(palette.getByText("Nothing matches “zzzz-nothing-zzzz”.")).toBeVisible();
+});
+
+/* ------------------------------------------------------------------ *
+ * KD-037: the job's creator may cancel it. A Developer can restart a
+ * unit, so they can take that restart back; somebody else's job still
+ * needs infra.servers:write, and the drawer only offers what the API
+ * would accept.
+ * ------------------------------------------------------------------ */
+
+test("a developer cancels the restart they started, and only that one", async ({ browser }) => {
+  const edge = await server(HOST);
+  killAgent(HOST);
+  await waitForConnection(HOST, "disconnected");
+
+  const context = await signedInAs(browser, "developer");
+  try {
+    const cron = await service(HOST, "cron.service");
+    /* Both wait for the host, so both are still cancellable. */
+    const mine = await call<{ job: JobRow }>(
+      context.request,
+      "POST",
+      `/services/${cron.id}/restart`,
+      {},
+    );
+    expect(mine.status).toBe(202);
+    const { job: theirs } = await ownerCall<{ job: JobRow }>(
+      "POST",
+      `/services/${cron.id}/reload`,
+      {},
+    );
+
+    const page = await context.newPage();
+    await page.goto("/");
+    await page.getByRole("button", { name: /^Job activity/ }).click();
+    const drawer = page.getByRole("dialog", { name: "Job activity" });
+    const ownItem = drawer
+      .getByRole("listitem")
+      .filter({ hasText: "Restart service" })
+      .filter({ hasText: HOST })
+      .first();
+    const otherItem = drawer
+      .getByRole("listitem")
+      .filter({ hasText: "Reload service" })
+      .filter({ hasText: HOST })
+      .first();
+    await expect(otherItem.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await ownItem.getByRole("button", { name: "Cancel" }).click();
+    await expect(jobStatusPill(ownItem)).toContainText("Cancelled");
+    expect((await settledJob(mine.data.job.id)).status).toBe("cancelled");
+
+    /* The API holds the same line for the job that is not theirs. */
+    const refused = await call(context.request, "POST", `/jobs/${theirs.id}/cancel`, {});
+    expect(refused.status).toBe(403);
+    expect(refused.error?.message).toContain("infra.servers:write");
+    await ownerCall("POST", `/jobs/${theirs.id}/cancel`, {});
+  } finally {
+    await context.close();
+    startAgent(HOST);
+    await waitForConnection(HOST, "connected");
+  }
+  expect((await server(HOST)).id).toBe(edge.id);
+});
+
+/* ------------------------------------------------------------------ *
+ * The shared DataTable toolbar. Backups › Schedules carries a search
+ * and five filters (six with Clear filters); at 1440px it used to wrap
+ * into a second row that the card's fixed 40px bar clipped, search row
+ * and all. Every control must be inside the bar, on screen, and the
+ * thing actually painted at its own centre — which is what "not
+ * clipped" means to someone looking at it. Screenshots are kept at
+ * deviceScaleFactor 1 for a person to check the same thing.
+ * ------------------------------------------------------------------ */
+
+test.describe("a toolbar with many filters", () => {
+  test.use({ deviceScaleFactor: 1 });
+
+  for (const viewport of [
+    { width: 1280, height: 900 },
+    { width: 1366, height: 900 },
+    { width: 1440, height: 900 },
+    { width: 390, height: 844 },
+  ]) {
+    test(`wraps cleanly with nothing clipped at ${viewport.width}px`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize(viewport);
+      /* A filter in the URL adds "Clear filters", the widest the bar gets. */
+      await page.goto("/backups?enabled=true");
+      const search = page.getByLabel("Search backup schedules");
+      await expect(search).toBeVisible();
+      await expect(page.getByLabel("Filter by state")).toHaveValue("true");
+      await expect(page.getByRole("button", { name: "Clear filters" })).toBeVisible();
+
+      const report = await page.evaluate(() => {
+        const table = document.querySelector('table[aria-label="Backup schedules"]');
+        const card = table?.closest(".overflow-hidden");
+        const bar = card?.firstElementChild as HTMLElement | null | undefined;
+        if (!bar) return { error: "no toolbar" };
+        const box = bar.getBoundingClientRect();
+        const problems: string[] = [];
+        const controls = [...bar.querySelectorAll<HTMLElement>("input, select, button")];
+        for (const control of controls) {
+          control.scrollIntoView({ block: "center", inline: "nearest" });
+          const r = control.getBoundingClientRect();
+          const b = bar.getBoundingClientRect();
+          const name =
+            control.getAttribute("aria-label") ?? control.textContent?.trim() ?? control.tagName;
+          if (r.width === 0 || r.height === 0) problems.push(`${name}: not rendered`);
+          if (r.left < b.left - 0.5 || r.right > b.right + 0.5) {
+            problems.push(`${name}: past the bar's sides`);
+          }
+          if (r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5) {
+            problems.push(`${name}: past the bar's edge`);
+          }
+          if (r.right > window.innerWidth + 0.5) problems.push(`${name}: off screen`);
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          const painted =
+            hit !== null &&
+            (hit === control ||
+              control.contains(hit) ||
+              hit.contains(control) ||
+              (control.parentElement?.contains(hit) ?? false));
+          if (!painted) problems.push(`${name}: covered or clipped`);
+        }
+        window.scrollTo(0, 0);
+        return {
+          problems,
+          controls: controls.length,
+          rows: Math.round(box.height),
+          overflowX: document.documentElement.scrollWidth > window.innerWidth,
+        };
+      });
+
+      await page.screenshot({
+        path: testInfo.outputPath(`backups-toolbar-${viewport.width}.png`),
+        fullPage: false,
+      });
+      expect(report.error).toBeUndefined();
+      /* Search, five filters, Clear filters, Refresh — at least. */
+      expect(report.controls).toBeGreaterThanOrEqual(8);
+      expect(report.problems).toEqual([]);
+      expect(report.overflowX, "the page scrolls sideways").toBe(false);
+    });
+  }
 });
