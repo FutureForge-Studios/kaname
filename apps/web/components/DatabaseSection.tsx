@@ -37,7 +37,6 @@ import {
   DialogBody,
   DialogFooter,
   DialogHeader,
-  EmptyState,
   FormField,
   HealthBadge,
   Input,
@@ -54,7 +53,13 @@ import {
   type DataTableRowAction,
   type Tone,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import {
+  ResourcePage,
+  serverPrerequisite,
+  useOpenFromQuery,
+  useResourceListState,
+  type ResourcePrerequisite,
+} from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { PageError } from "@/components/PageError";
 import { ViewTabs } from "@/components/ViewTabs";
