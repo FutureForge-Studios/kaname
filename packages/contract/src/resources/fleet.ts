@@ -328,6 +328,35 @@ export const createAlertRuleInput = alertRule
  * Command Center
  * ------------------------------------------------------------------ */
 
+/**
+ * Getting Started. Each step is a fact read from the control plane's own
+ * rows, never a flag the browser sets, so the checklist cannot claim
+ * progress the fleet does not have. A step the caller cannot read is
+ * left out rather than reported as undone.
+ */
+export const onboardingStepId = z.enum([
+  "server_paired",
+  "agents_connected",
+  "domain_added",
+  "site_created",
+  "certificate_issued",
+  "mail_server_installed",
+  "mailbox_created",
+  "database_created",
+  "firewall_applied",
+  "ssh_key_added",
+  "backup_destination_added",
+  "backup_succeeded",
+  "alert_rule_created",
+  "notification_channel_added",
+  "teammate_invited",
+  "two_factor_enabled",
+]);
+export type OnboardingStepId = z.infer<typeof onboardingStepId>;
+
+export const onboardingStep = z.object({ id: onboardingStepId, done: z.boolean() });
+export type OnboardingStep = z.infer<typeof onboardingStep>;
+
 export const commandCenterSummary = z.object({
   fleet: monitoringOverview.shape.fleet,
   attention: z.array(
@@ -370,5 +399,6 @@ export const commandCenterSummary = z.object({
       z.object({ ip: ipAddress, attempts: z.number().int(), country: z.string().nullable() }),
     ),
   }),
+  onboarding: z.array(onboardingStep),
 });
 export type CommandCenterSummary = z.infer<typeof commandCenterSummary>;
