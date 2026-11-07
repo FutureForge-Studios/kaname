@@ -42,6 +42,9 @@ interface ProcessRow {
   depth?: number;
 }
 
+/** How the PID column renders a pid: grouped, like every count in the panel. */
+const shown = (pid: number) => pid.toLocaleString("en-US");
+
 async function processes(query: string): Promise<ProcessRow[]> {
   const host = await server(HOST);
   return ownerCall<ProcessRow[]>("GET", `/processes?server_id=${host.id}&${query}`);
@@ -74,7 +77,7 @@ test("asks for a host first, then reads it live and sorts on the host's terms", 
   await table.getByRole("columnheader", { name: /Memory/ }).click();
   await expect(page).toHaveURL(/sort=memory/);
   const top = await processes("sort=memory&limit=1");
-  await expect(tableRow(table, String(top[0]!.pid)).first()).toBeVisible();
+  await expect(tableRow(table, shown(top[0]!.pid)).first()).toBeVisible();
 
   /* Pausing the refresh is the operator's choice, and it is kept. */
   const auto = page.getByRole("switch", { name: "Auto-refresh" });
@@ -112,7 +115,7 @@ test("the tree view nests children under their parent", async ({ page }) => {
   const child = tree.find((p) => p.ppid === 1 && p.depth === 1)!;
   expect(child).toBeTruthy();
   const childRow = table.locator("tbody tr").filter({
-    has: page.locator(`td:nth-child(${pid + 1})`, { hasText: new RegExp(`^${child.pid}$`) }),
+    has: page.locator(`td:nth-child(${pid + 1})`, { hasText: new RegExp(`^${shown(child.pid)}$`) }),
   });
   const indent = async (row: typeof first) =>
     Number.parseFloat(
@@ -152,7 +155,7 @@ test("SIGSTOP and SIGCONT pause and resume a process without killing it", async 
 
   await page.goto(`/infrastructure/processes?server_id=${host.id}&q=rsyslogd`);
   const table = page.getByRole("table", { name: "Processes" });
-  const row = tableRow(table, String(target.pid)).first();
+  const row = tableRow(table, shown(target.pid)).first();
   await (await openRowActions(page, row)).getByRole("menuitem", { name: "Send signal" }).click();
 
   const dialog = page.getByRole("dialog", { name: /^Send SIGTERM to rsyslogd\?/ });
@@ -184,7 +187,7 @@ test("SIGKILL needs the pid typed, and kills the unit's main process for real", 
 
   await page.goto(`/infrastructure/processes?server_id=${host.id}&q=cron`);
   const table = page.getByRole("table", { name: "Processes" });
-  const row = tableRow(table, String(pid)).first();
+  const row = tableRow(table, shown(pid)).first();
   await (await openRowActions(page, row)).getByRole("menuitem", { name: "Send signal" }).click();
   await page.getByRole("dialog").getByRole("combobox").selectOption("SIGKILL");
 
@@ -203,7 +206,7 @@ test("SIGKILL needs the pid typed, and kills the unit's main process for real", 
   await page.keyboard.press("Escape");
 
   /* Gone from the live table, and its unit reports what systemd would. */
-  await expect(tableRow(table, String(pid))).toHaveCount(0, { timeout: 30_000 });
+  await expect(tableRow(table, shown(pid))).toHaveCount(0, { timeout: 30_000 });
   await expect
     .poll(async () => (await service(HOST, "cron.service")).active_state, { timeout: 30_000 })
     .toBe("failed");

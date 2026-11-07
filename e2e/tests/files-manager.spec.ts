@@ -110,7 +110,9 @@ function rowFor(table: Locator, path: string): Locator {
 
 async function rowAction(page: Page, row: Locator, action: string): Promise<void> {
   await row.getByRole("button", { name: "Row actions" }).click();
-  await page.getByRole("menuitem", { name: action, exact: true }).click();
+  /* A file that only downloads lists "Download" twice: as its open
+   * action and as the download action. Either does the same. */
+  await page.getByRole("menuitem", { name: action, exact: true }).first().click();
 }
 
 function sha(buffer: Buffer): string {
@@ -356,7 +358,8 @@ test("a binary file is never offered to the editor as text", async ({ page }) =>
   const pane = page.getByRole("region", { name: `File ${dir}/mislabelled.txt` });
   await expect(pane.getByText("This file is not text")).toBeVisible();
   await expect(pane.locator(".cm-content")).toHaveCount(0);
-  await expect(pane.getByRole("button", { name: "Save" })).toHaveCount(0);
+  /* Nothing can be written back over the binary from here. */
+  await expect(pane.getByRole("button", { name: "Save" })).toBeDisabled();
   await pane.getByRole("button", { name: "Close file" }).click();
 
   /* A file whose type is binary is a download, straight from the row. */
