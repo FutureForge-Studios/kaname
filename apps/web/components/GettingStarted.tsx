@@ -394,7 +394,8 @@ function StepRow({ step }: { step: VisibleStep }) {
       <Link
         href={step.target}
         className={cn(
-          "group/step flex items-start gap-2.5 px-4 py-2 outline-none",
+          "group/step flex items-start gap-2.5 px-4 outline-none",
+          step.done ? "py-1.5" : "py-2",
           "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
           "hover:bg-[var(--kn-surface-2)] focus-visible:bg-[var(--kn-surface-2)]",
           "focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-[var(--kn-ring)]",
@@ -424,7 +425,10 @@ function StepRow({ step }: { step: VisibleStep }) {
               {step.done ? "Done" : "To do"}
             </span>
           </span>
-          <span className="mt-0.5 block text-sm text-[var(--kn-text-3)]">{step.why}</span>
+          {/* A finished step has made its case; only what is left explains itself. */}
+          {!step.done && (
+            <span className="mt-0.5 block text-sm text-[var(--kn-text-3)]">{step.why}</span>
+          )}
         </span>
         <ArrowRight
           size={12}
