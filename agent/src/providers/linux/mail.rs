@@ -646,6 +646,9 @@ impl Mail for MailOps {
             MailDeployOutcome::Failed
         };
         let steps = self.status(ctx).await.map(|s| s.steps).unwrap_or_default();
+        // The binary is in place whatever the installer's verdict, so this
+        // host now serves `mail.*`; the next hello has to say so.
+        crate::providers::announce_capabilities_changed();
         Ok(MailDeployResult {
             outcome,
             version: p.version.clone(),

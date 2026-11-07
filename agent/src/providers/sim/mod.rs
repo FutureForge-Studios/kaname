@@ -91,7 +91,10 @@ pub async fn open(opts: Options) -> anyhow::Result<ProviderRef> {
 
 #[async_trait]
 impl Provider for SimProvider {
+    /// Read at startup for the hello frame, like the Linux probe: a deploy
+    /// on a host that had no mail server shows up on the next connection.
     fn capabilities(&self) -> Vec<String> {
+        let mail = self.sim.world.lock().mail.installed;
         [
             cap::SYSTEMD,
             cap::DOCKER,
@@ -109,6 +112,7 @@ impl Provider for SimProvider {
             cap::SIMULATED,
         ]
         .iter()
+        .filter(|c| **c != cap::YUNORI || mail)
         .map(|c| c.to_string())
         .collect()
     }
@@ -272,7 +276,7 @@ mod tests {
 
     #[tokio::test]
     async fn capabilities_name_yunori_and_simulated() {
-        let provider = open_sim("caps").await;
+        let provider = open_sim("mail-caps").await;
         let caps = provider.capabilities();
         assert!(caps.iter().any(|c| c == "yunori"), "{caps:?}");
         assert!(caps.iter().any(|c| c == "simulated"), "{caps:?}");
@@ -285,6 +289,40 @@ mod tests {
         let host = provider.host(&Ctx::background()).await.unwrap();
         assert!(host.simulated);
         assert!(host.hostname.ends_with(".kaname.internal"));
+        provider.close().await;
+    }
+
+    /// Only the mail host arrives with Yunori. Every simulated host used to
+    /// advertise it, and the control plane adopted four mail servers that
+    /// all claimed mail.futureforge.dev.
+    #[tokio::test]
+    async fn only_a_mail_host_arrives_with_yunori_and_a_deploy_brings_it() {
+        let provider = open_sim("db-caps").await;
+        assert!(!provider.capabilities().iter().any(|c| c == "yunori"));
+        let ctx = Ctx::background();
+        let status = provider.mail().status(&ctx).await.unwrap();
+        assert!(!status.installed);
+
+        let (_, stream) = collector();
+        let result = provider
+            .mail()
+            .deploy(
+                &ctx,
+                MailDeployParams {
+                    version: "0.1.0".into(),
+                    url: "https://yunori.email/server/v0.1.0/yunori-mail-x86_64-linux.tar.gz".into(),
+                    sha256: "0".repeat(64),
+                    domain: "example.org".into(),
+                    hostname: "mail.example.org".into(),
+                    admin_email: "ops@example.net".into(),
+                    ..Default::default()
+                },
+                stream,
+            )
+            .await
+            .unwrap();
+        assert!(result.setup_url.is_some());
+        assert!(provider.capabilities().iter().any(|c| c == "yunori"));
         provider.close().await;
     }
 
