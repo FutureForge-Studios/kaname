@@ -1,6 +1,7 @@
-import { and, eq, sql } from "@kaname/db";
+import { and, eq, inArray, notInArray, sql } from "@kaname/db";
 import {
   backupRuns,
+  backupSchedules,
   certificates,
   containers,
   dbDatabases,
@@ -815,9 +816,23 @@ export function registerJobHandlers(worker: JobWorker): void {
         timeoutMs: ctx.job.timeoutMs,
         signal: ctx.signal,
       });
+      // The cache is what the panel shows as "applied state"; leaving it on
+      // the old values made a successful apply look like it did nothing.
       await ctx.db
         .update(sshConfigs)
         .set({
+          ...(p.port !== undefined ? { port: p.port } : {}),
+          ...(p.permit_root_login !== undefined ? { permitRootLogin: p.permit_root_login } : {}),
+          ...(p.password_authentication !== undefined
+            ? { passwordAuthentication: p.password_authentication }
+            : {}),
+          ...(p.pubkey_authentication !== undefined
+            ? { pubkeyAuthentication: p.pubkey_authentication }
+            : {}),
+          ...(p.max_auth_tries !== undefined ? { maxAuthTries: p.max_auth_tries } : {}),
+          ...(p.allow_users && p.allow_users.length > 0 ? { allowUsers: p.allow_users } : {}),
+          ...(p.allow_groups && p.allow_groups.length > 0 ? { allowGroups: p.allow_groups } : {}),
+          ...(p.x11_forwarding !== undefined ? { x11Forwarding: p.x11_forwarding } : {}),
           lastAppliedAt: new Date(),
           pendingRollbackToken: result.rollback_token,
           pendingRollbackUntil: result.rollback_token
@@ -839,6 +854,31 @@ export function registerJobHandlers(worker: JobWorker): void {
         .update(backupRuns)
         .set({ status: "running", startedAt: new Date() })
         .where(eq(backupRuns.id, run_id));
+
+      // The schedule's own last-run status is what the Schedules tab and
+      // its filter read. It was set to "queued" by the route and never
+      // touched again, so every manual run looked queued forever.
+      const [runRow] = await ctx.db
+        .select({ scheduleId: backupRuns.scheduleId })
+        .from(backupRuns)
+        .where(eq(backupRuns.id, run_id))
+        .limit(1);
+      const scheduleId = runRow?.scheduleId ?? null;
+      const [schedule] = scheduleId
+        ? await ctx.db
+            .select()
+            .from(backupSchedules)
+            .where(eq(backupSchedules.id, scheduleId))
+            .limit(1)
+        : [];
+      const settleSchedule = async (status: "queued" | "running" | "succeeded" | "failed") => {
+        if (!scheduleId) return;
+        await ctx.db
+          .update(backupSchedules)
+          .set({ lastRunStatus: status, updatedAt: new Date() })
+          .where(eq(backupSchedules.id, scheduleId));
+      };
+      await settleSchedule("running");
 
       let snapshot: MethodResult<"backup.run">;
       try {
@@ -863,6 +903,7 @@ export function registerJobHandlers(worker: JobWorker): void {
             .update(backupRuns)
             .set({ status: "queued", startedAt: null })
             .where(eq(backupRuns.id, run_id));
+          await settleSchedule("queued");
           throw err;
         }
         const message =
@@ -875,6 +916,7 @@ export function registerJobHandlers(worker: JobWorker): void {
           .update(backupRuns)
           .set({ status: "failed", error: message.slice(0, 2000), finishedAt: new Date() })
           .where(eq(backupRuns.id, run_id));
+        await settleSchedule("failed");
         ctx.events.publish(
           "backups",
           "backup.failed",
@@ -888,6 +930,11 @@ export function registerJobHandlers(worker: JobWorker): void {
         .insert(restorePoints)
         .values({
           runId: run_id,
+          // Without the schedule a restore point cannot be read back: the
+          // repository and its password live on the schedule, so restore
+          // and verify refused every snapshot a run had ever produced.
+          scheduleId,
+          scope: (schedule?.scope ?? []) as { kind: string; selectors: string[] }[],
           serverId,
           label: snapshot.id.slice(0, 8),
           snapshotId: snapshot.id,
@@ -908,16 +955,85 @@ export function registerJobHandlers(worker: JobWorker): void {
         })
         .where(eq(backupRuns.id, run_id));
 
+      await settleSchedule("succeeded");
+
       ctx.events.publish(
         "backups",
         "backup.succeeded",
         { run_id, snapshot_id: snapshot.id },
         serverId,
       );
+
+      // Retention was stored on every schedule and shown on every form,
+      // but nothing ever applied it: the repository only grew. It is
+      // applied after each successful run, as `restic forget --prune`
+      // would be, and the restore points whose snapshots the repository
+      // no longer holds are removed so the panel never offers one.
+      if (schedule) {
+        const retention = schedule.retention as {
+          keep_last: number;
+          keep_daily: number;
+          keep_weekly: number;
+          keep_monthly: number;
+        };
+        const prune = ctx.hub.stream(
+          serverId,
+          "backup.prune",
+          {
+            repository: rest.repository,
+            password_ref: rest.password_ref,
+            keep_last: retention.keep_last,
+            keep_daily: retention.keep_daily,
+            keep_weekly: retention.keep_weekly,
+            keep_monthly: retention.keep_monthly,
+          },
+          (d) => void ctx.log_("info", d.trim()),
+          { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
+        );
+        const pruned = await prune.done;
+        const listed = await ctx.hub.call(
+          serverId,
+          "backup.list",
+          { repository: rest.repository, password_ref: rest.password_ref },
+          { signal: ctx.signal },
+        );
+        const kept = listed.snapshots.map((entry) => entry.id);
+        const gone = await ctx.db
+          .delete(restorePoints)
+          .where(
+            and(
+              eq(restorePoints.scheduleId, schedule.id),
+              eq(restorePoints.serverId, serverId),
+              kept.length > 0 ? notInArray(restorePoints.snapshotId, kept) : undefined,
+            ),
+          )
+          .returning({ id: restorePoints.id });
+        await ctx.log_(
+          "info",
+          `retention removed ${pruned.removed} snapshot(s) from the repository and ${gone.length} restore point(s) from Kaname`,
+        );
+      }
       return snapshot;
     },
     "backup.restore": streaming("backup.restore"),
-    "backup.verify": streaming("backup.verify"),
+    "backup.verify": async (ctx) => {
+      const result = (await streaming("backup.verify")(ctx)) as MethodResult<"backup.verify">;
+      // A verify that found damage answers ok: false rather than an RPC
+      // error. Filed as a success it read as a clean bill of health; and a
+      // clean one was never written down, so every point stayed unverified.
+      if (!result.ok) {
+        throw new Error(
+          `Snapshot verification found problems: ${result.errors.join("; ") || "unspecified"}`,
+        );
+      }
+      if (ctx.job.targetId) {
+        await ctx.db
+          .update(restorePoints)
+          .set({ verifiedAt: new Date(), updatedAt: new Date() })
+          .where(eq(restorePoints.id, ctx.job.targetId));
+      }
+      return result;
+    },
     "backup.prune": streaming("backup.prune"),
 
     /* lifecycle */

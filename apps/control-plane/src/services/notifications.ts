@@ -1269,6 +1269,13 @@ function escapeHtml(value: string): string {
 }
 
 function describe(err: unknown): string {
+  // fetch() reports every transport failure as "TypeError: fetch failed"
+  // and keeps the real one (ECONNREFUSED, ENOTFOUND, a TLS error) in
+  // `cause`. Reporting the wrapper told the operator nothing about what
+  // the far end — or the network in between — actually said.
+  if (err instanceof TypeError && err.message === "fetch failed" && err.cause instanceof Error) {
+    return describe(err.cause);
+  }
   if (err instanceof Error) {
     const code = (err as { code?: string }).code;
     const message = err.message || err.name;

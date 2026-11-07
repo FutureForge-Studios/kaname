@@ -122,8 +122,9 @@ export interface RollbackWindow {
 export interface RollbackBannerProps {
   window: RollbackWindow;
   /**
-   * Cancels the pending revert. Omit for sshd, where the host verifies
-   * the new configuration itself and there is nothing to confirm.
+   * Cancels the pending revert. The firewall and sshd both need it: the
+   * host's revert timer runs until a confirm arrives, whatever it thinks
+   * of the new configuration.
    */
   onConfirm?: () => void;
   confirming?: boolean;
