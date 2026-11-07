@@ -18,6 +18,13 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
 
   /*
+   * Overridable so an e2e stack can build and serve its own copy beside a
+   * running `next dev` (and beside other e2e stacks) without the two
+   * overwriting each other's output.
+   */
+  distDir: process.env.KANAME_NEXT_DIST_DIR ?? ".next",
+
+  /*
    * The runtime image copies `.next/standalone` and runs it directly, so
    * it carries no pnpm store and no workspace symlinks. Next has to be
    * told to emit it, and — in a workspace — told where the root is, or
