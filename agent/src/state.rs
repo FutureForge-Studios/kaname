@@ -217,17 +217,6 @@ impl Store {
             .context("build client tls config")?;
         Ok(Arc::new(config))
     }
-
-    /// Not-after of the installed certificate, as RFC 3339.
-    pub fn certificate_expiry(&self) -> anyhow::Result<String> {
-        let raw = self.read_file(CERT_FILE)?;
-        let (label, der) = pem_rfc7468::decode_vec(&raw).context("decode cert.pem")?;
-        if label != "CERTIFICATE" {
-            bail!("{CERT_FILE} holds an unexpected {label:?} block");
-        }
-        let (_, cert) = x509_parser::parse_x509_certificate(&der).context("parse cert.pem")?;
-        Ok(cert.validity().not_after.to_rfc2822().unwrap_or_default())
-    }
 }
 
 #[cfg(test)]

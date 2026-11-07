@@ -524,7 +524,7 @@ impl Files for FileOps {
         let ctx = ctx.clone();
         blocking(move || {
             let (mut entries, total) = walk_usage(&ctx, &target, depth, &mounts)?;
-            entries.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+            entries.sort_by_key(|e| std::cmp::Reverse(e.bytes));
             Ok(FsUsageResult { entries, total })
         })
         .await
@@ -1586,10 +1586,13 @@ mod tests {
 
     /// A stream that remembers what was sent and plays back a fixed set of
     /// chunks, then reports EOF.
+    /// Every chunk a test stream was handed, with its encoding.
+    type Sent = Vec<(Vec<u8>, Encoding)>;
+
     #[derive(Default)]
     struct Recorder {
         inbox: tokio::sync::Mutex<VecDeque<Vec<u8>>>,
-        sent: parking_lot::Mutex<Vec<(Vec<u8>, Encoding)>>,
+        sent: parking_lot::Mutex<Sent>,
     }
 
     #[async_trait]
@@ -2135,12 +2138,13 @@ mod tests {
             .unwrap();
         assert_eq!(result.size as usize, payload.len());
         assert_eq!(result.mime, "application/octet-stream");
-        let sent = stream.sent.lock();
-        assert_eq!(sent.len(), 2);
-        assert!(sent.iter().all(|(_, enc)| *enc == Encoding::Base64));
-        let joined: Vec<u8> = sent.iter().flat_map(|(d, _)| d.clone()).collect();
-        assert_eq!(joined, payload);
-        drop(sent);
+        {
+            let sent = stream.sent.lock();
+            assert_eq!(sent.len(), 2);
+            assert!(sent.iter().all(|(_, enc)| *enc == Encoding::Base64));
+            let joined: Vec<u8> = sent.iter().flat_map(|(d, _)| d.clone()).collect();
+            assert_eq!(joined, payload);
+        }
 
         let err = ops
             .download(&ctx, FsDownloadParams { path: s(root.path()) }, stream.clone())

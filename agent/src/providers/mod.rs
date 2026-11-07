@@ -19,11 +19,11 @@ pub mod sim;
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
-use tokio_util::sync::{CancellationToken, WaitForCancellationFuture};
+use tokio_util::sync::CancellationToken;
 
 pub use payloads::*;
 
@@ -102,6 +102,7 @@ fn fmt_reason(reason: &Option<String>) -> String {
 }
 
 impl ProviderError {
+    #[cfg(test)]
     pub fn unsupported() -> Self {
         ProviderError::Unsupported(None)
     }
@@ -200,10 +201,6 @@ impl Ctx {
         }
     }
 
-    pub fn cancelled(&self) -> WaitForCancellationFuture<'_> {
-        self.token.cancelled()
-    }
-
     /// The error a cancelled context stands for: a deadline is a timeout, a
     /// `can` frame is a cancel, and neither is an internal failure.
     pub fn error(&self) -> ProviderError {
@@ -220,10 +217,6 @@ impl Ctx {
         } else {
             Ok(())
         }
-    }
-
-    pub fn remaining(&self) -> Option<Duration> {
-        self.deadline.map(|d| d.saturating_duration_since(Instant::now()))
     }
 
     /// A child context that is cancelled with its parent and can also be
@@ -298,6 +291,8 @@ pub mod topic {
     pub const SSH_SESSION: &str = "ssh.session";
     pub const CERT_EXPIRING: &str = "cert.expiring";
     pub const DISK_PRESSURE: &str = "disk.pressure";
+    /// Mirrors the contract's topic list; no provider raises it yet.
+    #[allow(dead_code)]
     pub const LOG_ANOMALY: &str = "log.anomaly";
 }
 

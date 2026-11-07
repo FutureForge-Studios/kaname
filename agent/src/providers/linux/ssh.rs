@@ -687,7 +687,7 @@ pub mod render {
             return Err(invalid("a public key and its comment must each be a single line"));
         }
 
-        let fields: Vec<&str> = public_key.trim().split_whitespace().collect();
+        let fields: Vec<&str> = public_key.split_whitespace().collect();
         if fields.len() < 2 {
             return Err(invalid("public key must be `<type> <base64>`"));
         }

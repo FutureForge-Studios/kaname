@@ -489,7 +489,7 @@ pub fn uid_for(name: &str) -> i64 {
 /// produces something of the right size and shape without the tree
 /// carrying megabytes of nothing.
 pub fn binary_filler(p: &str, size: i64) -> Vec<u8> {
-    let size = size.min(8 * MIB).max(0) as usize;
+    let size = size.clamp(0, 8 * MIB) as usize;
     let mut out = vec![0u8; size];
     let mut seed = mix(p.len() as u64 ^ 0xb10b);
     for (i, b) in out.iter_mut().enumerate() {
@@ -1055,7 +1055,7 @@ impl Files for SimFiles {
         let mounts: Vec<&str> = self.0.id.disks.iter().map(|d| d.mount).collect();
         let mut entries = Vec::new();
         collect(root, &resolved, 1, p.depth, &mounts, &mut entries);
-        entries.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.bytes));
         Ok(FsUsageResult {
             entries,
             total: tree_size(root),
