@@ -53,7 +53,7 @@ import {
   type DataTableRowAction,
   type SortState,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { PageError } from "@/components/PageError";
 import { ViewTabs } from "@/components/ViewTabs";
@@ -168,6 +168,7 @@ export default function SshPage() {
   });
 
   const [addingKey, setAddingKey] = React.useState(false);
+  useOpenFromQuery("new", () => setAddingKey(true), can("security.ssh:write"));
   const [removingKeys, setRemovingKeys] = React.useState<SshKey[] | null>(null);
   const [rollback, setRollback] = React.useState<RollbackWindow | null>(null);
   const [configError, setConfigError] = React.useState<ApiError | null>(null);

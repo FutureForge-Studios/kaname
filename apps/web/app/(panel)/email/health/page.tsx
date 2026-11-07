@@ -3,7 +3,15 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { BadgeCheck, ChevronDown, ChevronRight, RefreshCw, ShieldCheck, Stethoscope } from "lucide-react";
+import {
+  BadgeCheck,
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  RefreshCw,
+  ShieldCheck,
+  Stethoscope,
+} from "lucide-react";
 import type { MailServer } from "@kaname/contract";
 import {
   Button,
@@ -57,6 +65,7 @@ export default function MailHealthPage() {
   const pathname = usePathname() ?? "/email/health";
   const searchParams = useSearchParams();
   const fromUrl = searchParams.get("server_id");
+  const can = useCan();
 
   const query = useMailServers();
   const servers = query.data?.data ?? [];
@@ -129,12 +138,26 @@ export default function MailHealthPage() {
           <SectionCard>
             <EmptyState
               icon={BadgeCheck}
-              title="No mail server to check"
-              description="Health comes from Yunori's doctor on a host Kaname manages. Deploy or adopt one first."
+              title="No mail server to check yet"
+              description="Once a Yunori Mail Server runs on one of your hosts, this page shows its doctor verdict, every failing check with the fix beside it, its TLS certificate and an on-demand preflight of port 25, reverse DNS and blocklists."
               action={
-                <Button variant="primary" size="sm" onClick={() => router.push("/email")}>
-                  Go to mail servers
-                </Button>
+                can("email.servers:write") ? (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={Plus}
+                    onClick={() => router.push("/email?deploy=1")}
+                  >
+                    Deploy Yunori Mail Server
+                  </Button>
+                ) : undefined
+              }
+              secondaryAction={
+                can("email.servers:write") ? (
+                  <Button variant="secondary" size="sm" onClick={() => router.push("/email?adopt=1")}>
+                    Adopt one installed by hand
+                  </Button>
+                ) : undefined
               }
             />
           </SectionCard>

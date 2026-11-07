@@ -13,7 +13,7 @@ import {
   type DataTableColumn,
   type DataTableRowAction,
 } from "@kaname/ui";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { formatCount } from "@/lib/format";
 import { useCan } from "@/lib/queries";
@@ -98,6 +98,7 @@ export default function DomainsPage() {
   const remove = useDeleteDomain();
 
   const [creating, setCreating] = React.useState(false);
+  useOpenFromQuery("new", () => setCreating(true), can("websites.domains:write"));
   const [editing, setEditing] = React.useState<Domain | null>(null);
   const [issuing, setIssuing] = React.useState<Domain | null>(null);
   const [pendingDelete, setPendingDelete] = React.useState<Domain | null>(null);

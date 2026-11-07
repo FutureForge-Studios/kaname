@@ -67,7 +67,7 @@ import {
   type Tone,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
-import { ResourcePage, useResourceListState } from "@/components/ResourcePage";
+import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { api, type ApiError, type ListResult } from "@/lib/api";
 import {
@@ -940,6 +940,7 @@ function RulesTab({ tabs }: { tabs: React.ReactNode }) {
 
   const [creating, setCreating] = React.useState(false);
   const [editing, setEditing] = React.useState<AlertRule | null>(null);
+  useOpenFromQuery("new", () => setCreating(true), can("monitoring.alerts:write"));
   const [deleting, setDeleting] = React.useState<AlertRule | null>(null);
 
   const setEnabled = useResourceMutation<{ ids: string[]; enabled: boolean }, unknown>({
