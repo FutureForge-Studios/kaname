@@ -25,6 +25,13 @@ const nextConfig: NextConfig = {
   distDir: process.env.KANAME_NEXT_DIST_DIR ?? ".next",
 
   /*
+   * `next build` rewrites the tsconfig it type-checks with, adding its
+   * distDir's generated types. A per-stack build points this at a
+   * throwaway, gitignored copy so tsconfig.json itself is never touched.
+   */
+  typescript: { tsconfigPath: process.env.KANAME_NEXT_TSCONFIG ?? "tsconfig.json" },
+
+  /*
    * The runtime image copies `.next/standalone` and runs it directly, so
    * it carries no pnpm store and no workspace symlinks. Next has to be
    * told to emit it, and — in a workspace — told where the root is, or

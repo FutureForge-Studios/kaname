@@ -46,7 +46,7 @@ interface StackFile {
   pids: number[];
 }
 
-function record(pid: number): void {
+export function record(pid: number): void {
   const pids = readStack().pids;
   if (pids.includes(pid)) return;
   pids.push(pid);
@@ -117,7 +117,9 @@ export async function boot(): Promise<void> {
  * restarted units and terminal recordings.
  */
 function resetDatabase(): Promise<void> {
-  return run("db-reset", process.execPath, ["--import", "tsx", "src/reset.ts"], {
+  // reset.cli.ts, not reset.ts: the module only exports reset() since the
+  // CLI entry moved to its own file, so running it reset nothing.
+  return run("db-reset", process.execPath, ["--import", "tsx", "src/reset.cli.ts"], {
     cwd: join(repoRoot, "packages", "db"),
     env: { DATABASE_URL: databaseUrl, KANAME_ENV: "development" },
   });
@@ -142,7 +144,7 @@ async function buildAgent(): Promise<void> {
   await copyFile(built, agentBinary);
 }
 
-function startControlPlane(): Managed {
+export function startControlPlane(): Managed {
   return launch("control-plane", process.execPath, ["--import", "tsx", "src/main.ts"], {
     cwd: join(repoRoot, "apps", "control-plane"),
     env: {
@@ -157,6 +159,12 @@ function startControlPlane(): Managed {
       KANAME_BOOTSTRAP_PASSWORD: ownerPassword,
       LOG_LEVEL: "info",
       LOG_PRETTY: "false",
+      // The yunori-mail release feed. The suite cannot reach yunori.email,
+      // so the Email specs serve a local one and point the control plane
+      // at it; forwarded explicitly so a stray value in .env cannot win.
+      ...(process.env["KANAME_YUNORI_FEED"]
+        ? { KANAME_YUNORI_FEED: process.env["KANAME_YUNORI_FEED"] }
+        : {}),
     },
   });
 }
@@ -232,9 +240,45 @@ function buildPanel(): Promise<void> {
         KANAME_CONTROL_PLANE_URL: apiUrl,
         KANAME_PUBLIC_URL: webUrl,
         KANAME_NEXT_DIST_DIR: nextDistDir,
+        ...panelTsconfigEnv(),
       },
-    }).finally(tidyTsconfig),
+    }).finally(() => {
+      normaliseNextEnv();
+      tidyTsconfig();
+    }),
   );
+}
+
+/*
+ * A build into a per-stack distDir type-checks against its own gitignored
+ * tsconfig, so the generated-types path Next adds lands there and never in
+ * the tracked tsconfig.json. The default `.next` build needs nothing.
+ */
+function panelTsconfigEnv(): Record<string, string> {
+  if (nextDistDir === ".next") return {};
+  const name = `tsconfig.e2e-${nextDistDir.replace(/^\.next-?/, "").replace(/[^\w-]/g, "_") || "stack"}.json`;
+  const config = {
+    extends: "./tsconfig.json",
+    include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", `${nextDistDir}/types/**/*.ts`],
+    exclude: ["node_modules", ".next", ".next-*"],
+  };
+  writeFileSync(join(repoRoot, "apps", "web", name), `${JSON.stringify(config, null, 2)}\n`);
+  return { KANAME_NEXT_TSCONFIG: name };
+}
+
+/*
+ * Next also writes the distDir into next-env.d.ts, which is tracked. Put
+ * the default path back; the file is otherwise Next's own boilerplate.
+ */
+function normaliseNextEnv(): void {
+  const path = join(repoRoot, "apps", "web", "next-env.d.ts");
+  try {
+    const text = readFileSync(path, "utf8");
+    const fixed = text.replace(/\.\/\.next-[^/]+\/types\//g, "./.next/types/");
+    if (fixed !== text) writeFileSync(path, fixed);
+  } catch {
+    /* never fail a run over tidying a generated file */
+  }
 }
 
 /*
@@ -293,6 +337,7 @@ function startPanel(): Managed {
       KANAME_CONTROL_PLANE_URL: apiUrl,
       KANAME_PUBLIC_URL: webUrl,
       KANAME_NEXT_DIST_DIR: nextDistDir,
+      ...panelTsconfigEnv(),
     },
   });
 }
