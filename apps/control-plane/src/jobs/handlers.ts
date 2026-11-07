@@ -15,6 +15,7 @@ import {
   services,
   sites,
   sshConfigs,
+  storageSamples,
   updateRuns,
 } from "@kaname/db/schema";
 import type {
@@ -70,6 +71,73 @@ async function siteWrite<T>(ctx: JobContext, siteId: string, work: () => Promise
     }
     throw err;
   }
+}
+
+/** Where a top-level path's bytes are reported in the storage breakdown. */
+const STORAGE_CATEGORIES: readonly { prefix: string; label: string; kind: string }[] = [
+  { prefix: "/var/www", label: "Websites", kind: "sites" },
+  { prefix: "/var/lib/postgresql", label: "Databases", kind: "databases" },
+  { prefix: "/var/lib/mysql", label: "Databases", kind: "databases" },
+  { prefix: "/var/vmail", label: "Mail", kind: "mail" },
+  { prefix: "/var/mail", label: "Mail", kind: "mail" },
+  { prefix: "/opt/stalwart", label: "Mail", kind: "mail" },
+  { prefix: "/var/lib/docker", label: "Containers", kind: "containers" },
+  { prefix: "/var/backups", label: "Backups", kind: "backups" },
+  { prefix: "/srv/backups", label: "Backups", kind: "backups" },
+  { prefix: "/var/log", label: "Logs", kind: "logs" },
+  { prefix: "/home", label: "Home directories", kind: "home" },
+];
+
+/**
+ * Turns one fs.usage walk into the cached breakdown GET /storage serves.
+ * Capacity comes from the host's mounts (system.metrics) because a walk
+ * of a subtree says nothing about the device it sits on; if the agent
+ * cannot report them the walk's own total stands in, rather than failing
+ * a sample that did succeed.
+ */
+async function recordStorageSample(
+  ctx: JobContext,
+  serverId: string,
+  usage: MethodResult<"fs.usage">,
+  durationMs: number,
+): Promise<void> {
+  const disks = await ctx.hub
+    .call(serverId, "system.metrics", {}, { signal: ctx.signal })
+    .then((sample) => sample.disks)
+    .catch(() => []);
+
+  const total = disks.length > 0 ? disks.reduce((sum, d) => sum + d.total, 0) : usage.total;
+  const used = disks.length > 0 ? disks.reduce((sum, d) => sum + d.used, 0) : usage.total;
+  const sampledAt = new Date();
+
+  const categories = new Map<string, { label: string; path: string; bytes: number; kind: string }>();
+  for (const category of STORAGE_CATEGORIES) {
+    const entry = usage.entries.find((e) => e.path === category.prefix);
+    if (!entry) continue;
+    const existing = categories.get(category.label);
+    if (existing) existing.bytes += entry.bytes;
+    else categories.set(category.label, { label: category.label, path: category.prefix, bytes: entry.bytes, kind: category.kind });
+  }
+
+  const largest = usage.entries
+    .filter((e) => e.kind !== "category")
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, 100)
+    .map((e) => ({ path: e.path, bytes: e.bytes, kind: "directory", modified_at: sampledAt.toISOString() }));
+
+  await ctx.db.insert(storageSamples).values({
+    serverId,
+    sampledAt,
+    total,
+    used,
+    available: Math.max(0, total - used),
+    mounts: disks,
+    categories: [...categories.values()],
+    largest,
+    inodesTotal: disks.reduce((sum, d) => sum + (d.inodes_total ?? 0), 0) || null,
+    inodesUsed: disks.reduce((sum, d) => sum + (d.inodes_used ?? 0), 0) || null,
+    durationMs,
+  });
 }
 
 /** The agent answered with this error code, as opposed to being unreachable. */
@@ -363,10 +431,16 @@ export function registerJobHandlers(worker: JobWorker): void {
     "fs.extract": streaming("fs.extract"),
     "fs.usage": async (ctx) => {
       const serverId = requireServer(ctx);
+      const started = Date.now();
       const result = await ctx.hub.call(serverId, "fs.usage", params(ctx), {
         timeoutMs: ctx.job.timeoutMs,
         signal: ctx.signal,
       });
+      // GET /storage reads only storage_samples, and nothing used to
+      // write one: "Take a sample" succeeded and the page kept showing
+      // the old breakdown for ever. The walk is persisted here, beside
+      // the mounts the host reports right now.
+      await recordStorageSample(ctx, serverId, result, Date.now() - started);
       ctx.events.publish("servers", "storage.sampled", { server_id: serverId }, serverId);
       return result;
     },

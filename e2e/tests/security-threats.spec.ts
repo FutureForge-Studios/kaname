@@ -28,7 +28,7 @@ async function threatRow(page: Page, ip: string) {
 async function rowAction(page: Page, row: ReturnType<Page["locator"]>, action: string) {
   await row.getByRole("button", { name: "Row actions" }).focus();
   await page.keyboard.press("Enter");
-  await page.getByRole("menuitem", { name: action }).click();
+  await page.getByRole("menuitem", { name: action, exact: true }).click();
 }
 
 async function drawerJobs(page: Page, count: number): Promise<void> {
@@ -69,9 +69,12 @@ test.describe("threat protection", () => {
     await expect(page.getByRole("radio", { name: "Last 7 days" })).toHaveAttribute("aria-checked", "true");
 
     await page.getByLabel("Disposition").selectOption("banned");
-    await expect(table.locator("tbody tr").first()).toBeVisible();
-    const dispositions = await table.locator("tbody tr").allInnerTexts();
-    for (const text of dispositions) expect(text).toContain("banned");
+    await expect
+      .poll(async () => {
+        const rows = await table.locator("tbody tr").allInnerTexts();
+        return rows.length > 0 && rows.every((text) => text.includes("banned"));
+      })
+      .toBe(true);
 
     await page.getByPlaceholder("Search address, target or kind").fill("198.18.255.254");
     await expect(page.getByText("Nothing recorded in this window")).toBeVisible();

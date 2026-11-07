@@ -56,12 +56,13 @@ test("failed-only narrows the fleet to units that really failed, on every host",
   const state = await columnIndex(table, "State");
   const serverCol = await columnIndex(table, "Server");
   /* Each simulated host ships one failed unit; none is green. */
-  await expect(table.locator("tbody tr")).toHaveCount(4);
+  const fleet = await ownerCall<{ name: string }[]>("GET", "/servers?per_page=100");
+  await expect(table.locator("tbody tr")).toHaveCount(fleet.length);
   for (const text of await table.locator(`tbody tr td:nth-child(${state + 1})`).allInnerTexts()) {
     expect(text).toContain("failed");
   }
   const hosts = await table.locator(`tbody tr td:nth-child(${serverCol + 1})`).allInnerTexts();
-  expect(hosts.map((h) => h.trim()).sort()).toEqual(["db-01", "edge-01", "forge-01", "mail-01"]);
+  expect(hosts.map((h) => h.trim()).sort()).toEqual(fleet.map((s) => s.name).sort());
 
   /* The state select is driven by the switch, not fighting it. */
   await expect(page.getByLabel("Filter by unit state")).toBeDisabled();
@@ -172,7 +173,7 @@ test("a verb the host refuses fails with the host's reason and is not retried", 
 
   await page.goto(`/jobs/${queued.id}`);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Reload service");
-  await expect(jobStatusPill(page.locator("main"))).toContainText("Failed");
+  await expect(jobStatusPill(page.getByRole("heading", { level: 1 }))).toContainText("Failed");
   await expect(page.getByText("precondition_failed").first()).toBeVisible();
   await expect(page.getByText(`unit ${UNIT} is not running`).first()).toBeVisible();
   /* The log is the worker's own record, including the RPC it sent. */

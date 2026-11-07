@@ -1,6 +1,6 @@
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { apiUrl, webUrl } from "../support/config.js";
+import { apiUrl, artifactsDir, webUrl } from "../support/config.js";
 import { call, freshIp, type ErrorBody } from "../support/platform.js";
 import {
   hostQueueFile,
@@ -22,7 +22,13 @@ import {
  * the outcome GET /setup/state records for that step.
  * ------------------------------------------------------------------ */
 
-test.describe.configure({ mode: "serial" });
+/*
+ * Ordered, not serial: one worker runs the tests in file order, and the
+ * browser's cookies are saved after each one, so a failure is reported
+ * without skipping every step after it — the instance it left behind is
+ * still the one the next test picks up.
+ */
+const jarFile = `${artifactsDir}/wizard-jar.json`;
 
 const OWNER = {
   name: "Wren Installer",
@@ -48,15 +54,21 @@ async function state(cookie?: string): Promise<SetupStateBody> {
 }
 
 let page: Page;
-let ownerCookie = "";
 
 test.beforeAll(async ({ browser }) => {
   const context = await browser.newContext({
     baseURL: webUrl,
-    extraHTTPHeaders: { "x-forwarded-for": freshIp() },
+    extraHTTPHeaders: { "x-forwarded-for": "198.18.0.7" },
     permissions: ["clipboard-read", "clipboard-write"],
+    ...(existsSync(jarFile) ? { storageState: jarFile } : {}),
   });
   page = await context.newPage();
+  /* A restarted worker resumes on whatever screen the instance is at. */
+  if (existsSync(jarFile)) await page.goto("/setup");
+});
+
+test.afterEach(async () => {
+  await page.context().storageState({ path: jarFile });
 });
 
 async function cookieOf(): Promise<string> {
@@ -67,6 +79,7 @@ async function cookieOf(): Promise<string> {
 /* ------------------------------- the token ------------------------------ */
 
 test("a fresh install sends every entry point to setup and asks for the token", async () => {
+  rmSync(jarFile, { force: true });
   const fresh = await state();
   expect(fresh.needs_onboarding).toBe(true);
   expect(fresh.has_owner).toBe(false);
@@ -111,7 +124,7 @@ test("the logged token opens the wizard, and a reload keeps it open", async () =
   await page.getByLabel("Setup token").fill(setupToken());
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Checking the install" })).toBeVisible();
-  await expect(page.getByText("Control plane")).toBeVisible();
+  await expect(page.getByText("Control plane", { exact: true })).toBeVisible();
 
   /* Presented, not spent: a reload before the account exists is fine. */
   await page.reload();
@@ -125,9 +138,22 @@ test("the logged token opens the wizard, and a reload keeps it open", async () =
 
 /* ------------------------------- the owner ------------------------------ */
 
+test("clicking Create account on an empty form names every field", async () => {
+  await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
+  /* The Name field has focus; one click on the primary button. */
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByText("Enter your name.")).toBeVisible();
+  await expect(page.getByText("Enter a full email address, like you@example.com.")).toBeVisible();
+  await expect(page.getByText("Choose a password.")).toBeVisible();
+  await expect(page.getByText("Type the password again.")).toBeVisible();
+});
+
 test("the account step names each problem and the server has the last word", async () => {
+  await page.reload();
   const create = page.getByRole("button", { name: "Create account" });
-  await create.click();
+  /* Enter in the first field submits the empty form. (A mouse click on
+   * the button is the test above.) */
+  await page.getByRole("textbox", { name: /^Name/ }).press("Enter");
   await expect(page.getByText("Enter your name.")).toBeVisible();
   await expect(page.getByText("Enter a full email address, like you@example.com.")).toBeVisible();
   await expect(page.getByText("Choose a password.")).toBeVisible();
@@ -165,7 +191,6 @@ test("the account step names each problem and the server has the last word", asy
   await page.getByLabel("Confirm password").fill(OWNER.password);
   await create.click();
   await expect(page.getByRole("heading", { name: "Name this instance" })).toBeVisible();
-  ownerCookie = await cookieOf();
 });
 
 test("the setup token is retired the moment the owner exists", async ({ browser }) => {
@@ -206,7 +231,7 @@ test("the instance is named, and a reload resumes on the server step", async () 
   await field.fill("Harbour");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Your first server" })).toBeVisible();
-  expect((await state(ownerCookie)).instance_name).toBe("Harbour");
+  expect((await state(await cookieOf())).instance_name).toBe("Harbour");
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Your first server" })).toBeVisible();
@@ -240,7 +265,7 @@ test("pairing hands over a one-liner, and the step resolves when the agent dials
   const go = page.getByRole("button", { name: "Continue" });
   await expect(go).toBeEnabled({ timeout: 60_000 });
   await expect
-    .poll(async () => (await state(ownerCookie)).step, { timeout: 60_000 })
+    .poll(async () => (await state(await cookieOf())).step, { timeout: 60_000 })
     .toBe("server");
   await go.click();
   await expect(page.getByRole("heading", { name: "Give the panel an address" })).toBeVisible();
@@ -298,12 +323,12 @@ test("each optional step can be skipped, is recorded as skipped, and a reload re
     await skipCurrent();
 
     await expect
-      .poll(async () => (await state(ownerCookie)).outcomes[step], {
+      .poll(async () => (await state(await cookieOf())).outcomes[step], {
         message: `${step} was never answered`,
       })
       .toBe("skipped");
   }
-  const after = await state(ownerCookie);
+  const after = await state(await cookieOf());
   expect(after.step).toBe("done");
   expect(after.completed_at).toBeNull();
 });
@@ -314,7 +339,7 @@ test("the last screen reads back the instance and opens the Command Center", asy
   await expect(page).toHaveURL(`${webUrl}/`);
   await expect(page.getByRole("heading", { level: 1, name: "Command Center" })).toBeVisible();
 
-  const done = await state(ownerCookie);
+  const done = await state(await cookieOf());
   expect(done.needs_onboarding).toBe(false);
   expect(done.completed_at).not.toBeNull();
 });
@@ -328,27 +353,27 @@ test("after completion /setup refuses and redirects, even for the owner", async 
     ["/setup/complete", {}],
     ["/setup/steps/team", { outcome: "skipped" }],
   ] as const) {
-    const res = await call<ErrorBody>("POST", path, { cookie: ownerCookie, body });
+    const res = await call<ErrorBody>("POST", path, { cookie: await cookieOf(), body });
     expect(res.status, path).toBe(409);
   }
-  expect((await state(ownerCookie)).instance_name).toBe("Harbour");
+  expect((await state(await cookieOf())).instance_name).toBe("Harbour");
 });
 
 /* ---------------------- what the finished install is ---------------------- */
 
 test("the only owner cannot be suspended, demoted or deleted", async () => {
   const me = (await call<{ data: { user: { id: string } } }>("GET", "/auth/session", {
-    cookie: ownerCookie,
+    cookie: await cookieOf(),
   })).body.data.user;
   const roles = (await call<{ data: { id: string; slug: string }[] }>("GET", "/roles", {
-    cookie: ownerCookie,
+    cookie: await cookieOf(),
   })).body.data;
   const viewer = roles.find((role) => role.slug === "viewer")!;
 
-  const suspend = await call<ErrorBody>("POST", `/users/${me.id}/suspend`, { cookie: ownerCookie });
+  const suspend = await call<ErrorBody>("POST", `/users/${me.id}/suspend`, { cookie: await cookieOf() });
   expect(suspend.status).toBe(409);
   const demote = await call<ErrorBody>("POST", `/users/${me.id}/roles`, {
-    cookie: ownerCookie,
+    cookie: await cookieOf(),
     body: { role_ids: [viewer.id] },
   });
   expect(demote.status).toBe(409);
@@ -379,7 +404,7 @@ test("an install.sh instance takes a domain: .env and the host queue are written
   expect(JSON.parse(readFileSync(hostQueueFile, "utf8")).kind).toBe("reconfigure");
 
   /* The IP the operator is on keeps working throughout. */
-  expect((await call("GET", "/auth/session", { cookie: ownerCookie })).status).toBe(200);
+  expect((await call("GET", "/auth/session", { cookie: await cookieOf() })).status).toBe(200);
 });
 
 /* ------------------------------ Getting Started ------------------------------ */
@@ -395,10 +420,10 @@ test("the Getting Started checklist reflects real progress", async () => {
 
   /* Invite somebody: the teammate item turns done. */
   const viewer = (await call<{ data: { id: string; slug: string }[] }>("GET", "/roles", {
-    cookie: ownerCookie,
+    cookie: await cookieOf(),
   })).body.data.find((role) => role.slug === "viewer")!;
   const invited = await call("POST", "/users", {
-    cookie: ownerCookie,
+    cookie: await cookieOf(),
     body: { email: "crew@fresh.example.com", name: "Crew", role_ids: [viewer.id], send_invite: false },
   });
   expect(invited.status).toBe(201);
@@ -406,7 +431,7 @@ test("the Getting Started checklist reflects real progress", async () => {
 
   /* A notification channel: that item turns done. */
   const patch = await call("PATCH", "/settings", {
-    cookie: ownerCookie,
+    cookie: await cookieOf(),
     body: {
       notifications: {
         channels: [
@@ -433,7 +458,7 @@ async function checklist(): Promise<Record<string, boolean>> {
   const res = await call<{ data: { onboarding: { id: string; done: boolean }[] } }>(
     "GET",
     "/dashboard",
-    { cookie: ownerCookie },
+    { cookie: await cookieOf() },
   );
   expect(res.status).toBe(200);
   const steps = res.body.data.onboarding;

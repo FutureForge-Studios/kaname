@@ -101,10 +101,14 @@ export default function UpdatesPage() {
   const check = useResourceMutation<void, UpdateOverview>({
     mutationFn: () => api.post<UpdateOverview>("/updates/check"),
     invalidates: ["updates", "update-runs"],
+    // A check that could not reach the manifest is not "up to date";
+    // saying so would hide exactly the failure this button exists to find.
     successMessage: (result) =>
-      result.control_plane.update_available
-        ? `${result.control_plane.latest_version} is available.`
-        : "Already on the newest release.",
+      result.settings.last_check_error
+        ? `The check failed: ${result.settings.last_check_error}`
+        : result.control_plane.update_available
+          ? `${result.control_plane.latest_version} is available.`
+          : "Already on the newest release.",
   });
 
   return (

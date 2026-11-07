@@ -197,14 +197,26 @@ test("refusals change nothing: an auditor cannot create, reset or delete a real 
   expect((await admin.job(cleanup.body.data!.job.id)).status).toBe("succeeded");
 });
 
+/**
+ * The auditor signs in through the form like a person would. The others
+ * carry the session their API sign-in already made: the login route
+ * allows ten attempts a minute, and this spec would otherwise spend them.
+ */
 async function signedInPage(browser: Browser, role: SystemRoleSlug): Promise<Page> {
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const page = await context.newPage();
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(emailFor(role));
-  await page.getByLabel("Password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForURL((url) => !url.pathname.startsWith("/login"));
+  if (role === "auditor") {
+    await page.goto("/login");
+    await page.getByLabel("Email").fill(emailFor(role));
+    await page.getByLabel("Password").fill(PASSWORD);
+    await page.getByRole("button", { name: "Sign in" }).click();
+    await page.waitForURL((url) => !url.pathname.startsWith("/login"));
+    return page;
+  }
+  const [name, ...rest] = apis.get(role)!.cookie.split("=");
+  await context.addCookies([{ name: name!, value: rest.join("="), domain: "127.0.0.1", path: "/" }]);
+  await page.goto("/");
+  await expect(page).not.toHaveURL(/\/login/);
   return page;
 }
 

@@ -82,7 +82,7 @@ async function pointsFor(scheduleId: string): Promise<Point[]> {
 async function rowMenu(page: Page, row: Locator, item: string): Promise<void> {
   await row.getByRole("button", { name: "Row actions" }).focus();
   await page.keyboard.press("Enter");
-  await page.getByRole("menuitem", { name: item }).click();
+  await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
 async function drawerSettles(page: Page, text: string): Promise<string> {
@@ -101,9 +101,9 @@ test.describe("backups", () => {
     const dialog = page.getByRole("dialog", { name: "New backup destination" });
     await expect(dialog).toBeVisible();
 
-    await dialog.getByLabel("Name").fill("e2e panel repository");
+    await dialog.getByRole("textbox", { name: /^Name/ }).fill("e2e panel repository");
     await dialog.getByLabel("Kind").selectOption("local");
-    await dialog.getByRole("combobox").click();
+    await dialog.getByRole("combobox", { name: /^Server/ }).click();
     await page.getByRole("option", { name: /forge-01/ }).click();
 
     /* A relative path is refused by name. */
@@ -151,11 +151,10 @@ test.describe("backups", () => {
     const dialog = page.getByRole("dialog", { name: "New backup schedule" });
     await expect(dialog).toBeVisible();
 
-    await dialog.getByLabel("Name").fill("e2e invalid");
-    const comboboxes = dialog.getByRole("combobox");
-    await comboboxes.nth(0).click();
+    await dialog.getByRole("textbox", { name: /^Name/ }).fill("e2e invalid");
+    await dialog.getByRole("combobox", { name: /^Server/ }).click();
     await page.getByRole("option", { name: /forge-01/ }).click();
-    await comboboxes.nth(1).click();
+    await dialog.getByRole("combobox", { name: /^Destination/ }).click();
     await page.getByRole("option", { name: /e2e local repository/ }).click();
     await dialog.getByLabel("Scope 1 selectors").fill("/etc");
 

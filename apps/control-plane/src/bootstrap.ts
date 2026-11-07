@@ -85,7 +85,9 @@ export async function ensureSetupToken(ctx: AppContext): Promise<void> {
 
   if (live.length > 0 && !config.KANAME_SETUP_TOKEN) return;
 
-  const token = config.KANAME_SETUP_TOKEN ?? generateToken("kn_setup");
+  // `||`, not `??`: a blank `KANAME_SETUP_TOKEN=` line in .env is unset,
+  // not a request for an empty token nobody could ever type in.
+  const token = config.KANAME_SETUP_TOKEN?.trim() || generateToken("kn_setup");
   const tokenHash = hashToken(token);
   const expiresAt = new Date(Date.now() + SETUP_TOKEN_TTL_MINUTES * 60_000);
 
