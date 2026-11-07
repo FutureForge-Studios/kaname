@@ -9,6 +9,7 @@
     "KANAME_CONTROL_PLANE_URL",
     "KANAME_YUNORI_FEED",
     "KANAME_YUNORI_VERSION",
+    "KANAME_TRUSTED_PROXIES",
     "PORT"
   ],
   "tasks": {

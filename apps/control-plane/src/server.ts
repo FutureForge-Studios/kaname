@@ -19,7 +19,9 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
     // Widened to FastifyBaseLogger so the instance keeps its default
     // generics and route modules can be typed as a plain FastifyInstance.
     loggerInstance: ctx.log as FastifyBaseLogger,
-    trustProxy: true,
+    // The reverse proxy and the panel's /api rewrite sit on the same host or
+    // private network. A forwarded address from anywhere else is ignored.
+    trustProxy: ctx.config.KANAME_TRUSTED_PROXIES,
     bodyLimit: 32 * 1024 * 1024,
     genReqId: () => crypto.randomUUID(),
     // The panel holds /events open for as long as a tab is open. Fastify's

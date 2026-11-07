@@ -3,7 +3,7 @@ import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import pino from "pino";
 import { eq } from "@kaname/db";
 import { createDb, type DbHandle } from "@kaname/db";
-import { roles } from "@kaname/db/schema";
+import { roles, users } from "@kaname/db/schema";
 import { migrateHandle } from "@kaname/db/migrate";
 import { loadConfig, resetConfigForTests } from "./config.js";
 import { createContext, type AppContext } from "./context.js";
@@ -168,5 +168,24 @@ describe("mistakes on your own account page", () => {
     }
     // Still signed in after both.
     expect((await as(me.cookie, "GET", "/auth/session")).statusCode).toBe(200);
+  });
+});
+
+describe("two-factor codes", () => {
+  it("accepts a code once, even inside its 30-second window", async () => {
+    const [owner] = await handle.db.select().from(users).where(eq(users.email, OWNER_EMAIL));
+    const { secret } = await ctx.auth.setupTotp(owner!.id, OWNER_EMAIL, "Kaname");
+    const { Secret, TOTP } = await import("otpauth");
+    const code = new TOTP({ secret: Secret.fromBase32(secret), digits: 6, period: 30 }).generate();
+
+    const [first, second] = await Promise.all([
+      ctx.auth.verifyTotp(owner!.id, code),
+      ctx.auth.verifyTotp(owner!.id, code),
+    ]);
+    expect([first, second].filter(Boolean)).toHaveLength(1);
+    expect(await ctx.auth.verifyTotp(owner!.id, code)).toBe(false);
+
+    // A fresh enrolment starts a fresh history.
+    await ctx.auth.disableTotp(owner!.id);
   });
 });

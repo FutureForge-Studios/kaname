@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, sql, type Database } from "@kaname/db";
+import { and, eq, gt, isNull, lt, or, sql, type Database } from "@kaname/db";
 import { apiKeys, roleGrants, roles, sessions, userRoles, users } from "@kaname/db/schema";
 import {
   buildEffectiveGrants,
@@ -260,7 +260,7 @@ export class AuthService {
     // cannot lock the operator out.
     await this.db
       .update(users)
-      .set({ totpSecretEnc: JSON.stringify(sealed), totpEnabled: false })
+      .set({ totpSecretEnc: JSON.stringify(sealed), totpEnabled: false, totpLastStep: null })
       .where(eq(users.id, userId));
 
     return { secret: secret.base32, otpauthUrl: totp.toString(), recoveryCodes };
@@ -294,7 +294,27 @@ export class AuthService {
     const { Secret, TOTP } = await import("otpauth");
     const totp = new TOTP({ secret: Secret.fromBase32(secret), digits: 6, period: 30 });
     // One step of clock skew in each direction.
-    return totp.validate({ token: normalized, window: 1 }) !== null;
+    const delta = totp.validate({ token: normalized, window: 1 });
+    if (delta === null) return false;
+
+    /*
+     * A code is good for its whole 30-second step (and one either side),
+     * so a code seen over a shoulder or in a log could be replayed. Each
+     * step is accepted once: the claim succeeds only if it is newer than
+     * the last accepted one, which also settles two concurrent uses.
+     */
+    const step = Math.floor(Date.now() / 1000 / 30) + delta;
+    const claimed = await this.db
+      .update(users)
+      .set({ totpLastStep: step })
+      .where(
+        and(
+          eq(users.id, userId),
+          or(isNull(users.totpLastStep), lt(users.totpLastStep, step)),
+        ),
+      )
+      .returning({ id: users.id });
+    return claimed.length > 0;
   }
 
   async enableTotp(userId: string): Promise<void> {

@@ -142,6 +142,13 @@ const schema = z.object({
   KANAME_YUNORI_FEED: z.string().optional(),
   /** Pins the yunori-mail release Kaname deploys instead of the newest one. */
   KANAME_YUNORI_VERSION: z.string().optional(),
+  /**
+   * Which peers may set X-Forwarded-For, comma-separated (addresses, CIDR
+   * ranges, or loopback / linklocal / uniquelocal). Only these are believed
+   * about the client's address, so a client that reaches the control plane
+   * directly cannot pick its own address and dodge the per-address limits.
+   */
+  KANAME_TRUSTED_PROXIES: z.string().default("loopback,linklocal,uniquelocal"),
 });
 
 /** Where releases are published. One constant, mirrored in install.sh. */

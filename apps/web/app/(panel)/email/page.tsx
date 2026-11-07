@@ -156,9 +156,17 @@ export default function MailServersPage() {
       />
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
-        {pending && <FinishSetupPanel pending={pending} onDismiss={() => setPending(null)} />}
+        {/* shrink-0: this column is a flex container with min-h-0, and with
+         * more than one server card the panel (overflow-hidden) was squeezed
+         * to nothing, its Reveal button with it. */}
+        {pending && (
+          <div className="shrink-0">
+            <FinishSetupPanel pending={pending} onDismiss={() => setPending(null)} />
+          </div>
+        )}
 
-        <JobActivityBar types={MAIL_JOB_TYPES} />
+        {/* shrink-0 for the same reason as the setup panel: squeezed to a hairline otherwise. */}
+        <JobActivityBar types={MAIL_JOB_TYPES} className="shrink-0" />
 
         <div className="flex flex-wrap items-center gap-2">
           <Select
