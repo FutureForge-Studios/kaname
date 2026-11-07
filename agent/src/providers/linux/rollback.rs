@@ -128,6 +128,7 @@ impl RollbackGuard {
 
     /// How many windows are armed, read under the guard's own lock because
     /// a timer task may be unwinding one of them while the caller looks.
+    #[cfg(test)]
     pub fn armed_count(&self) -> usize {
         self.inner.pending.lock().len()
     }
@@ -159,7 +160,7 @@ mod tests {
     /// A revert that records that it fired, so a test can wait for it rather
     /// than sleep and hope.
     struct RevertSpy {
-        fired: Mutex<mpsc::UnboundedReceiver<()>>,
+        fired: tokio::sync::Mutex<mpsc::UnboundedReceiver<()>>,
         tx: mpsc::UnboundedSender<()>,
         count: Arc<AtomicUsize>,
         err: Option<String>,
@@ -169,7 +170,7 @@ mod tests {
         fn new() -> Self {
             let (tx, rx) = mpsc::unbounded_channel();
             Self {
-                fired: Mutex::new(rx),
+                fired: tokio::sync::Mutex::new(rx),
                 tx,
                 count: Arc::new(AtomicUsize::new(0)),
                 err: None,
@@ -208,7 +209,7 @@ mod tests {
         /// Waits for the window to lapse, with generous slack so a loaded CI
         /// box does not fail a timing test that is really about state.
         async fn await_revert(&self) {
-            let mut rx = self.fired.lock();
+            let mut rx = self.fired.lock().await;
             match tokio::time::timeout(Duration::from_secs(5), rx.recv()).await {
                 Ok(Some(())) => {}
                 _ => panic!("the window lapsed but the change was never reverted"),
@@ -216,7 +217,7 @@ mod tests {
         }
 
         async fn assert_quiet(&self, within: Duration) {
-            let mut rx = self.fired.lock();
+            let mut rx = self.fired.lock().await;
             if let Ok(Some(())) = tokio::time::timeout(within, rx.recv()).await {
                 panic!("a confirmed change was reverted anyway");
             }

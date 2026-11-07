@@ -51,10 +51,6 @@ impl ExecOptions {
         self.user = Some(user.into());
         self
     }
-    pub fn dir(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.dir = Some(dir.into());
-        self
-    }
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.env.push((key.into(), value.into()));
         self

@@ -23,10 +23,21 @@ pub struct Site {
     pub force_https: bool,
 }
 
+/// name, server names, webroot, runtime, upstream, php version, tls.
+type SiteSeed = (
+    String,
+    Vec<String>,
+    String,
+    &'static str,
+    &'static str,
+    &'static str,
+    bool,
+);
+
 pub fn build_web(sim: &Sim) {
     let domain = sim.id.domain.clone();
 
-    let seeds: Vec<(String, Vec<String>, String, &str, &str, &str, bool)> = vec![
+    let seeds: Vec<SiteSeed> = vec![
         (
             domain.clone(),
             vec![domain.clone(), format!("www.{domain}")],

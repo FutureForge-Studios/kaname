@@ -202,7 +202,7 @@ async fn run_agent(state_dir: Option<PathBuf>, simulate: bool) -> anyhow::Result
         server_id = store.state.server_id,
         provider = name,
         capabilities = capabilities.len(),
-        methods = registry.len(),
+        methods = registry.names().len(),
         connect_url = store.state.connect_url,
         "starting"
     );

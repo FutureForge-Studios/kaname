@@ -81,12 +81,6 @@ impl SimProvider {
             sim,
         }
     }
-
-    /// The world behind the provider, for tests that want to look inside.
-    #[cfg(test)]
-    pub fn sim(&self) -> &Arc<Sim> {
-        &self.sim
-    }
 }
 
 /// Builds the fake host. It needs a Tokio runtime for its background

@@ -756,7 +756,7 @@ pub fn render_mail(sim: &Sim, n: i64, at: DateTime<Utc>) -> LogRecord {
         &["example.net", "example.org", "mail.example.co", "contoso.example"],
     );
     let remote_ip = pick(seed ^ 0x5, n, THREAT_SOURCES);
-    let pid = 1_180 + (n % 3) as i64;
+    let pid = 1_180 + (n % 3);
 
     let (level, event, body) = match mix(seed ^ n as u64 ^ 0x66) % 20 {
         0 | 1 => (

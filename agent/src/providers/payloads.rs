@@ -316,16 +316,6 @@ impl MailCheckStatus {
             _ => MailCheckStatus::Unknown,
         }
     }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            MailCheckStatus::Pass => "pass",
-            MailCheckStatus::Warn => "warn",
-            MailCheckStatus::Fail => "fail",
-            MailCheckStatus::Info => "info",
-            MailCheckStatus::Unknown => "unknown",
-        }
-    }
 }
 
 /// One diagnostic result. Every status is paired with text, never colour

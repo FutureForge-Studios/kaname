@@ -23,17 +23,6 @@ pub enum StreamMode {
     Bidirectional,
 }
 
-impl StreamMode {
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "none" => Some(StreamMode::None),
-            "response" => Some(StreamMode::Response),
-            "bidirectional" => Some(StreamMode::Bidirectional),
-            _ => None,
-        }
-    }
-}
-
 /// One inbound call. `stream` is present exactly when the method's mode is
 /// not `None`.
 pub struct Request {
@@ -126,16 +115,9 @@ impl Registry {
         self.methods.keys().copied().collect()
     }
 
+    #[cfg(test)]
     pub fn get(&self, name: &str) -> Option<&Method> {
         self.methods.get(name)
-    }
-
-    pub fn len(&self) -> usize {
-        self.methods.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.methods.is_empty()
     }
 }
 

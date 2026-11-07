@@ -305,10 +305,7 @@ pub fn parse_unit_files(out: &str) -> HashMap<String, bool> {
         if fields.len() < 2 {
             continue;
         }
-        let enabled = match fields[1] {
-            "enabled" | "enabled-runtime" => true,
-            _ => false,
-        };
+        let enabled = matches!(fields[1], "enabled" | "enabled-runtime");
         states.insert(fields[0].to_string(), enabled);
     }
     states

@@ -422,7 +422,8 @@ mod tests {
     #[test]
     fn wrap_fs_error_maps_onto_the_provider_variants() {
         use std::io::{Error, ErrorKind};
-        let cases: Vec<(&str, &str, Error, fn(&ProviderError) -> bool)> = vec![
+        type Case = (&'static str, &'static str, Error, fn(&ProviderError) -> bool);
+        let cases: Vec<Case> = vec![
             (
                 "missing",
                 "/var/www/missing",
