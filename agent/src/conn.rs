@@ -581,12 +581,9 @@ impl ConnStream {
     }
 
     fn acknowledge(&self, seq: u64) {
-        let through = seq + 1;
-        let _ = self
-            .acked
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
-                (through > cur).then_some(through)
-            });
+        // An ack for seq N means everything through N arrived, and acks can
+        // arrive out of order, so the count only ever moves forward.
+        self.acked.fetch_max(seq + 1, Ordering::SeqCst);
         self.ack_signal.notify_waiters();
     }
 
