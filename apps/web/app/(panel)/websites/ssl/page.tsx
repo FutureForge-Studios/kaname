@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Ban, Globe, Plus, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
 import {
   CERT_EXPIRY_SOON_DAYS,
@@ -82,6 +82,19 @@ export default function SslPage() {
   const router = useRouter();
   const can = useCan();
 
+  /*
+   * The Command Center's "certificate expires in N days" items link here
+   * with ?certificate_id=, and this page used to ignore it — the operator
+   * landed on the whole list and had to find the row the alert had
+   * already named. A certificate is a detail page, so go there; replace,
+   * not push, so Back returns to the Command Center rather than bouncing.
+   */
+  const searchParams = useSearchParams();
+  const linkedCertificate = searchParams.get("certificate_id");
+  React.useEffect(() => {
+    if (linkedCertificate) router.replace(`/websites/ssl/${encodeURIComponent(linkedCertificate)}`);
+  }, [linkedCertificate, router]);
+
   const selection = useServerSelection({ permission: "websites.ssl:read" });
   const extraParams = React.useMemo(
     () => ({ server_id: selection.serverId ?? undefined }),
@@ -107,7 +120,7 @@ export default function SslPage() {
 
   const [issuing, setIssuing] = React.useState(false);
   useOpenFromQuery("new", () => setIssuing(true), can("websites.ssl:write"));
-  const noServer = serverPrerequisite(selection, "A certificate is ordered and installed");
+  const noServer = serverPrerequisite(selection, "A certificate is ordered and installed on the host that serves the name.");
   const [pendingRevoke, setPendingRevoke] = React.useState<Certificate | null>(null);
   const [watchedJobId, setWatchedJobId] = React.useState<string | null>(null);
 

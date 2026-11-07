@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { FilterX, RefreshCw, Server as ServerIcon } from "lucide-react";
+import { FilterX, Plus, RefreshCw, Server as ServerIcon } from "lucide-react";
 import {
   Button,
   DataTable,
@@ -227,15 +227,16 @@ export function LinkButton({
  */
 export function serverPrerequisite(
   selection: { servers: readonly unknown[]; isLoading: boolean },
-  what: string,
+  /** One sentence saying why this list needs a host. */
+  why: string,
 ): ResourcePrerequisite | null {
   if (selection.isLoading || selection.servers.length > 0) return null;
   return {
     icon: ServerIcon,
     title: "Pair a server first",
-    description: `${what} on a managed host. Pairing installs an agent that dials out to Kaname; nothing listens inbound.`,
+    description: `${why} Pair one first: its agent dials out to Kaname, so nothing on the host listens inbound.`,
     action: (
-      <LinkButton href="/infrastructure/servers?new=1" icon={ServerIcon}>
+      <LinkButton href="/infrastructure/servers?new=1" icon={Plus}>
         Add server
       </LinkButton>
     ),

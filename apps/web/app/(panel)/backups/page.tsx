@@ -169,7 +169,7 @@ function SchedulesTab({ tabs }: { tabs: React.ReactNode }) {
   const prerequisite: ResourcePrerequisite | null =
     serverPrerequisite(
       { servers: servers.data?.data ?? [], isLoading: servers.isLoading },
-      "A backup reads from",
+      "A backup reads its data from a host Kaname manages.",
     ) ??
     (!destinations.isLoading && !destinations.isError && (destinations.data?.data.length ?? 0) === 0
       ? {
@@ -179,7 +179,7 @@ function SchedulesTab({ tabs }: { tabs: React.ReactNode }) {
             "A schedule writes encrypted snapshots to a destination: an object store, an SFTP host or a directory on a managed server. Add one, then schedule what to protect.",
           action: can("backups.schedules:write") ? (
             <LinkButton href="/backups?tab=destinations&new=1" icon={Plus}>
-              Add destination
+              New destination
             </LinkButton>
           ) : undefined,
         }

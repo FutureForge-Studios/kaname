@@ -165,14 +165,42 @@ export class AuthService {
         });
     }
 
-    // An API key can never carry more than the grants it was issued.
-    const grants: RoleGrant[] = key.scopes.map((permission) => ({
-      permission,
-      scope:
-        key.scopeKind === "global"
-          ? { kind: "global" as const }
-          : { kind: "servers" as const, server_ids: key.scopeServerIds },
-    }));
+    /*
+     * A key is a delegation of its creator, so it lives and narrows with
+     * them. Without this a suspended account's keys kept working (only
+     * deletion revoked them), and a creator demoted to Viewer kept every
+     * permission they had delegated while they were an Owner — the key
+     * became an escalation past the person it traces back to.
+     */
+    if (!key.createdBy) return null;
+    const creator = await this.db
+      .select({ status: users.status })
+      .from(users)
+      .where(eq(users.id, key.createdBy))
+      .limit(1);
+    if (creator[0]?.status !== "active") return null;
+    const held = await this.grantsForUser(key.createdBy);
+
+    // An API key can never carry more than the grants it was issued, nor
+    // more than its creator holds today.
+    const grants: RoleGrant[] = [];
+    for (const permission of key.scopes) {
+      const issued: "global" | readonly string[] =
+        key.scopeKind === "global" ? "global" : key.scopeServerIds;
+      const current = scopeFor(held, permission);
+      if (!current) continue;
+      const effective =
+        issued === "global"
+          ? current
+          : current === "global"
+            ? issued
+            : issued.filter((id) => current.includes(id));
+      if (effective === "global") {
+        grants.push({ permission, scope: { kind: "global" } });
+      } else if (effective.length > 0) {
+        grants.push({ permission, scope: { kind: "servers", server_ids: [...effective] } });
+      }
+    }
 
     return {
       kind: "api_key",
@@ -282,13 +310,23 @@ export class AuthService {
 
   /* ----------------------- brute-force guard ----------------------- */
 
-  async noteFailedLogin(userId: string, lockoutThreshold: number): Promise<void> {
+  /*
+   * `lockoutMinutes` is Settings > Security > Lockout duration. It used to
+   * be a hard-coded 15 minutes, so the setting the panel offers (and saves)
+   * changed nothing: an owner who chose two minutes still locked people
+   * out for fifteen.
+   */
+  async noteFailedLogin(
+    userId: string,
+    lockoutThreshold: number,
+    lockoutMinutes = 15,
+  ): Promise<void> {
     await this.db
       .update(users)
       .set({
         failedLoginCount: sql`${users.failedLoginCount} + 1`,
         lockedUntil: sql`case when ${users.failedLoginCount} + 1 >= ${lockoutThreshold}
-          then now() + interval '15 minutes' else ${users.lockedUntil} end`,
+          then now() + make_interval(mins => ${lockoutMinutes}) else ${users.lockedUntil} end`,
       })
       .where(eq(users.id, userId));
   }
