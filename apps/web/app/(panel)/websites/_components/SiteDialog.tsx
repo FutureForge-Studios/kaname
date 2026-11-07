@@ -25,6 +25,13 @@ const RUNTIMES: SiteRuntime[] = ["static", "php", "node", "python", "proxy", "co
 /** Runtimes whose version is the runtime itself rather than a side pool. */
 const VERSIONED: readonly SiteRuntime[] = ["php", "node", "python"];
 const NEEDS_UPSTREAM: readonly SiteRuntime[] = ["proxy", "container"];
+/*
+ * A node site's vhost is a proxy_pass to its app server too, so its
+ * origin has to be settable — the field used to appear only for proxy
+ * and container, which left a node app pinned to whatever port the
+ * host's default was. Optional here: the host falls back to :3000.
+ */
+const TAKES_UPSTREAM: readonly SiteRuntime[] = [...NEEDS_UPSTREAM, "node"];
 
 const DOMAIN_RE = /^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))+$/;
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -179,7 +186,10 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
       ...(!VERSIONED.includes(form.runtime) && form.phpVersion.trim()
         ? { php_version: form.phpVersion.trim() }
         : {}),
-      ...(NEEDS_UPSTREAM.includes(form.runtime) ? { upstream: form.upstream.trim() } : {}),
+      ...(NEEDS_UPSTREAM.includes(form.runtime) ||
+      (TAKES_UPSTREAM.includes(form.runtime) && form.upstream.trim())
+        ? { upstream: form.upstream.trim() }
+        : {}),
       ...(form.owner.trim() ? { owner: form.owner.trim() } : {}),
     };
 
@@ -344,12 +354,16 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
         />
       </FormField>
 
-      {NEEDS_UPSTREAM.includes(form.runtime) && (
+      {TAKES_UPSTREAM.includes(form.runtime) && (
         <FormField
           label="Upstream origin"
-          description="Where the vhost forwards to."
+          description={
+            NEEDS_UPSTREAM.includes(form.runtime)
+              ? "Where the vhost forwards to."
+              : "Where the app server listens. Optional; defaults to http://127.0.0.1:3000."
+          }
           error={errorFor("upstream")}
-          required
+          required={NEEDS_UPSTREAM.includes(form.runtime)}
         >
           <Input
             value={form.upstream}
