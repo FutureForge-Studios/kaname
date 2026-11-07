@@ -83,7 +83,8 @@ impl Store {
         } else {
             std::env::current_dir().context("resolve state dir")?.join(dir)
         };
-        std::fs::create_dir_all(&absolute).with_context(|| format!("create state dir {}", absolute.display()))?;
+        std::fs::create_dir_all(&absolute)
+            .with_context(|| format!("create state dir {}", absolute.display()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -116,7 +117,9 @@ impl Store {
     /// Whether this host has a usable identity.
     pub fn enrolled(&self) -> bool {
         !self.state.server_id.is_empty()
-            && [KEY_FILE, CERT_FILE, CA_FILE].iter().all(|f| self.path(f).is_file())
+            && [KEY_FILE, CERT_FILE, CA_FILE]
+                .iter()
+                .all(|f| self.path(f).is_file())
     }
 
     /// Writes state.json atomically.
@@ -130,7 +133,9 @@ impl Store {
     pub fn write_file(&self, name: &str, data: &[u8]) -> anyhow::Result<()> {
         use std::io::Write;
         let target = self.path(name);
-        let temp = self.dir.join(format!(".{name}.{}", uuid::Uuid::new_v4().simple()));
+        let temp = self
+            .dir
+            .join(format!(".{name}.{}", uuid::Uuid::new_v4().simple()));
         let result = (|| -> std::io::Result<()> {
             let mut options = std::fs::OpenOptions::new();
             options.write(true).create_new(true);
@@ -188,8 +193,9 @@ impl Store {
         let cert_pem = self.read_file(CERT_FILE)?;
         let key_pem = self.read_file(KEY_FILE)?;
 
-        let certs: Vec<rustls_pki_types::CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut &cert_pem[..]).collect::<Result<_, _>>().context("parse cert.pem")?;
+        let certs: Vec<rustls_pki_types::CertificateDer<'static>> = rustls_pemfile::certs(&mut &cert_pem[..])
+            .collect::<Result<_, _>>()
+            .context("parse cert.pem")?;
         if certs.is_empty() {
             bail!("{CERT_FILE} holds no certificate");
         }
@@ -242,7 +248,11 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(again.path(STATE_FILE)).unwrap().permissions().mode() & 0o777;
+            let mode = std::fs::metadata(again.path(STATE_FILE))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
             assert_eq!(mode, 0o600);
         }
     }

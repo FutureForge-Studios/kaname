@@ -131,11 +131,20 @@ mod tests {
 
     #[test]
     fn systemd_needs_both_a_run_marker_and_the_client() {
-        assert_eq!(detect(None, &["/run/systemd/system", "systemctl"]), vec!["systemd"]);
+        assert_eq!(
+            detect(None, &["/run/systemd/system", "systemctl"]),
+            vec!["systemd"]
+        );
         assert!(detect(None, &["/run/systemd/system"]).is_empty());
         assert!(detect(None, &["systemctl"]).is_empty());
-        assert_eq!(detect(None, &["/run/systemd/private", "systemctl"]), vec!["systemd"]);
-        assert_eq!(detect(None, &["/run/dbus/system_bus_socket", "systemctl"]), vec!["systemd"]);
+        assert_eq!(
+            detect(None, &["/run/systemd/private", "systemctl"]),
+            vec!["systemd"]
+        );
+        assert_eq!(
+            detect(None, &["/run/dbus/system_bus_socket", "systemctl"]),
+            vec!["systemd"]
+        );
     }
 
     #[test]
@@ -154,11 +163,24 @@ mod tests {
 
     #[test]
     fn the_list_is_sorted_and_deduplicated() {
-        let got = detect(Some("docker"), &["psql", "nginx", "nft", "/run/systemd/system", "systemctl", "restic"]);
+        let got = detect(
+            Some("docker"),
+            &[
+                "psql",
+                "nginx",
+                "nft",
+                "/run/systemd/system",
+                "systemctl",
+                "restic",
+            ],
+        );
         let mut sorted = got.clone();
         sorted.sort();
         sorted.dedup();
         assert_eq!(got, sorted);
-        assert_eq!(got, vec!["docker", "nftables", "nginx", "postgres", "restic", "systemd"]);
+        assert_eq!(
+            got,
+            vec!["docker", "nftables", "nginx", "postgres", "restic", "systemd"]
+        );
     }
 }

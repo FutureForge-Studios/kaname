@@ -118,24 +118,28 @@ pub async fn dial(opts: Options) -> anyhow::Result<Conn> {
         .with_context(|| format!("connect url {}", opts.connect_url))?;
     request.headers_mut().insert(
         "Authorization",
-        format!("Bearer {token}").parse().context("authorization header")?,
+        format!("Bearer {token}")
+            .parse()
+            .context("authorization header")?,
     );
-    request
-        .headers_mut()
-        .insert("Sec-WebSocket-Protocol", SUBPROTOCOL.parse().context("subprotocol header")?);
+    request.headers_mut().insert(
+        "Sec-WebSocket-Protocol",
+        SUBPROTOCOL.parse().context("subprotocol header")?,
+    );
 
     let config = tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(READ_LIMIT))
         .max_frame_size(Some(READ_LIMIT));
     let connector = tokio_tungstenite::Connector::Rustls(opts.tls.clone());
-    let (ws, response) = tokio_tungstenite::connect_async_tls_with_config(request, Some(config), true, Some(connector))
-        .await
-        .map_err(|e| match &e {
-            tungstenite::Error::Http(resp) => {
-                anyhow::anyhow!("connect {}: http {}", opts.connect_url, resp.status())
-            }
-            _ => anyhow::anyhow!("connect {}: {e}", opts.connect_url),
-        })?;
+    let (ws, response) =
+        tokio_tungstenite::connect_async_tls_with_config(request, Some(config), true, Some(connector))
+            .await
+            .map_err(|e| match &e {
+                tungstenite::Error::Http(resp) => {
+                    anyhow::anyhow!("connect {}: http {}", opts.connect_url, resp.status())
+                }
+                _ => anyhow::anyhow!("connect {}: {e}", opts.connect_url),
+            })?;
     if let Some(proto) = response.headers().get("Sec-WebSocket-Protocol") {
         if proto.to_str().unwrap_or_default() != SUBPROTOCOL {
             bail!("control plane negotiated subprotocol {proto:?}, wanted {SUBPROTOCOL}");
@@ -374,13 +378,20 @@ impl Conn {
         // Deadlines are mandatory: an RPC with no bound is a leak waiting
         // for a host that has gone away.
         if frame.deadline_ms <= 0 {
-            finish(&shared, &frame.id, method.mode, Err(WireError::invalid("deadline_ms is required"))).await;
+            finish(
+                &shared,
+                &frame.id,
+                method.mode,
+                Err(WireError::invalid("deadline_ms is required")),
+            )
+            .await;
             return;
         }
         let deadline = Duration::from_millis(frame.deadline_ms as u64).clamp(MIN_DEADLINE, MAX_DEADLINE);
 
         let cancel = serve_ctx.child_token();
-        let stream = (method.mode != StreamMode::None).then(|| Arc::new(ConnStream::new(frame.id.clone(), shared.clone())));
+        let stream = (method.mode != StreamMode::None)
+            .then(|| Arc::new(ConnStream::new(frame.id.clone(), shared.clone())));
         {
             let mut inflight = shared.inflight.lock();
             if inflight.contains_key(&frame.id) {
@@ -389,7 +400,10 @@ impl Conn {
                     &shared,
                     &frame.id,
                     method.mode,
-                    Err(WireError::new(ErrorCode::Conflict, format!("request id {} is already in flight", frame.id))),
+                    Err(WireError::new(
+                        ErrorCode::Conflict,
+                        format!("request id {} is already in flight", frame.id),
+                    )),
                 )
                 .await;
                 return;
@@ -564,7 +578,9 @@ impl ConnStream {
         let through = seq + 1;
         let _ = self
             .acked
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| (through > cur).then_some(through));
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+                (through > cur).then_some(through)
+            });
         self.ack_signal.notify_waiters();
     }
 
@@ -636,8 +652,11 @@ impl Stream for ConnStream {
                 // 3 raw bytes become 4 encoded ones; stay under the frame cap.
                 const RAW: usize = MAX_CHUNK_BYTES / 4 * 3;
                 for piece in data.chunks(RAW) {
-                    self.emit(base64::engine::general_purpose::STANDARD.encode(piece), Encoding::Base64)
-                        .await?;
+                    self.emit(
+                        base64::engine::general_purpose::STANDARD.encode(piece),
+                        Encoding::Base64,
+                    )
+                    .await?;
                 }
                 Ok(())
             }
@@ -717,7 +736,10 @@ async fn fetch_token(client: &reqwest::Client, opts: &Options) -> anyhow::Result
     let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
     let timestamp = chrono::Utc::now().timestamp_millis();
 
-    let signature = sign_challenge(&opts.private_key, &format!("{}|{nonce}|{timestamp}", opts.server_id));
+    let signature = sign_challenge(
+        &opts.private_key,
+        &format!("{}|{nonce}|{timestamp}", opts.server_id),
+    );
     let endpoint = join_url(&opts.control_plane_url, "/agent/v1/token")?;
 
     let response = client
@@ -757,7 +779,8 @@ pub fn sign_challenge(key: &SigningKey, message: &str) -> String {
 
 pub fn join_url(base: &str, path: &str) -> anyhow::Result<String> {
     let base = base.trim_end_matches('/');
-    let parsed = url::Url::parse(&format!("{base}{path}")).with_context(|| format!("build url {base}{path}"))?;
+    let parsed =
+        url::Url::parse(&format!("{base}{path}")).with_context(|| format!("build url {base}{path}"))?;
     Ok(parsed.to_string())
 }
 
@@ -770,7 +793,9 @@ mod tests {
     fn challenge_signature_is_raw_64_bytes_and_verifies() {
         let key = SigningKey::random(&mut rand::thread_rng());
         let sig = sign_challenge(&key, "server|nonce|123");
-        let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig).unwrap();
+        let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(sig)
+            .unwrap();
         assert_eq!(raw.len(), 64);
         let parsed = p256::ecdsa::Signature::from_slice(&raw).unwrap();
         key.verifying_key().verify(b"server|nonce|123", &parsed).unwrap();
@@ -786,6 +811,9 @@ mod tests {
 
     #[test]
     fn urls_join_without_double_slashes() {
-        assert_eq!(join_url("https://panel.example/", "/agent/v1/token").unwrap(), "https://panel.example/agent/v1/token");
+        assert_eq!(
+            join_url("https://panel.example/", "/agent/v1/token").unwrap(),
+            "https://panel.example/agent/v1/token"
+        );
     }
 }

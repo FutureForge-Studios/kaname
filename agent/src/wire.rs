@@ -100,7 +100,14 @@ impl WireError {
 
 impl std::fmt::Display for WireError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", serde_json::to_string(&self.code).unwrap_or_default().trim_matches('"'), self.message)
+        write!(
+            f,
+            "{}: {}",
+            serde_json::to_string(&self.code)
+                .unwrap_or_default()
+                .trim_matches('"'),
+            self.message
+        )
     }
 }
 
@@ -123,7 +130,9 @@ impl From<ProviderError> for WireError {
             }
             ProviderError::Io(e) => match e.kind() {
                 std::io::ErrorKind::NotFound => WireError::new(ErrorCode::NotFound, e.to_string()),
-                std::io::ErrorKind::PermissionDenied => WireError::new(ErrorCode::PermissionDenied, e.to_string()),
+                std::io::ErrorKind::PermissionDenied => {
+                    WireError::new(ErrorCode::PermissionDenied, e.to_string())
+                }
                 std::io::ErrorKind::AlreadyExists => WireError::new(ErrorCode::Conflict, e.to_string()),
                 _ => WireError::new(ErrorCode::IoError, e.to_string()),
             },

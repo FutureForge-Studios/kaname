@@ -1716,11 +1716,7 @@ mod tests {
     use serde_json::{Value, json};
 
     fn keys(v: &Value) -> Vec<String> {
-        v.as_object()
-            .expect("object")
-            .keys()
-            .cloned()
-            .collect()
+        v.as_object().expect("object").keys().cloned().collect()
     }
 
     #[test]
@@ -1733,10 +1729,22 @@ mod tests {
         };
         let v = serde_json::to_value(&sample).unwrap();
         let k = keys(&v);
-        for absent in ["cpu_per_core", "memory_cached", "disk_read_rate", "disk_write_rate"] {
+        for absent in [
+            "cpu_per_core",
+            "memory_cached",
+            "disk_read_rate",
+            "disk_write_rate",
+        ] {
             assert!(!k.iter().any(|x| x == absent), "{absent} should be omitted");
         }
-        for present in ["ts", "cpu_percent", "disks", "memory_used", "load15", "net_tx_rate"] {
+        for present in [
+            "ts",
+            "cpu_percent",
+            "disks",
+            "memory_used",
+            "load15",
+            "net_tx_rate",
+        ] {
             assert!(k.iter().any(|x| x == present), "{present} should be present");
         }
 
@@ -1757,7 +1765,10 @@ mod tests {
 
     #[test]
     fn ok_result_default_is_ok_true() {
-        assert_eq!(serde_json::to_string(&OkResult::default()).unwrap(), r#"{"ok":true}"#);
+        assert_eq!(
+            serde_json::to_string(&OkResult::default()).unwrap(),
+            r#"{"ok":true}"#
+        );
         assert_eq!(serde_json::to_string(&OK).unwrap(), r#"{"ok":true}"#);
         assert_eq!(OkResult::default(), OK);
     }
@@ -1767,8 +1778,20 @@ mod tests {
         let v = serde_json::to_value(FileEntry::default()).unwrap();
         let k = keys(&v);
         for name in [
-            "name", "path", "kind", "size", "mode", "owner", "group", "uid", "gid", "modified_at",
-            "link_target", "child_count", "mime", "is_editable",
+            "name",
+            "path",
+            "kind",
+            "size",
+            "mode",
+            "owner",
+            "group",
+            "uid",
+            "gid",
+            "modified_at",
+            "link_target",
+            "child_count",
+            "mime",
+            "is_editable",
         ] {
             assert!(k.iter().any(|x| x == name), "missing key {name}");
         }
@@ -1780,13 +1803,22 @@ mod tests {
 
     #[test]
     fn type_fields_rename_to_type() {
-        let r = ResolvedRecord { r#type: "MX".into(), ..Default::default() };
+        let r = ResolvedRecord {
+            r#type: "MX".into(),
+            ..Default::default()
+        };
         assert_eq!(serde_json::to_value(&r).unwrap()["type"], json!("MX"));
-        let d = MailDnsRecord { rtype: "TXT".into(), ..Default::default() };
+        let d = MailDnsRecord {
+            rtype: "TXT".into(),
+            ..Default::default()
+        };
         let v = serde_json::to_value(&d).unwrap();
         assert_eq!(v["type"], json!("TXT"));
         assert_eq!(v["expected"], Value::Null);
-        let k = SshKeyInfo { r#type: "ssh-ed25519".into(), ..Default::default() };
+        let k = SshKeyInfo {
+            r#type: "ssh-ed25519".into(),
+            ..Default::default()
+        };
         assert_eq!(serde_json::to_value(&k).unwrap()["type"], json!("ssh-ed25519"));
         let p: DnsResolveParams = serde_json::from_value(json!({"name": "a", "type": "A"})).unwrap();
         assert_eq!(p.r#type, "A");
@@ -1801,7 +1833,10 @@ mod tests {
     #[test]
     fn process_node_flattens() {
         let n = ProcessNode {
-            process: ProcessInfo { pid: 7, ..Default::default() },
+            process: ProcessInfo {
+                pid: 7,
+                ..Default::default()
+            },
             depth: 2,
         };
         let v = serde_json::to_value(&n).unwrap();
@@ -1840,7 +1875,10 @@ mod tests {
 
     #[test]
     fn mail_check_status_round_trips_and_ranks() {
-        assert_eq!(serde_json::to_string(&MailCheckStatus::Pass).unwrap(), r#""pass""#);
+        assert_eq!(
+            serde_json::to_string(&MailCheckStatus::Pass).unwrap(),
+            r#""pass""#
+        );
         let s: MailCheckStatus = serde_json::from_str(r#""fail""#).unwrap();
         assert_eq!(s, MailCheckStatus::Fail);
         assert_eq!(MailCheckStatus::default(), MailCheckStatus::Unknown);
@@ -1860,7 +1898,10 @@ mod tests {
         assert_eq!(MailCheckStatus::worst(Fail, Pass), Fail);
 
         // Nullable remedy/help_url are null, never absent.
-        let c = MailCheck { id: "dns".into(), ..Default::default() };
+        let c = MailCheck {
+            id: "dns".into(),
+            ..Default::default()
+        };
         let v = serde_json::to_value(&c).unwrap();
         assert_eq!(v["remedy"], Value::Null);
         assert_eq!(v["help_url"], Value::Null);
