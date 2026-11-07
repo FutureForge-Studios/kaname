@@ -304,6 +304,12 @@ export interface ResourcePageProps<T> {
   emptySecondaryAction?: React.ReactNode;
   /** When set, replaces the unfiltered empty state: this list cannot have rows yet. */
   prerequisite?: ResourcePrerequisite | null;
+  /**
+   * Something the list waits on before its query can run, such as the
+   * server picker resolving. Shows the skeleton instead of an empty state
+   * that is not true yet.
+   */
+  waiting?: boolean;
 
   /** Prefix for the error message, e.g. "Mailboxes". */
   errorContext?: string;
@@ -338,6 +344,7 @@ export function ResourcePage<T>({
   emptyAction,
   emptySecondaryAction,
   prerequisite,
+  waiting = false,
   errorContext,
   children,
   className,
@@ -421,7 +428,7 @@ export function ResourcePage<T>({
           bulkActions={bulkActions}
           rowActions={rowActions}
           onRowClick={onRowClick}
-          loading={query.isLoading}
+          loading={query.isLoading || waiting}
           skeletonRows={Math.min(state.perPage, 10)}
           error={
             query.isError ? (

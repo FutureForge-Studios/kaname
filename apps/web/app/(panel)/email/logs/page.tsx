@@ -94,10 +94,13 @@ export default function MailLogsPage() {
     if (fromUrl) {
       const match = eligible.find((row) => row.id === fromUrl || row.server_id === fromUrl);
       if (match) return match;
-      if (unmatched) return null;
+      // Never fall back to another server on a link that names one: not
+      // while the lists are still loading (that rewrote the URL before the
+      // mismatch could be shown), and not after.
+      return null;
     }
     return eligible[0] ?? null;
-  }, [eligible, fromUrl, unmatched]);
+  }, [eligible, fromUrl]);
 
   const select = React.useCallback(
     (server: MailServer | null) => {

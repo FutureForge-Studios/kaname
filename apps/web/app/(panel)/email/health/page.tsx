@@ -89,10 +89,13 @@ export default function MailHealthPage() {
     if (fromUrl) {
       const match = servers.find((row) => row.id === fromUrl || row.server_id === fromUrl);
       if (match) return match;
-      if (unmatched) return null;
+      // Never fall back to another server on a link that names one: not
+      // while the lists are still loading (that rewrote the URL before the
+      // mismatch could be shown), and not after.
+      return null;
     }
     return servers[0] ?? null;
-  }, [fromUrl, servers, unmatched]);
+  }, [fromUrl, servers]);
 
   const select = React.useCallback(
     (server: MailServer | null) => {
