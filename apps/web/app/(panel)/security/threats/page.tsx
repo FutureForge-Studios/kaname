@@ -276,6 +276,7 @@ export default function ThreatsPage() {
   return (
     <>
       <ResourcePage<ThreatEvent>
+        waiting={selection.isLoading}
         title="Threat protection"
         subtitle={selection.server ? selection.server.hostname : "Every server in your scope"}
         headerActions={

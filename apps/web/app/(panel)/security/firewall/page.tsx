@@ -583,6 +583,7 @@ export default function FirewallPage() {
         emptyDescription="With no rules, the chain default policy decides everything. Add the rules you need, then apply them to the host."
         emptyAction={newRule}
         prerequisite={noServer}
+        waiting={selection.isLoading || (!serverId && selection.servers.length > 0)}
         errorContext="Firewall rules"
       >
         {/* Above the host picker on purpose: while the window is open it
