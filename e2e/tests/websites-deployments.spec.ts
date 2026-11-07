@@ -135,7 +135,7 @@ test("a deploy runs as a job, moves its row to succeeded and keeps its log", asy
   );
   expect(finished.commit_sha).toMatch(/^[0-9a-f]{40}$/);
   expect(await currentRelease(www)).toBe(finished.release_path);
-  await expect(page.getByText(finished.release_path!)).toBeVisible();
+  await expect(page.getByText(finished.release_path!, { exact: true })).toBeVisible();
 });
 
 test("a site without a repository can only be deployed from an upload", async ({ page }) => {
