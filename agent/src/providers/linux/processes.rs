@@ -49,8 +49,8 @@ impl Processes for ProcessOps {
         let total = all.len() as i64;
 
         match p.sort.as_str() {
-            "memory" => all.sort_by(|a, b| b.memory_rss.cmp(&a.memory_rss)),
-            "pid" => all.sort_by(|a, b| a.pid.cmp(&b.pid)),
+            "memory" => all.sort_by_key(|p| std::cmp::Reverse(p.memory_rss)),
+            "pid" => all.sort_by_key(|a| a.pid),
             "name" => all.sort_by(|a, b| a.command.cmp(&b.command)),
             _ => all.sort_by(|a, b| b.cpu_percent.total_cmp(&a.cpu_percent)),
         }

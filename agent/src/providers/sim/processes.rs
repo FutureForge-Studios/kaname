@@ -299,7 +299,7 @@ pub fn live(sim: &Sim, p: &Process, now: DateTime<Utc>) -> ProcessInfo {
 
 pub fn sort_processes(rows: &mut [ProcessInfo], by: &str) {
     match by {
-        "memory" => rows.sort_by(|a, b| b.memory_rss.cmp(&a.memory_rss)),
+        "memory" => rows.sort_by_key(|r| std::cmp::Reverse(r.memory_rss)),
         "pid" => rows.sort_by_key(|r| r.pid),
         "name" => rows.sort_by(|a, b| a.command.cmp(&b.command).then(a.pid.cmp(&b.pid))),
         _ => rows.sort_by(|a, b| {
@@ -339,7 +339,7 @@ impl Processes for SimProcesses {
                 .filter(|proc| {
                     p.user
                         .as_deref()
-                        .map_or(true, |u| u.is_empty() || proc.info.user == u)
+                        .is_none_or(|u| u.is_empty() || proc.info.user == u)
                 })
                 .map(|proc| live(&self.0, proc, now))
                 .collect()

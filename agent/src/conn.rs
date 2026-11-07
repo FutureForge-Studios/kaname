@@ -392,29 +392,35 @@ impl Conn {
         let cancel = serve_ctx.child_token();
         let stream = (method.mode != StreamMode::None)
             .then(|| Arc::new(ConnStream::new(frame.id.clone(), shared.clone())));
-        {
+        // Decided under the lock, acted on after it: a guard that reached the
+        // await below would hold every other request's dispatch hostage.
+        let registered = {
             let mut inflight = shared.inflight.lock();
             if inflight.contains_key(&frame.id) {
-                drop(inflight);
-                finish(
-                    &shared,
-                    &frame.id,
-                    method.mode,
-                    Err(WireError::new(
-                        ErrorCode::Conflict,
-                        format!("request id {} is already in flight", frame.id),
-                    )),
-                )
-                .await;
-                return;
+                false
+            } else {
+                inflight.insert(
+                    frame.id.clone(),
+                    Inflight {
+                        cancel: cancel.clone(),
+                        stream: stream.clone(),
+                    },
+                );
+                true
             }
-            inflight.insert(
-                frame.id.clone(),
-                Inflight {
-                    cancel: cancel.clone(),
-                    stream: stream.clone(),
-                },
-            );
+        };
+        if !registered {
+            finish(
+                &shared,
+                &frame.id,
+                method.mode,
+                Err(WireError::new(
+                    ErrorCode::Conflict,
+                    format!("request id {} is already in flight", frame.id),
+                )),
+            )
+            .await;
+            return;
         }
 
         let ctx = Ctx::new(cancel.clone(), Some(Instant::now() + deadline));

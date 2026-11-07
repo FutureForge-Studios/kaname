@@ -544,7 +544,7 @@ impl Containers for ContainerOps {
 
         let mut containers = Vec::with_capacity(raw.len());
         for entry in raw {
-            let mut info = client.from_list(&entry);
+            let mut info = client.info_from_list(&entry);
             if p.with_stats && info.state == "running" {
                 if let Ok((cpu, memory, limit)) = client.stats(ctx, &entry.id).await {
                     info.cpu_percent = Some(cpu);
@@ -578,7 +578,7 @@ impl Containers for ContainerOps {
         let value: serde_json::Value = serde_json::from_slice(&raw)
             .map_err(|e| ProviderError::internal(format!("decode inspect body: {e}")))?;
         Ok(ContainerInspectResult {
-            container: client.from_inspect(&parsed),
+            container: client.info_from_inspect(&parsed),
             raw: value,
         })
     }
@@ -823,7 +823,7 @@ impl Containers for ContainerOps {
 impl DockerClient {
     async fn inspect(&self, ctx: &Ctx, id: &str) -> PResult<ContainerInfo> {
         let parsed = self.inspect_raw(ctx, id).await?;
-        Ok(self.from_inspect(&parsed))
+        Ok(self.info_from_inspect(&parsed))
     }
 
     async fn inspect_raw(&self, ctx: &Ctx, id: &str) -> PResult<DockerInspect> {
@@ -831,7 +831,7 @@ impl DockerClient {
             .await
     }
 
-    fn from_list(&self, entry: &DockerContainer) -> ContainerInfo {
+    fn info_from_list(&self, entry: &DockerContainer) -> ContainerInfo {
         let ports = entry
             .ports
             .iter()
@@ -871,7 +871,7 @@ impl DockerClient {
         }
     }
 
-    fn from_inspect(&self, parsed: &DockerInspect) -> ContainerInfo {
+    fn info_from_inspect(&self, parsed: &DockerInspect) -> ContainerInfo {
         let mut ports: Vec<ContainerPort> = Vec::new();
         for (spec, bindings) in parsed.network_settings.ports.iter().flatten() {
             let (number, protocol) = split_port_spec(spec);
@@ -1342,7 +1342,7 @@ mod tests {
         });
         let parsed: DockerInspect = serde_json::from_value(raw).unwrap();
         let client = DockerClient::new("/nonexistent", cap::DOCKER);
-        let info = client.from_inspect(&parsed);
+        let info = client.info_from_inspect(&parsed);
         assert_eq!(info.name, "web");
         assert_eq!(info.image, "nginx:latest");
         assert_eq!(info.created_at, "2024-05-01T10:00:00Z");
@@ -1361,7 +1361,7 @@ mod tests {
         let never_started: DockerInspect =
             serde_json::from_value(serde_json::json!({"State": {"StartedAt": "0001-01-01T00:00:00Z"}}))
                 .unwrap();
-        assert!(client.from_inspect(&never_started).started_at.is_none());
+        assert!(client.info_from_inspect(&never_started).started_at.is_none());
     }
 
     #[test]

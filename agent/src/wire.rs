@@ -168,7 +168,10 @@ pub struct RequestFrame {
     pub params: Option<Value>,
     #[serde(default)]
     pub deadline_ms: i64,
+    /// Part of the frame on the wire; the registry's declared mode is what
+    /// decides whether a stream opens, so the agent never trusts this flag.
     #[serde(default)]
+    #[allow(dead_code)]
     pub stream: bool,
 }
 

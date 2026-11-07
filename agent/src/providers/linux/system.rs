@@ -683,6 +683,9 @@ pub fn check_package_name(name: &str) -> PResult<()> {
 /// Every real filesystem with its capacity, from `/proc/mounts` and
 /// `statvfs`. Pseudo filesystems and repeated mountpoints are skipped, and
 /// so is anything that reports zero capacity.
+// statvfs field widths differ between 32- and 64-bit targets, so these
+// casts are a no-op here and load-bearing on armv7.
+#[allow(clippy::unnecessary_cast)]
 pub async fn collect_disks(ctx: &Ctx) -> PResult<Vec<DiskUsage>> {
     ctx.check()?;
     let mounts = std::fs::read_to_string("/proc/mounts")

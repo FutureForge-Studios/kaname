@@ -960,7 +960,7 @@ mod tests {
             "the agent serves {} methods the contract does not declare: {extra:?}",
             extra.len()
         );
-        assert_eq!(r.len(), m.methods.len());
+        assert_eq!(r.names().len(), m.methods.len());
     }
 
     #[test]
