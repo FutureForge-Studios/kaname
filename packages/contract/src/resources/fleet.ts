@@ -290,7 +290,12 @@ export const alertRule = z.object({
   metric: metricName,
   comparator: alertComparator,
   threshold: z.number(),
-  duration_seconds: z.number().int(),
+  /**
+   * How long the condition must hold. Bounded: a negative duration was
+   * accepted and stored, and the evaluator then treated it as "fire on
+   * the first breached sample" without anyone having asked for that.
+   */
+  duration_seconds: z.number().int().min(0).max(604_800),
   severity: alertSeverity,
   scope: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("fleet") }),

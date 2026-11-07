@@ -6,6 +6,7 @@ import {
   agentBinary,
   agentStateRoot,
   apiUrl,
+  authStatePath,
   host,
   ownerEmail,
   ownerPassword,
@@ -43,9 +44,28 @@ export interface JobRow {
 
 const sessions = new Map<string, string>();
 
+/*
+ * Sign-in is rate limited (10 a minute), and Playwright starts a fresh
+ * worker — with fresh module state — after every failing test, so a
+ * suite that signed the owner in per worker could lock itself out of
+ * the API halfway through a bad run. The owner's session is the one the
+ * signin project already saved; it is read back rather than re-made.
+ */
+function savedOwnerCookie(): string | null {
+  if (!existsSync(authStatePath)) return null;
+  const state = JSON.parse(readFileSync(authStatePath, "utf8")) as {
+    cookies: { name: string; value: string }[];
+  };
+  const cookie = state.cookies.find((c) => /session/i.test(c.name)) ?? state.cookies[0];
+  return cookie ? `${cookie.name}=${cookie.value}` : null;
+}
+
 async function signIn(email: string, password: string): Promise<string> {
-  const known = sessions.get(email);
-  if (known) return known;
+  const known = sessions.get(email) ?? (email === ownerEmail ? savedOwnerCookie() : null);
+  if (known) {
+    sessions.set(email, known);
+    return known;
+  }
   const res = await fetch(`${apiUrl}/api/v1/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -263,14 +283,39 @@ export function rowWith(table: Locator, text: string): Locator {
   return table.locator("tbody tr").filter({ hasText: text });
 }
 
-/** Chooses an option in one of the panel's comboboxes by typing part of its label. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Chooses an option in one of the panel's comboboxes by typing part of
+ * its label. The list re-filters after each keystroke, so the click
+ * waits until every option left matches — clicking while the list was
+ * still re-rendering once selected the neighbouring host.
+ */
 export async function choose(page: Page, field: Locator, text: string): Promise<void> {
+  const name = new RegExp(escapeRegExp(text));
   await field.click();
   await field.fill(text);
-  const option = page
-    .getByRole("listbox")
-    .getByRole("option", { name: new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) })
-    .first();
-  await expect(option).toBeVisible();
-  await option.click();
+  const listbox = page.getByRole("listbox");
+  await expect
+    .poll(async () => {
+      const labels = await listbox.getByRole("option").allInnerTexts();
+      return labels.length > 0 && labels.every((label) => name.test(label));
+    })
+    .toBe(true);
+  await listbox.getByRole("option", { name }).first().click();
+  await expect(field).toHaveValue(name);
+}
+
+/** A form control by its exact label (FormField appends "(required)" for required ones). */
+export function field(scope: Locator, label: string): Locator {
+  return scope.getByLabel(new RegExp(`^${escapeRegExp(label)}( \\(required\\))?$`));
+}
+
+export async function serverNamed(name: string): Promise<{ id: string; name: string }> {
+  const servers = await get<{ id: string; name: string }[]>("/servers?per_page=100");
+  const found = servers.find((s) => s.name === name);
+  if (!found) throw new Error(`no server named ${name}`);
+  return found;
 }

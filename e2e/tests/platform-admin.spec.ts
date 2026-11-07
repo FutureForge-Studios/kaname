@@ -37,7 +37,8 @@ function dialogNamed(page: Page, name: string | RegExp): Locator {
 async function chooseOption(page: Page, field: Locator, option: string): Promise<void> {
   await field.click();
   await field.fill(option);
-  await page.getByRole("option", { name: new RegExp(`^${option}`) }).click();
+  // The Combobox's own options, not a native <select>'s on the page behind.
+  await page.locator('div[role="option"]').filter({ hasText: new RegExp(`^${option}`) }).click();
   await page.keyboard.press("Escape");
 }
 
@@ -138,12 +139,12 @@ test.describe("users", () => {
     await expect(page.getByText("Type the password again.")).toBeVisible();
 
     /* Strength is the server's call, shown under the field. */
-    await page.getByLabel("Password", { exact: true }).fill("aaaaaaaaaaaaaa");
+    await page.getByLabel(/^Password/).fill("aaaaaaaaaaaaaa");
     await page.getByLabel("Confirm password").fill("aaaaaaaaaaaaaa");
     await submit.click();
     await expect(page.getByText(/Mix upper and lower case\./)).toBeVisible();
 
-    await page.getByLabel("Password", { exact: true }).fill(STRONG_PASSWORD);
+    await page.getByLabel(/^Password/).fill(STRONG_PASSWORD);
     await page.getByLabel("Confirm password").fill("Something-Else-Entirely-1");
     await submit.click();
     await expect(page.getByText("The two passwords do not match.")).toBeVisible();
@@ -158,7 +159,7 @@ test.describe("users", () => {
     /* The same link a second time is spent, and says so. */
     const again = await (await browser.newContext({ storageState: { cookies: [], origins: [] } })).newPage();
     await again.goto(user.invite.url);
-    await again.getByLabel("Password", { exact: true }).fill("Another-Strong-Passphrase-88");
+    await again.getByLabel(/^Password/).fill("Another-Strong-Passphrase-88");
     await again.getByLabel("Confirm password").fill("Another-Strong-Passphrase-88");
     await again.getByRole("button", { name: "Set password and sign in" }).click();
     await expect(again.getByText("This invitation is not valid any more.")).toBeVisible();
@@ -553,7 +554,7 @@ test.describe.serial("settings", () => {
       await smtp.getByLabel("Connection security").selectOption("none");
       await smtp.getByPlaceholder("username").fill("relay-user");
       await smtp.getByPlaceholder("password").fill("relay-secret-1234");
-      await smtp.getByPlaceholder("Kaname").fill("Forge alerts");
+      await smtp.getByPlaceholder("Kaname", { exact: true }).fill("Forge alerts");
 
       /* A sender that is not an address is named before anything is stored. */
       await smtp.getByPlaceholder("kaname@example.com").fill("not-an-address");

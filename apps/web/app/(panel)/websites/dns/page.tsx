@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   CircleAlert,
   CircleCheck,
@@ -81,12 +81,35 @@ export default function DnsPage() {
   const router = useRouter();
   const can = useCan();
 
+  /*
+   * The zone is what this page is about, not a filter on it. It used to
+   * be one of `filterKeys`, so an empty zone counted as "filtered" and
+   * showed "No matches — clear search and filters" (which also dropped
+   * the zone) instead of this page's own empty state for a zone with no
+   * records. It lives in the URL beside the filters, the way the Sites
+   * page carries its server.
+   */
+  const pathname = usePathname() ?? "/websites/dns";
+  const searchParams = useSearchParams();
+  const domainId = searchParams.get("domain_id") || null;
+  const extraParams = React.useMemo(() => ({ domain_id: domainId ?? undefined }), [domainId]);
+  const setDomainId = React.useCallback(
+    (next: string | null) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (next) params.set("domain_id", next);
+      else params.delete("domain_id");
+      params.delete("page");
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
   const state = useResourceListState({
     defaultSort: { id: "name", order: "asc" },
-    filterKeys: ["domain_id", "type", "managed_by", "drifted"],
+    filterKeys: ["type", "managed_by", "drifted"],
+    extraParams,
   });
-
-  const domainId = state.filters["domain_id"] ?? null;
   const domains = useDomains({ per_page: 200, sort: "name", order: "asc" });
   const domain = React.useMemo<Domain | null>(
     () => domains.data?.data.find((row) => row.id === domainId) ?? null,
@@ -305,7 +328,7 @@ export default function DnsPage() {
             options={domainOptions}
             value={domainId ?? ""}
             onValueChange={(next) =>
-              state.setFilter("domain_id", next && next.length > 0 ? next : null)
+              setDomainId(next && next.length > 0 ? next : null)
             }
             placeholder={domainOptions.length === 0 ? "No domains in scope" : "All zones"}
             emptyMessage="No domain matches that name."

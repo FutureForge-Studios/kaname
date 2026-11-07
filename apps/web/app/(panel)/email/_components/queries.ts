@@ -77,6 +77,8 @@ export function useDeployMailServer() {
     mutationFn: ({ server_name: _name, ...input }) => api.post<{ job: Job }>("/mail-servers", input),
     invalidates: SERVER_FAMILIES,
     describe: (input) => `Deploy Yunori Mail Server on ${input.server_name}`,
+    // The FormDialog shows the refusal above its fields.
+    toastErrors: false,
   });
 }
 
@@ -86,6 +88,8 @@ export function useAdoptMailServer() {
       api.post<{ job: Job }>("/mail-servers/adopt", input),
     invalidates: SERVER_FAMILIES,
     describe: (input) => `Adopt Yunori Mail Server on ${input.server_name}`,
+    // The FormDialog shows the refusal above its fields.
+    toastErrors: false,
   });
 }
 
@@ -195,6 +199,8 @@ export function useAddMailDomain() {
     mutationFn: ({ domain_name: _name, ...input }) => api.post<{ job: Job }>("/mail-domains", input),
     invalidates: DOMAIN_FAMILIES,
     describe: (input) => `Add mail domain ${input.domain_name}`,
+    // The FormDialog shows the refusal above its fields.
+    toastErrors: false,
   });
 }
 
@@ -256,6 +262,8 @@ export function useCreateMailbox() {
   return useResourceMutation<CreateMailboxInput, MailboxCredential>({
     mutationFn: (input) => api.post<MailboxCredential>("/mailboxes", input),
     invalidates: MAILBOX_FAMILIES,
+    // The FormDialog shows the refusal above its fields.
+    toastErrors: false,
   });
 }
 
@@ -301,6 +309,8 @@ export function useCreateMailAlias() {
     mutationFn: ({ address: _address, ...input }) => api.post<{ job: Job }>("/mail-aliases", input),
     invalidates: ALIAS_FAMILIES,
     describe: (input) => `Add alias ${input.address}`,
+    // The FormDialog shows the refusal above its fields.
+    toastErrors: false,
   });
 }
 

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { api, get, rowWith, unique } from "../support/websites.js";
+import { api, field, get, rowWith, unique } from "../support/websites.js";
 
 /* ------------------------------------------------------------------ *
  * Websites — DNS.
@@ -64,9 +64,9 @@ test("a manual zone's records are created, edited and deleted from the DNS page"
   await expect(page.getByRole("button", { name: "Sync zone" })).toBeDisabled();
 
   const dialog = await openAddRecord(page, domain);
-  await dialog.getByLabel("Name").fill("@");
+  await field(dialog, "Name").fill("@");
   await dialog.getByLabel("IPv4 address").fill("203.0.113.10");
-  await dialog.getByLabel("TTL in seconds").fill("300");
+  await field(dialog, "TTL in seconds").fill("300");
   /* The line to publish is shown before anything is saved. */
   await expect(dialog.getByText(`${domain.name}. 300 IN A 203.0.113.10`)).toBeVisible();
   await dialog.getByRole("button", { name: "Add record" }).click();
@@ -83,7 +83,7 @@ test("a manual zone's records are created, edited and deleted from the DNS page"
 
   /* The same record twice is refused rather than duplicated. */
   const again = await openAddRecord(page, domain);
-  await again.getByLabel("Name").fill("@");
+  await field(again, "Name").fill("@");
   await again.getByLabel("IPv4 address").fill("203.0.113.10");
   await again.getByRole("button", { name: "Add record" }).click();
   await expect(again.getByRole("alert").filter({ hasText: "conflict" })).toContainText(
@@ -120,18 +120,18 @@ test("each record type is checked for the shape it needs", async ({ page }) => {
   const dialog = await openAddRecord(page, domain);
   const add = dialog.getByRole("button", { name: "Add record" });
 
-  await dialog.getByLabel("Name").fill("");
+  await field(dialog, "Name").fill("");
   await add.click();
   await expect(dialog.getByText("A record needs a name. Use @ for the zone apex.")).toBeVisible();
   await expect(dialog.getByText("Required.", { exact: true })).toBeVisible();
 
-  await dialog.getByLabel("Name").fill("www.*");
+  await field(dialog, "Name").fill("www.*");
   await expect(
     dialog.getByText(
       "Use @ for the apex, a label such as www, or a full name. Wildcards may only lead.",
     ),
   ).toBeVisible();
-  await dialog.getByLabel("Name").fill("www");
+  await field(dialog, "Name").fill("www");
 
   await dialog.getByLabel("IPv4 address").fill("203.0.113.256");
   await expect(
@@ -140,17 +140,17 @@ test("each record type is checked for the shape it needs", async ({ page }) => {
   await dialog.getByLabel("IPv4 address").fill("203.0.113.1");
 
   /* Boundary: 604800 seconds is the longest TTL the contract allows. */
-  await dialog.getByLabel("TTL in seconds").fill("604801");
+  await field(dialog, "TTL in seconds").fill("604801");
   await expect(dialog.getByText("TTL cannot exceed 604800 seconds (7 days).")).toBeVisible();
-  await dialog.getByLabel("TTL in seconds").fill("604800");
+  await field(dialog, "TTL in seconds").fill("604800");
   await expect(dialog.getByText("TTL cannot exceed 604800 seconds (7 days).")).toBeHidden();
 
-  await dialog.getByLabel("Type").selectOption("AAAA");
+  await field(dialog, "Type").selectOption("AAAA");
   await dialog.getByLabel("IPv6 address").fill("2001:db8::1::2");
   await expect(dialog.getByText("Must be an IPv6 address, for example 2001:db8::1.")).toBeVisible();
 
   /* MX: the host only, the priority in its own field. */
-  await dialog.getByLabel("Type").selectOption("MX");
+  await field(dialog, "Type").selectOption("MX");
   await dialog.getByLabel("Mail host").fill("10 mail.example.com");
   await expect(
     dialog.getByText("Put the priority in its own field and leave only the target host here."),
@@ -159,17 +159,17 @@ test("each record type is checked for the shape it needs", async ({ page }) => {
   await expect(
     dialog.getByText("An MX record needs a priority. Lower numbers are tried first."),
   ).toBeVisible();
-  await dialog.getByLabel("Priority").fill("65536");
+  await field(dialog, "Priority").fill("65536");
   await expect(dialog.getByText("Priority must be 0–65535.")).toBeVisible();
-  await dialog.getByLabel("Priority").fill("10");
+  await field(dialog, "Priority").fill("10");
 
-  await dialog.getByLabel("Type").selectOption("CAA");
+  await field(dialog, "Type").selectOption("CAA");
   await dialog.getByLabel("Authorisation").fill("issue letsencrypt.org");
   await expect(
     dialog.getByText('Must read flags, tag and a quoted value, for example 0 issue "letsencrypt.org".'),
   ).toBeVisible();
 
-  await dialog.getByLabel("Type").selectOption("SRV");
+  await field(dialog, "Type").selectOption("SRV");
   await dialog.getByLabel("Weight, port and target").fill("10 70000 sip.example.com");
   await expect(dialog.getByText("Port must be 1–65535.")).toBeVisible();
 
@@ -204,7 +204,7 @@ test("a Cloudflare zone with no token refuses writes and syncs, and says why", a
 
   const dialog = await openAddRecord(page, docs);
   await expect(dialog).toContainText("Written straight to the zone at Cloudflare.");
-  await dialog.getByLabel("Name").fill("e2e");
+  await field(dialog, "Name").fill("e2e");
   await dialog.getByLabel("IPv4 address").fill("203.0.113.77");
   await dialog.getByRole("button", { name: "Add record" }).click();
   await expect(dialog.getByRole("alert").filter({ hasText: "precondition_failed" })).toContainText(

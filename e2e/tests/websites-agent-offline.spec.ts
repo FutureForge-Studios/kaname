@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import { serverNamed } from "../support/api.js";
 import {
   api,
   choose,
@@ -11,6 +10,7 @@ import {
   startAgent,
   stopAgent,
   unique,
+  serverNamed,
 } from "../support/websites.js";
 
 /* ------------------------------------------------------------------ *

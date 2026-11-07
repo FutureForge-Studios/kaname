@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { serverNamed } from "../support/api.js";
 import {
   api,
   choose,
@@ -12,6 +11,7 @@ import {
   signInAs,
   unique,
   type Person,
+  serverNamed,
 } from "../support/websites.js";
 
 /* ------------------------------------------------------------------ *

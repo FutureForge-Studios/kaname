@@ -228,6 +228,10 @@ test.describe("firewall", () => {
     await addRule(page, { priority: "5", port: "22", source: "127.0.0.1/32", comment: "e2e operator SSH" });
     await expect(ruleRow(table, "e2e operator SSH")).toBeVisible();
 
+    /* A disabled rule is kept in Kaname but must not be live on the host. */
+    await rowAction(page, ruleRow(table, "HTTP and HTTPS"), "Disable rule");
+    await expect(ruleRow(table, "HTTP and HTTPS").getByText("disabled")).toBeVisible();
+
     await page.getByRole("button", { name: "Apply to host" }).click();
     const dialog = page.getByRole("dialog", { name: /^Apply \d+ rules to forge-01$/ });
     await expect(dialog).toBeVisible();
@@ -242,6 +246,9 @@ test.describe("firewall", () => {
     await expect
       .poll(() => hostFile(forge.id, NFT))
       .toContain('ip saddr 127.0.0.1/32 tcp dport { 22 } accept comment "e2e operator SSH"');
+    const live = await hostFile(forge.id, NFT);
+    expect(live).toContain('comment "ICMP echo"');
+    expect(live, "a disabled rule was installed as active").not.toContain('comment "HTTP and HTTPS"');
 
     const banner = page.getByRole("status").filter({ hasText: "forge-01 reverts its firewall rule set in" });
     await expect(banner).toBeVisible();

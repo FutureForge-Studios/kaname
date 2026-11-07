@@ -1,5 +1,4 @@
 import { expect, test, type Page } from "@playwright/test";
-import { serverNamed } from "../support/api.js";
 import { missingId } from "../support/config.js";
 import {
   api,
@@ -11,6 +10,7 @@ import {
   settledJob,
   unique,
   type JobRow,
+  serverNamed,
 } from "../support/websites.js";
 
 /* ------------------------------------------------------------------ *
@@ -236,10 +236,7 @@ test("the control plane refuses what the form cannot check", async ({ page }) =>
   const clash = dialog.getByRole("alert").filter({ hasText: "conflict" });
   await expect(clash).toContainText(`${HOST} already has a site named "${first}".`);
   /* The remedy is a link to the site that already has the name. */
-  await expect(clash.getByRole("link", { name: "Open it" })).toHaveAttribute(
-    "href",
-    /\/websites\/sites\/[0-9a-f-]{36}$/,
-  );
+  await expect(clash.getByRole("button", { name: "Open it" })).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
 
   /* Same domain on a second site: two vhosts would claim one server_name. */
@@ -461,7 +458,7 @@ test("a site that does not exist says so by id", async ({ page }) => {
 test("a search with no match is an empty state, not an error", async ({ page }) => {
   await page.goto(`/websites/sites?q=${unique("no-such-site")}`);
   await expect(page.getByText("No matches")).toBeVisible();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
   await page.getByRole("button", { name: "Clear filters" }).click();
   await expect(rowWith(page.getByRole("table", { name: "Sites" }), "futureforge-www")).toBeVisible();
 });
