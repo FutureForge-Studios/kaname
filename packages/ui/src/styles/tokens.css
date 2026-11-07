@@ -260,9 +260,16 @@ samp,
  * One focus treatment for the entire product: a 3px halo, 2px off the
  * edge. The outline follows the element's own corner radius.
  */
-:focus-visible {
-  outline: var(--kn-ring-width) solid var(--kn-ring);
-  outline-offset: var(--kn-ring-offset-width);
+/*
+ * In the base layer so a component can opt out with a utility: the field
+ * box draws the ring around its native input and turns the input's own off.
+ * Unlayered, this rule beat outline-none and drew a second ring inside.
+ */
+@layer base {
+  :focus-visible {
+    outline: var(--kn-ring-width) solid var(--kn-ring);
+    outline-offset: var(--kn-ring-offset-width);
+  }
 }
 
 /* Scrollbars that match the surface instead of the OS. */
