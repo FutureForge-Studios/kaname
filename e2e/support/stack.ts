@@ -15,6 +15,7 @@ import {
   repoRoot,
   stackFile,
   webPort,
+  nextDistDir,
   webUrl,
 } from "./config.js";
 import { killTree, launch, run, waitUntil, type Managed } from "./processes.js";
@@ -171,7 +172,7 @@ function buildPanel(): Promise<void> {
   const [command, args] = nextCli("build");
   return run("panel-build", command, args, {
     cwd: join(repoRoot, "apps", "web"),
-    env: { KANAME_CONTROL_PLANE_URL: apiUrl, KANAME_PUBLIC_URL: webUrl },
+    env: { KANAME_CONTROL_PLANE_URL: apiUrl, KANAME_PUBLIC_URL: webUrl, KANAME_NEXT_DIST_DIR: nextDistDir },
   });
 }
 
@@ -179,7 +180,7 @@ function startPanel(): Managed {
   const [command, args] = nextCli("start", "--port", String(webPort));
   return launch("panel", command, args, {
     cwd: join(repoRoot, "apps", "web"),
-    env: { KANAME_CONTROL_PLANE_URL: apiUrl, KANAME_PUBLIC_URL: webUrl },
+    env: { KANAME_CONTROL_PLANE_URL: apiUrl, KANAME_PUBLIC_URL: webUrl, KANAME_NEXT_DIST_DIR: nextDistDir },
   });
 }
 

@@ -18,7 +18,15 @@ import { fileURLToPath } from "node:url";
 export const e2eDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const repoRoot = resolve(e2eDir, "..");
 
-export const artifactsDir = join(e2eDir, ".artifacts");
+/*
+ * One directory per stack. Overridable (with the ports, the database and
+ * the panel build below) so several suites can run side by side, each
+ * with its own agents, session and panel build.
+ */
+export const artifactsDir = process.env["KANAME_E2E_ARTIFACTS_DIR"] ?? join(e2eDir, ".artifacts");
+
+/** Where the panel bundle under test is built, relative to apps/web. */
+export const nextDistDir = process.env["KANAME_E2E_NEXT_DIST_DIR"] ?? ".next";
 export const logsDir = join(artifactsDir, "logs");
 export const agentStateRoot = join(artifactsDir, "agents");
 export const stackFile = join(artifactsDir, "stack.json");

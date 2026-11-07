@@ -408,8 +408,19 @@ Playwright — `pnpm test:e2e` does.
 `pnpm test:e2e` boots a whole stack in `globalSetup`: it resets and reseeds a separate database,
 builds the agent, runs a full `next build`, starts the control plane, enrols four agents and
 serves the panel. It uses ports 3100/4100 and `.data/e2e`, so it will not take your dev database
-or dev ports — but it shares `apps/web/.next` with `next dev`, so stop `pnpm dev` first. The first
-run needs `pnpm exec playwright install`.
+or dev ports. By default it builds into `apps/web/.next`, which `next dev` also uses, so either stop
+`pnpm dev` first or give the suite its own build directory. Every part of a stack can be moved, so
+several suites can run side by side:
+
+```bash
+KANAME_E2E_API_PORT=4201 KANAME_E2E_WEB_PORT=3201 \
+KANAME_E2E_DATABASE_URL=pglite://./.data/e2e-a \
+KANAME_E2E_ARTIFACTS_DIR=$PWD/e2e/.artifacts-a \
+KANAME_E2E_NEXT_DIST_DIR=.next-e2e-a \
+  pnpm test:e2e
+```
+
+The first run needs `pnpm exec playwright install`.
 
 Cross-compiling the agent (static musl, the way the release pipeline does it):
 
