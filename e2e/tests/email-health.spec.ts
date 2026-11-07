@@ -45,16 +45,22 @@ test("Check now runs doctor on the host and the page shows its verdict", async (
   const zen = checks.getByRole("listitem").filter({ hasText: "Spamhaus ZEN" });
   await expect(zen).toContainText("Fail");
   await expect(zen).toContainText("Request removal at check.spamhaus.org");
-  await expect(checks.getByRole("listitem").filter({ hasText: "Reverse DNS (PTR)" })).toContainText("Warn");
+  await expect(checks.getByRole("listitem").filter({ hasText: "Reverse DNS (PTR)" })).toContainText(
+    "Warn",
+  );
   await expect(page.getByText(/host read/)).toContainText(/just now|\ds ago/);
 
   /* Passing checks are folded away, and unfold. */
   const passing = synced.checks.filter((c) => c.status === "pass").length;
   await checks.getByRole("button", { name: `Show ${passing} passing checks` }).click();
-  await expect(checks.getByRole("listitem").filter({ hasText: "Service stalwart" })).toContainText("Pass");
+  await expect(checks.getByRole("listitem").filter({ hasText: "Service stalwart" })).toContainText(
+    "Pass",
+  );
 });
 
-test("the certificate card reads the host's certificate and renews it as a job", async ({ page }) => {
+test("the certificate card reads the host's certificate and renews it as a job", async ({
+  page,
+}) => {
   const api = await owner();
   const row = (await mailServerOn(api, MAIL_HOST))!;
   await page.goto(`/email/health?server_id=${row.server_id}`);
@@ -71,10 +77,14 @@ test("the certificate card reads the host's certificate and renews it as a job",
   await expect(entry).toContainText(MAIL_HOST);
   await closeJobDrawer(page);
 
-  const jobs = await api.data<JobRow[]>(`/jobs?type=mail.certificate.renew&server_id=${row.server_id}&per_page=1`);
+  const jobs = await api.data<JobRow[]>(
+    `/jobs?type=mail.certificate.renew&server_id=${row.server_id}&per_page=1`,
+  );
   expect(jobs[0]?.status).toBe("succeeded");
   expect(jobs[0]?.result).toMatchObject({ outcome: expect.stringContaining("nothing to do") });
-  expect(await api.jobLog(jobs[0]!.id)).toContain("Checking the certificate for mail.futureforge.dev");
+  expect(await api.jobLog(jobs[0]!.id)).toContain(
+    "Checking the certificate for mail.futureforge.dev",
+  );
 });
 
 test("preflight runs on the live host only when asked", async ({ page }) => {
@@ -82,15 +92,21 @@ test("preflight runs on the live host only when asked", async ({ page }) => {
   const row = (await mailServerOn(api, MAIL_HOST))!;
   await page.goto(`/email/health?server_id=${row.server_id}`);
 
-  const card = page.locator("section").filter({ has: page.getByRole("button", { name: "Preflight" }) });
+  const card = page
+    .locator("section")
+    .filter({ has: page.getByRole("button", { name: "Preflight" }) });
   await card.getByRole("button", { name: "Preflight" }).click();
   await expect(card).toContainText("Nothing has run yet.");
 
-  const ran = page.waitForResponse((res) => res.url().includes(`/mail-servers/${row.id}/preflight`));
+  const ran = page.waitForResponse((res) =>
+    res.url().includes(`/mail-servers/${row.id}/preflight`),
+  );
   await card.getByRole("button", { name: "Run preflight" }).click();
   expect((await ran).status()).toBe(200);
 
-  await expect(card.getByRole("listitem").filter({ hasText: "Outbound port 25" })).toContainText("Info");
+  await expect(card.getByRole("listitem").filter({ hasText: "Outbound port 25" })).toContainText(
+    "Info",
+  );
   await expect(card.getByRole("listitem").filter({ hasText: "Mail hostname" })).toContainText(
     "mail.futureforge.dev resolves to 198.51.100.42",
   );
@@ -113,13 +129,17 @@ test("Update yunori-mail runs as a job and reports what the host said", async ({
   await closeJobDrawer(page);
 
   const row = (await mailServerOn(api, MAIL_HOST))!;
-  const job = (await api.data<JobRow[]>(`/jobs?type=mail.server.update&server_id=${row.server_id}&per_page=1`))[0]!;
+  const job = (
+    await api.data<JobRow[]>(`/jobs?type=mail.server.update&server_id=${row.server_id}&per_page=1`)
+  )[0]!;
   expect(job.status).toBe("succeeded");
   expect(await api.jobLog(job.id)).toContain(`${row.version} is the latest release; nothing to do`);
   await expect(card.getByText(row.version!, { exact: true })).toBeVisible();
 });
 
-test("the live tail streams the host's journal as messages, filters on the host and stops", async ({ page }) => {
+test("the live tail streams the host's journal as messages, filters on the host and stops", async ({
+  page,
+}) => {
   const api = await owner();
   const row = (await mailServerOn(api, MAIL_HOST))!;
   await page.goto(`/email/logs?server_id=${row.server_id}`);
@@ -148,13 +168,15 @@ test("the live tail streams the host's journal as messages, filters on the host 
   await expect(viewer).toContainText("DKIM verification passed");
 });
 
-test("a deep link to a mail server that is not there says so instead of showing another", async ({ page }) => {
+test("a deep link to a mail server that is not there says so instead of showing another", async ({
+  page,
+}) => {
   await page.goto(`/email/health?server_id=${missingId}`);
   await expect(page.getByText("No mail server matches this link")).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`server_id=${missingId}`));
   /* The way on is offered, and goes to a server that exists. */
   const show = page.getByRole("button", { name: /^Show / });
-  const first = ((await show.innerText()).replace(/^Show /, "")).trim();
+  const first = (await show.innerText()).replace(/^Show /, "").trim();
   await show.click();
   await expect(page.getByRole("combobox", { name: "Mail server" })).toHaveValue(first);
   await expect(page).not.toHaveURL(new RegExp(missingId));

@@ -1188,7 +1188,9 @@ async function assertDomainHostsNoMail(
     throw conflict(`${domain.name} already hosts mail.`, {
       summary: "A domain receives mail on one server. Open the existing mail domain instead.",
       // The Domains page has no `?id=` deep link; its search box is in the URL.
-      actions: [{ label: "Open mail domain", href: `/email/domains?q=${encodeURIComponent(domain.name)}` }],
+      actions: [
+        { label: "Open mail domain", href: `/email/domains?q=${encodeURIComponent(domain.name)}` },
+      ],
     });
   }
 }

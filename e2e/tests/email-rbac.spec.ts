@@ -92,8 +92,16 @@ const PROBES: Probe[] = [
   { method: "POST", path: `/mail-servers/${missingId}/sync`, permission: "email.servers:read" },
   { method: "GET", path: `/mail-servers/${missingId}/preflight`, permission: "email.servers:read" },
   { method: "POST", path: `/mail-servers/${missingId}/update`, permission: "email.servers:exec" },
-  { method: "POST", path: `/mail-servers/${missingId}/certificate/renew`, permission: "email.servers:exec" },
-  { method: "GET", path: `/mail-servers/${missingId}/deploy-secrets`, permission: "email.servers:write" },
+  {
+    method: "POST",
+    path: `/mail-servers/${missingId}/certificate/renew`,
+    permission: "email.servers:exec",
+  },
+  {
+    method: "GET",
+    path: `/mail-servers/${missingId}/deploy-secrets`,
+    permission: "email.servers:write",
+  },
   { method: "DELETE", path: `/mail-servers/${missingId}`, permission: "email.servers:write" },
   {
     method: "POST",
@@ -101,10 +109,19 @@ const PROBES: Probe[] = [
     body: { server_id: missingId, domain_id: missingId, admin_email: "ops@example.org" },
     permission: "email.servers:write",
   },
-  { method: "POST", path: "/mail-servers/adopt", body: { server_id: missingId }, permission: "email.servers:write" },
+  {
+    method: "POST",
+    path: "/mail-servers/adopt",
+    body: { server_id: missingId },
+    permission: "email.servers:write",
+  },
   { method: "GET", path: `/mail-domains/${missingId}`, permission: "email.mailboxes:read" },
   { method: "GET", path: `/mail-domains/${missingId}/dns`, permission: "email.mailboxes:read" },
-  { method: "POST", path: `/mail-domains/${missingId}/dns/check`, permission: "email.servers:exec" },
+  {
+    method: "POST",
+    path: `/mail-domains/${missingId}/dns/check`,
+    permission: "email.servers:exec",
+  },
   { method: "DELETE", path: `/mail-domains/${missingId}`, permission: "email.mailboxes:delete" },
   {
     method: "POST",
@@ -119,7 +136,11 @@ const PROBES: Probe[] = [
     body: { mail_domain_id: missingId, local_part: "probe" },
     permission: "email.mailboxes:write",
   },
-  { method: "POST", path: `/mailboxes/${missingId}/reset-password`, permission: "email.mailboxes:write" },
+  {
+    method: "POST",
+    path: `/mailboxes/${missingId}/reset-password`,
+    permission: "email.mailboxes:write",
+  },
   { method: "DELETE", path: `/mailboxes/${missingId}`, permission: "email.mailboxes:delete" },
   { method: "GET", path: `/mail-aliases/${missingId}`, permission: "email.routing:read" },
   {
@@ -193,7 +214,9 @@ test("refusals change nothing: an auditor cannot create, reset or delete a real 
   /* The secret is the operator's alone: nobody else can read it back. */
   const asOwner = await admin.get(`/mailboxes/${made.body.data!.mailbox.id}`);
   expect(asOwner.text).not.toContain(made.body.data!.password);
-  const cleanup = await admin.del<{ job: { id: string } }>(`/mailboxes/${made.body.data!.mailbox.id}`);
+  const cleanup = await admin.del<{ job: { id: string } }>(
+    `/mailboxes/${made.body.data!.mailbox.id}`,
+  );
   expect((await admin.job(cleanup.body.data!.job.id)).status).toBe("succeeded");
 });
 
@@ -214,7 +237,9 @@ async function signedInPage(browser: Browser, role: SystemRoleSlug): Promise<Pag
     return page;
   }
   const [name, ...rest] = apis.get(role)!.cookie.split("=");
-  await context.addCookies([{ name: name!, value: rest.join("="), domain: "127.0.0.1", path: "/" }]);
+  await context.addCookies([
+    { name: name!, value: rest.join("="), domain: "127.0.0.1", path: "/" },
+  ]);
   await page.goto("/");
   await expect(page).not.toHaveURL(/\/login/);
   return page;
@@ -223,10 +248,14 @@ async function signedInPage(browser: Browser, role: SystemRoleSlug): Promise<Pag
 for (const role of ["owner", "operator"] as const) {
   test(`${role}: the panel offers every Email action`, async ({ browser }) => {
     const page = await signedInPage(browser, role);
-    await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Mail servers" })).toBeVisible();
+    await expect(
+      page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Mail servers" }),
+    ).toBeVisible();
 
     await page.goto("/email");
-    await expect(page.getByRole("button", { name: "Deploy Yunori Mail Server" }).first()).toBeEnabled();
+    await expect(
+      page.getByRole("button", { name: "Deploy Yunori Mail Server" }).first(),
+    ).toBeEnabled();
     await expect(page.getByRole("button", { name: "Adopt existing" })).toBeEnabled();
 
     await page.goto("/email/mailboxes");
@@ -249,7 +278,9 @@ test("auditor: reads every Email page and every mutation is disabled", async ({ 
   const mail = (await mailServerOn(admin, "mail-01"))!;
 
   await page.goto("/email");
-  await expect(page.getByRole("button", { name: "Deploy Yunori Mail Server" }).first()).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Deploy Yunori Mail Server" }).first(),
+  ).toBeDisabled();
   await expect(page.getByRole("button", { name: "Adopt existing" })).toBeDisabled();
   const card = page.getByRole("main").getByRole("listitem").filter({ hasText: "mail-01" }).first();
   await card.getByRole("button", { name: "More actions" }).click();
@@ -268,7 +299,9 @@ test("auditor: reads every Email page and every mutation is disabled", async ({ 
 
   await page.goto("/email/mailboxes");
   await expect(page.getByRole("button", { name: "Create mailbox" })).toBeDisabled();
-  await tableRow(page, "Mailboxes", "hello@futureforge.dev").getByRole("button", { name: "Row actions" }).click();
+  await tableRow(page, "Mailboxes", "hello@futureforge.dev")
+    .getByRole("button", { name: "Row actions" })
+    .click();
   await expect(page.getByRole("menuitem", { name: "Reset password" })).toBeDisabled();
   await expect(page.getByRole("menuitem", { name: "Delete mailbox" })).toBeDisabled();
   await page.keyboard.press("Escape");
@@ -279,12 +312,16 @@ test("auditor: reads every Email page and every mutation is disabled", async ({ 
   await page.goto(`/email/health?server_id=${mail.server_id}`);
   await expect(page.getByRole("button", { name: "Renew certificate" })).toBeDisabled();
   await page.goto(`/email/logs?server_id=${mail.server_id}`);
-  await expect(page.getByRole("log", { name: "Mail log on mail-01" })).toContainText("stalwart-mail");
+  await expect(page.getByRole("log", { name: "Mail log on mail-01" })).toContainText(
+    "stalwart-mail",
+  );
   await page.context().close();
 });
 
 for (const role of ["developer", "viewer"] as const) {
-  test(`${role}: has no Email in the panel, and a deep link is refused plainly`, async ({ browser }) => {
+  test(`${role}: has no Email in the panel, and a deep link is refused plainly`, async ({
+    browser,
+  }) => {
     const page = await signedInPage(browser, role);
     const nav = page.getByRole("navigation", { name: "Primary" });
     await expect(nav.getByRole("link", { name: "Command Center" })).toBeVisible();

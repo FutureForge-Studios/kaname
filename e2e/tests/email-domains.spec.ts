@@ -37,9 +37,10 @@ test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 test("the DNS drawer copies each record and the zone file byte for byte", async ({ page }) => {
   const api = await owner();
   const domain = (await mailDomainNamed(api, PRIMARY))!;
-  const report = await api.data<{ zone_file: string; records: { name: string; expected: string | null }[] }>(
-    `/mail-domains/${domain.id}/dns`,
-  );
+  const report = await api.data<{
+    zone_file: string;
+    records: { name: string; expected: string | null }[];
+  }>(`/mail-domains/${domain.id}/dns`);
 
   await page.goto("/email/domains");
   await tableRow(page, "Mail domains", PRIMARY).click();
@@ -85,7 +86,9 @@ test("Check DNS now re-reads the host and the drawer shows its answer", async ({
   /* What the simulated Yunori publishes: its own DKIM selector (ym1), the
    * full checklist with the optional records, and a zone file it wrote. */
   const after = (await mailDomainNamed(api, PRIMARY))!;
-  expect(new Date(after.dns_checked_at!).getTime()).toBeGreaterThan(new Date(before.dns_checked_at!).getTime());
+  expect(new Date(after.dns_checked_at!).getTime()).toBeGreaterThan(
+    new Date(before.dns_checked_at!).getTime(),
+  );
   const report = await api.data<{ zone_file: string; records: { name: string; status: string }[] }>(
     `/mail-domains/${after.id}/dns`,
   );
@@ -95,14 +98,15 @@ test("Check DNS now re-reads the host and the drawer shows its answer", async ({
   /* The drawer that was open the whole time refreshed by itself when the
    * job landed; nothing was reopened to see the host's answer. */
   const records = drawer.getByRole("list", { name: "DNS records" });
-  await expect(records.getByRole("listitem").filter({ hasText: `ym1._domainkey.${PRIMARY}` })).toHaveAttribute(
-    "data-record-status",
-    "fail",
-  );
+  await expect(
+    records.getByRole("listitem").filter({ hasText: `ym1._domainkey.${PRIMARY}` }),
+  ).toHaveAttribute("data-record-status", "fail");
   await expect(records.getByRole("listitem")).toHaveCount(report.records.length);
 });
 
-test("a domain is added to a mail server and shows the records it still needs", async ({ page }) => {
+test("a domain is added to a mail server and shows the records it still needs", async ({
+  page,
+}) => {
   const api = await owner();
   expect((await kanameDomain(api, EXTRA)).has_mail).toBe(false);
 
@@ -134,17 +138,21 @@ test("a domain is added to a mail server and shows the records it still needs", 
   await expect(row).not.toContainText("Primary");
 
   const added = (await mailDomainNamed(api, EXTRA))!;
-  expect(added).toMatchObject({ status: "active", dns_status: "fail", is_primary: false, server_name: MAIL_HOST });
+  expect(added).toMatchObject({
+    status: "active",
+    dns_status: "fail",
+    is_primary: false,
+    server_name: MAIL_HOST,
+  });
   expect((await kanameDomain(api, EXTRA)).has_mail).toBe(true);
 
   /* Nothing is published yet for a brand-new domain. */
   await row.click();
   const drawer = page.getByRole("dialog").filter({ hasText: "DNS records for" });
   await expect(drawer).toContainText("required records are still missing");
-  await expect(drawer.getByRole("list", { name: "DNS records" }).getByRole("listitem").first()).toHaveAttribute(
-    "data-record-status",
-    "fail",
-  );
+  await expect(
+    drawer.getByRole("list", { name: "DNS records" }).getByRole("listitem").first(),
+  ).toHaveAttribute("data-record-status", "fail");
   await page.keyboard.press("Escape");
 
   /* Adding it twice is refused by the control plane, not only the picker. */
@@ -180,7 +188,9 @@ test("removing a domain is refused while it has mailboxes, then works behind a t
   const row = tableRow(page, "Mail domains", EXTRA);
   await rowAction(page, row, "Remove from server");
   const blocked = page.getByRole("dialog", { name: `Remove ${EXTRA} from ${MAIL_HOST}?` });
-  await expect(blocked).toContainText(`${EXTRA} still has 1 mailbox and 0 aliases. Delete them first`);
+  await expect(blocked).toContainText(
+    `${EXTRA} still has 1 mailbox and 0 aliases. Delete them first`,
+  );
   await expect(blocked.getByRole("textbox")).toHaveCount(0);
   await blocked.getByRole("button", { name: "Open its mailboxes" }).click();
   await expect(page).toHaveURL(new RegExp(`/email/mailboxes\\?mail_domain_id=${domain.id}`));
@@ -226,7 +236,9 @@ test("the primary domain cannot be removed", async ({ page }) => {
 
   const refused = await api.del(`/mail-domains/${primary.id}`);
   expect(refused.status).toBe(409);
-  expect(refused.body.error?.message).toBe(`${PRIMARY} is the domain this mail server was installed with.`);
+  expect(refused.body.error?.message).toBe(
+    `${PRIMARY} is the domain this mail server was installed with.`,
+  );
   expect((await mailDomainNamed(api, PRIMARY))?.status).toBe("active");
 });
 
