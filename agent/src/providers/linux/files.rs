@@ -467,9 +467,13 @@ impl Files for FileOps {
             .await
             .map_err(|e| wrap_fs_error(&dir, e))?;
 
+        // The declared size is the end marker: the control plane sends no
+        // end-of-input frame for an upload (routes/files.ts), so reading
+        // until the stream closed waited for ever on every upload.
         let mut written = 0i64;
-        while let Some(chunk) = s.recv().await? {
-            if p.size > 0 && written + chunk.len() as i64 > p.size {
+        while written < p.size {
+            let Some(chunk) = s.recv().await? else { break };
+            if written + chunk.len() as i64 > p.size {
                 return Err(ProviderError::PreconditionFailed(format!(
                     "upload exceeded the declared size of {} bytes",
                     p.size
@@ -479,6 +483,12 @@ impl Files for FileOps {
                 .await
                 .map_err(|e| ProviderError::internal(format!("write {temp_name}: {e}")))?;
             written += chunk.len() as i64;
+        }
+        if written != p.size {
+            return Err(ProviderError::PreconditionFailed(format!(
+                "upload ended after {written} of the declared {} bytes",
+                p.size
+            )));
         }
 
         temp.set_permissions(std::fs::Permissions::from_mode(mode))
@@ -2217,6 +2227,90 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::Conflict(_)));
+    }
+
+    /// The control plane never closes an upload's input: the declared
+    /// size is the end marker. A provider that read until the stream
+    /// closed hung every real upload.
+    struct NeverEnds(tokio::sync::Mutex<VecDeque<Vec<u8>>>);
+
+    #[async_trait]
+    impl Stream for NeverEnds {
+        async fn send(&self, _data: &[u8], _enc: Encoding) -> PResult<()> {
+            Ok(())
+        }
+        async fn recv(&self) -> PResult<Option<Vec<u8>>> {
+            let next = self.0.lock().await.pop_front();
+            match next {
+                Some(chunk) => Ok(Some(chunk)),
+                None => std::future::pending().await,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_finishes_at_the_declared_size_without_an_end_of_input() {
+        let root = tempfile::tempdir().unwrap();
+        let ops = FileOps(test_shared());
+        let ctx = Ctx::background();
+        let target = root.path().join("open-ended.bin");
+
+        let stream = Arc::new(NeverEnds(tokio::sync::Mutex::new(VecDeque::from(vec![
+            vec![7u8; 6],
+            vec![9u8; 4],
+        ]))));
+        let params = FsUploadParams {
+            path: s(&target),
+            size: 10,
+            mode: None,
+            overwrite: false,
+        };
+        let entry = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ops.upload(&ctx, params, stream),
+        )
+        .await
+        .expect("an upload that has its declared bytes must not wait for more")
+        .unwrap();
+        assert_eq!(entry.size, 10);
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            [vec![7u8; 6], vec![9u8; 4]].concat()
+        );
+
+        // An empty file needs no chunk at all.
+        let empty = root.path().join("empty.bin");
+        let stream = Arc::new(NeverEnds(tokio::sync::Mutex::new(VecDeque::new())));
+        let params = FsUploadParams {
+            path: s(&empty),
+            size: 0,
+            mode: None,
+            overwrite: false,
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            ops.upload(&ctx, params, stream),
+        )
+        .await
+        .expect("an empty upload must not wait for a chunk")
+        .unwrap();
+        assert_eq!(std::fs::read(&empty).unwrap().len(), 0);
+
+        // A body that stops short of the declared size is refused.
+        let short = root.path().join("short.bin");
+        let stream = Arc::new(Recorder {
+            inbox: tokio::sync::Mutex::new(VecDeque::from(vec![vec![1u8; 3]])),
+            ..Default::default()
+        });
+        let params = FsUploadParams {
+            path: s(&short),
+            size: 8,
+            mode: None,
+            overwrite: false,
+        };
+        let err = ops.upload(&ctx, params, stream).await.unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err:?}");
+        assert!(!short.exists());
     }
 
     #[tokio::test]
