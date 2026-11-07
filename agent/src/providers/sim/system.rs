@@ -150,7 +150,9 @@ pub fn sample(sim: &Sim, now: DateTime<Utc>) -> MetricsSample {
     let kib = KIB as f64;
 
     let cpu = clampf(
-        19.0 + 13.0 * cycle + 14.0 * drift(seed ^ 0x100, t / 240.0, 3) + 5.0 * drift(seed ^ 0x101, t / 17.0, 2),
+        19.0 + 13.0 * cycle
+            + 14.0 * drift(seed ^ 0x100, t / 240.0, 3)
+            + 5.0 * drift(seed ^ 0x101, t / 17.0, 2),
         0.6,
         99.0,
     );
@@ -162,15 +164,33 @@ pub fn sample(sim: &Sim, now: DateTime<Utc>) -> MetricsSample {
         })
         .collect();
 
-    let mem_ratio = clampf(0.44 + 0.07 * cycle + 0.06 * drift(seed ^ 0x120, t / 900.0, 3), 0.18, 0.95);
+    let mem_ratio = clampf(
+        0.44 + 0.07 * cycle + 0.06 * drift(seed ^ 0x120, t / 900.0, 3),
+        0.18,
+        0.95,
+    );
     let mem_used = (id.memory_total as f64 * mem_ratio) as i64;
-    let mem_cached = (id.memory_total as f64 * clampf(0.19 + 0.04 * drift(seed ^ 0x121, t / 1200.0, 2), 0.05, 0.4)) as i64;
-    let swap_used = (id.swap_total as f64 * clampf(0.04 + 0.03 * drift(seed ^ 0x122, t / 3600.0, 2), 0.0, 0.6)) as i64;
+    let mem_cached =
+        (id.memory_total as f64 * clampf(0.19 + 0.04 * drift(seed ^ 0x121, t / 1200.0, 2), 0.05, 0.4)) as i64;
+    let swap_used =
+        (id.swap_total as f64 * clampf(0.04 + 0.03 * drift(seed ^ 0x122, t / 3600.0, 2), 0.0, 0.6)) as i64;
 
     let cores = id.cpu_cores as f64;
-    let load1 = clampf(cores * cpu / 100.0 * (1.0 + 0.18 * drift(seed ^ 0x130, t / 60.0, 2)), 0.01, cores * 3.0);
-    let load5 = clampf(cores * cpu / 100.0 * (1.0 + 0.12 * drift(seed ^ 0x131, t / 300.0, 2)), 0.01, cores * 3.0);
-    let load15 = clampf(cores * cpu / 100.0 * (1.0 + 0.08 * drift(seed ^ 0x132, t / 900.0, 2)), 0.01, cores * 3.0);
+    let load1 = clampf(
+        cores * cpu / 100.0 * (1.0 + 0.18 * drift(seed ^ 0x130, t / 60.0, 2)),
+        0.01,
+        cores * 3.0,
+    );
+    let load5 = clampf(
+        cores * cpu / 100.0 * (1.0 + 0.12 * drift(seed ^ 0x131, t / 300.0, 2)),
+        0.01,
+        cores * 3.0,
+    );
+    let load15 = clampf(
+        cores * cpu / 100.0 * (1.0 + 0.08 * drift(seed ^ 0x132, t / 900.0, 2)),
+        0.01,
+        cores * 3.0,
+    );
 
     let rx_rate = clampf(
         1.6 * mib * (1.0 + 0.7 * cycle) + 0.9 * mib * drift(seed ^ 0x140, t / 45.0, 3),
@@ -238,7 +258,9 @@ pub fn disks(sim: &Sim, now: DateTime<Utc>) -> Vec<DiskUsage> {
             if spec.mount == "/" {
                 used += written;
             }
-            used += ((64 * MIB) as f64 * drift(sim.seed ^ 0x170 ^ i as u64, now.timestamp() as f64 / 600.0, 2)) as i64;
+            used += ((64 * MIB) as f64
+                * drift(sim.seed ^ 0x170 ^ i as u64, now.timestamp() as f64 / 600.0, 2))
+                as i64;
             let used = used.clamp(0, spec.total);
             DiskUsage {
                 mount: spec.mount.into(),
@@ -266,8 +288,18 @@ pub fn build_packages(sim: &Sim) {
         ("cron", "3.0pl1-162", "", false),
         ("curl", "7.88.1-10+deb12u5", "7.88.1-10+deb12u7", true),
         ("dbus", "1.14.10-1~deb12u1", "", false),
-        ("docker-ce", "5:26.1.3-1~debian.12~bookworm", "5:26.1.4-1~debian.12~bookworm", false),
-        ("docker-ce-cli", "5:26.1.3-1~debian.12~bookworm", "5:26.1.4-1~debian.12~bookworm", false),
+        (
+            "docker-ce",
+            "5:26.1.3-1~debian.12~bookworm",
+            "5:26.1.4-1~debian.12~bookworm",
+            false,
+        ),
+        (
+            "docker-ce-cli",
+            "5:26.1.3-1~debian.12~bookworm",
+            "5:26.1.4-1~debian.12~bookworm",
+            false,
+        ),
         ("fail2ban", "1.0.2-2", "", false),
         ("git", "1:2.39.2-1.1", "1:2.39.5-0+deb12u1", true),
         ("gzip", "1.12-1", "", false),
@@ -296,7 +328,11 @@ pub fn build_packages(sim: &Sim) {
         .map(|(name, installed, available, security)| PackageInfo {
             name: name.to_string(),
             installed_version: installed.to_string(),
-            available_version: if available.is_empty() { None } else { Some(available.to_string()) },
+            available_version: if available.is_empty() {
+                None
+            } else {
+                Some(available.to_string())
+            },
             security: *security,
         })
         .collect();
@@ -372,7 +408,10 @@ impl System for SimSystem {
 
             processes::build_processes(&sim);
             tracing::info!(provider = "sim", "simulated host rebooted");
-            sim.emit(topic::SERVICE_CHANGED, serde_json::json!({"unit": "*", "state": "active"}));
+            sim.emit(
+                topic::SERVICE_CHANGED,
+                serde_json::json!({"unit": "*", "state": "active"}),
+            );
         });
         Ok(())
     }
@@ -406,11 +445,25 @@ impl System for SimSystem {
         };
 
         progress(ctx, &*s, Duration::ZERO, "Reading package lists... Done").await?;
-        progress(ctx, &*s, Duration::from_millis(180), "Building dependency tree... Done").await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::from_millis(180),
+            "Building dependency tree... Done",
+        )
+        .await?;
         if targets.is_empty() {
-            let _ = progress(ctx, &*s, Duration::ZERO, "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.")
-                .await;
-            return Ok(PackagesUpgradeResult { upgraded: vec![], reboot_required: false });
+            let _ = progress(
+                ctx,
+                &*s,
+                Duration::ZERO,
+                "0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
+            )
+            .await;
+            return Ok(PackagesUpgradeResult {
+                upgraded: vec![],
+                reboot_required: false,
+            });
         }
 
         let mut upgraded = Vec::new();
@@ -446,26 +499,43 @@ impl System for SimSystem {
             }
         }
 
-        let _ = progress(ctx, &*s, Duration::ZERO, "Processing triggers for man-db (2.11.2-2) ...").await;
         let _ = progress(
             ctx,
             &*s,
             Duration::ZERO,
-            format!("{} upgraded, 0 newly installed, 0 to remove and 0 not upgraded.", upgraded.len()),
+            "Processing triggers for man-db (2.11.2-2) ...",
+        )
+        .await;
+        let _ = progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            format!(
+                "{} upgraded, 0 newly installed, 0 to remove and 0 not upgraded.",
+                upgraded.len()
+            ),
         )
         .await;
         if reboot_required {
             let _ = progress(ctx, &*s, Duration::ZERO, "*** System restart required ***").await;
         }
 
-        Ok(PackagesUpgradeResult { upgraded, reboot_required })
+        Ok(PackagesUpgradeResult {
+            upgraded,
+            reboot_required,
+        })
     }
 
     /// Refused outright. A simulated host has no binary to replace, and
     /// answering "restarting" would make the development fleet lie about
     /// a destructive operation — which is exactly the operation where a
     /// lie costs the most.
-    async fn self_update(&self, _ctx: &Ctx, _p: SelfUpdateParams, _s: StreamRef) -> PResult<SelfUpdateResult> {
+    async fn self_update(
+        &self,
+        _ctx: &Ctx,
+        _p: SelfUpdateParams,
+        _s: StreamRef,
+    ) -> PResult<SelfUpdateResult> {
         Err(ProviderError::unsupported_because(
             "this is a simulated host with no agent binary to replace",
         ))

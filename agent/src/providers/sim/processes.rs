@@ -14,8 +14,8 @@ use chrono::{DateTime, Utc};
 use super::services;
 use super::state::{MIB, Sim, World, clampf, drift, mix, round2, stamp};
 use crate::providers::{
-    Ctx, PResult, ProcessInfo, ProcessListParams, ProcessListResult, ProcessNode, ProcessTreeParams, Processes,
-    ProviderError, SignalParams, topic,
+    Ctx, PResult, ProcessInfo, ProcessListParams, ProcessListResult, ProcessNode, ProcessTreeParams,
+    Processes, ProviderError, SignalParams, topic,
 };
 
 pub struct Process {
@@ -80,16 +80,63 @@ impl ProcSpec {
 }
 
 const KERNEL_THREADS: &[&str] = &[
-    "rcu_gp", "rcu_par_gp", "slub_flushwq", "netns", "mm_percpu_wq", "rcu_tasks_kthre",
-    "rcu_tasks_rude_", "rcu_tasks_trace", "ksoftirqd/0", "rcu_preempt", "migration/0",
-    "idle_inject/0", "cpuhp/0", "cpuhp/1", "idle_inject/1", "migration/1", "ksoftirqd/1",
-    "kdevtmpfs", "inet_frag_wq", "kauditd", "khungtaskd", "oom_reaper", "writeback",
-    "kcompactd0", "ksmd", "khugepaged", "kintegrityd", "kblockd", "blkcg_punt_bio",
-    "tpm_dev_wq", "ata_sff", "md", "edac-poller", "devfreq_wq", "watchdogd", "kswapd0",
-    "ecryptfs-kthread", "kthrotld", "acpi_thermal_pm", "vfio-irqfd-cleanup", "mld",
-    "ipv6_addrconf", "kstrp", "zswap-shrink", "charger_manager", "scsi_eh_0", "scsi_tmf_0",
-    "scsi_eh_1", "scsi_tmf_1", "jbd2/vda1-8", "ext4-rsv-conver", "jbd2/vdb1-8",
-    "cryptd", "kaluad", "kmpath_rdacd", "kmpathd", "kmpath_handlerd",
+    "rcu_gp",
+    "rcu_par_gp",
+    "slub_flushwq",
+    "netns",
+    "mm_percpu_wq",
+    "rcu_tasks_kthre",
+    "rcu_tasks_rude_",
+    "rcu_tasks_trace",
+    "ksoftirqd/0",
+    "rcu_preempt",
+    "migration/0",
+    "idle_inject/0",
+    "cpuhp/0",
+    "cpuhp/1",
+    "idle_inject/1",
+    "migration/1",
+    "ksoftirqd/1",
+    "kdevtmpfs",
+    "inet_frag_wq",
+    "kauditd",
+    "khungtaskd",
+    "oom_reaper",
+    "writeback",
+    "kcompactd0",
+    "ksmd",
+    "khugepaged",
+    "kintegrityd",
+    "kblockd",
+    "blkcg_punt_bio",
+    "tpm_dev_wq",
+    "ata_sff",
+    "md",
+    "edac-poller",
+    "devfreq_wq",
+    "watchdogd",
+    "kswapd0",
+    "ecryptfs-kthread",
+    "kthrotld",
+    "acpi_thermal_pm",
+    "vfio-irqfd-cleanup",
+    "mld",
+    "ipv6_addrconf",
+    "kstrp",
+    "zswap-shrink",
+    "charger_manager",
+    "scsi_eh_0",
+    "scsi_tmf_0",
+    "scsi_eh_1",
+    "scsi_tmf_1",
+    "jbd2/vda1-8",
+    "ext4-rsv-conver",
+    "jbd2/vdb1-8",
+    "cryptd",
+    "kaluad",
+    "kmpath_rdacd",
+    "kmpathd",
+    "kmpath_handlerd",
 ];
 
 /// Keeps the table around the size of a real busy host, which is what
@@ -104,14 +151,28 @@ pub fn build_processes(sim: &Sim) {
     add_process(
         sim,
         &mut w,
-        ProcSpec::new("systemd", "/sbin/init", "root").rss(12 * MIB).threads(1).state("sleeping").cpu(0.1),
+        ProcSpec::new("systemd", "/sbin/init", "root")
+            .rss(12 * MIB)
+            .threads(1)
+            .state("sleeping")
+            .cpu(0.1),
     );
-    add_process(sim, &mut w, ProcSpec::new("kthreadd", "[kthreadd]", "root").threads(1).state("sleeping"));
+    add_process(
+        sim,
+        &mut w,
+        ProcSpec::new("kthreadd", "[kthreadd]", "root")
+            .threads(1)
+            .state("sleeping"),
+    );
     for name in KERNEL_THREADS {
         add_process(
             sim,
             &mut w,
-            ProcSpec::new(name, &format!("[{name}]"), "root").ppid(2).threads(1).state("idle").nice(-20),
+            ProcSpec::new(name, &format!("[{name}]"), "root")
+                .ppid(2)
+                .threads(1)
+                .state("idle")
+                .nice(-20),
         );
     }
 
@@ -122,7 +183,14 @@ pub fn build_processes(sim: &Sim) {
     while w.procs.len() < TARGET_PROCESSES {
         let n = w.procs.len() as i64;
         let name = format!("kworker/u{}:{}-events_unbound", n % (2 * sim.id.cpu_cores), n % 9);
-        add_process(sim, &mut w, ProcSpec::new(&name, &format!("[{name}]"), "root").ppid(2).threads(1).state("idle"));
+        add_process(
+            sim,
+            &mut w,
+            ProcSpec::new(&name, &format!("[{name}]"), "root")
+                .ppid(2)
+                .threads(1)
+                .state("idle"),
+        );
     }
 
     services::sync_unit_pids(&mut w);
@@ -132,7 +200,8 @@ pub fn build_processes(sim: &Sim) {
 /// owns, so a stopped unit really has no process and a running container
 /// really has a shim.
 fn userland_processes(sim: &Sim, w: &World, systemd: i64) -> Vec<ProcSpec> {
-    let mut specs = vec![
+    let mut specs =
+        vec![
         ProcSpec::new("bash", "-bash", "deploy").ppid(systemd).rss(6 * MIB).threads(1).state("sleeping"),
         ProcSpec::new("agetty", "/sbin/agetty -o -p -- \\u --noclear - linux", "root")
             .ppid(systemd)
@@ -177,7 +246,11 @@ pub fn add_process(sim: &Sim, w: &mut World, spec: ProcSpec) {
     }
 
     let started = w.boot_time + chrono::Duration::seconds((mix(sim.seed ^ pid as u64 ^ 0x71) % 420) as i64);
-    let state = if spec.state.is_empty() { "sleeping".to_string() } else { spec.state.clone() };
+    let state = if spec.state.is_empty() {
+        "sleeping".to_string()
+    } else {
+        spec.state.clone()
+    };
     let threads = if spec.threads == 0 { 1 } else { spec.threads };
 
     w.procs.push(Process {
@@ -229,7 +302,11 @@ pub fn sort_processes(rows: &mut [ProcessInfo], by: &str) {
         "memory" => rows.sort_by(|a, b| b.memory_rss.cmp(&a.memory_rss)),
         "pid" => rows.sort_by_key(|r| r.pid),
         "name" => rows.sort_by(|a, b| a.command.cmp(&b.command).then(a.pid.cmp(&b.pid))),
-        _ => rows.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal)),
+        _ => rows.sort_by(|a, b| {
+            b.cpu_percent
+                .partial_cmp(&a.cpu_percent)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
     }
 }
 
@@ -259,7 +336,11 @@ impl Processes for SimProcesses {
             let w = self.0.world.lock();
             w.procs
                 .iter()
-                .filter(|proc| p.user.as_deref().map_or(true, |u| u.is_empty() || proc.info.user == u))
+                .filter(|proc| {
+                    p.user
+                        .as_deref()
+                        .map_or(true, |u| u.is_empty() || proc.info.user == u)
+                })
                 .map(|proc| live(&self.0, proc, now))
                 .collect()
         };
@@ -268,7 +349,10 @@ impl Processes for SimProcesses {
         if p.limit > 0 && rows.len() as i64 > p.limit {
             rows.truncate(p.limit as usize);
         }
-        Ok(ProcessListResult { processes: rows, total })
+        Ok(ProcessListResult {
+            processes: rows,
+            total,
+        })
     }
 
     async fn tree(&self, _ctx: &Ctx, p: ProcessTreeParams) -> PResult<Vec<ProcessNode>> {
@@ -304,7 +388,10 @@ impl Processes for SimProcesses {
         ) {
             for &i in procs {
                 let proc = &w.procs[i];
-                out.push(ProcessNode { process: live(sim, proc, now), depth });
+                out.push(ProcessNode {
+                    process: live(sim, proc, now),
+                    depth,
+                });
                 if depth < 12 {
                     if let Some(kids) = children.get(&proc.info.pid) {
                         walk(sim, w, children, kids, depth + 1, now, out);
@@ -350,8 +437,10 @@ impl Processes for SimProcesses {
         };
 
         if let Some(unit) = unit {
-            self.0
-                .emit(topic::SERVICE_CHANGED, serde_json::json!({"unit": unit, "state": "failed"}));
+            self.0.emit(
+                topic::SERVICE_CHANGED,
+                serde_json::json!({"unit": unit, "state": "failed"}),
+            );
         }
         Ok(())
     }

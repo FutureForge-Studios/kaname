@@ -22,9 +22,10 @@ use super::state::{Sim, World, mix, pause, progress, stamp};
 use crate::providers::{
     Ctx, LogRecord, Mail, MailAddressParams, MailAliasAddParams, MailAliasEntry, MailAliasRemoveParams,
     MailCertificateRenewResult, MailCertificateStatus, MailCheck, MailCheckStatus, MailDeployOutcome,
-    MailDeployParams, MailDeployResult, MailDnsRecord, MailDomainDnsResult, MailDomainEntry, MailDomainParams,
-    MailInstallStep, MailInstallStepStatus, MailListParams, MailLogsParams, MailPasswordResult, MailPreflightParams,
-    MailServerStatusInfo, MailServiceState, MailboxAddParams, MailboxEntry, PResult, ProviderError, StreamRef,
+    MailDeployParams, MailDeployResult, MailDnsRecord, MailDomainDnsResult, MailDomainEntry,
+    MailDomainParams, MailInstallStep, MailInstallStepStatus, MailListParams, MailLogsParams,
+    MailPasswordResult, MailPreflightParams, MailServerStatusInfo, MailServiceState, MailboxAddParams,
+    MailboxEntry, PResult, ProviderError, StreamRef,
 };
 
 pub const PRIMARY_DOMAIN: &str = "futureforge.dev";
@@ -88,18 +89,28 @@ impl MailWorld {
         self.domains.iter().find(|d| d.name.eq_ignore_ascii_case(name))
     }
     pub fn mailbox(&self, address: &str) -> Option<&Mailbox> {
-        self.mailboxes.iter().find(|m| m.address.eq_ignore_ascii_case(address))
+        self.mailboxes
+            .iter()
+            .find(|m| m.address.eq_ignore_ascii_case(address))
     }
     pub fn alias(&self, address: &str) -> Option<&MailAliasEntry> {
-        self.aliases.iter().find(|a| a.address.eq_ignore_ascii_case(address))
+        self.aliases
+            .iter()
+            .find(|a| a.address.eq_ignore_ascii_case(address))
     }
     pub fn mailbox_count(&self, domain: &str) -> i64 {
-        self.mailboxes.iter().filter(|m| domain_of(&m.address).eq_ignore_ascii_case(domain)).count() as i64
+        self.mailboxes
+            .iter()
+            .filter(|m| domain_of(&m.address).eq_ignore_ascii_case(domain))
+            .count() as i64
     }
     pub fn install_complete(&self) -> bool {
-        self.steps
-            .iter()
-            .all(|s| matches!(s.status, MailInstallStepStatus::Done | MailInstallStepStatus::Skipped))
+        self.steps.iter().all(|s| {
+            matches!(
+                s.status,
+                MailInstallStepStatus::Done | MailInstallStepStatus::Skipped
+            )
+        })
     }
     pub fn console_url(&self) -> String {
         format!("https://{}/console", self.hostname)
@@ -114,10 +125,17 @@ pub fn steps_paused_at_ptr(skip_ptr: bool) -> Vec<MailInstallStep> {
         .map(|(id, title)| {
             let (status, detail) = match (*id, skip_ptr) {
                 ("ptr", false) => (MailInstallStepStatus::Waiting, Some(PTR_DETAIL.to_string())),
-                ("ptr", true) => (MailInstallStepStatus::Skipped, Some("Skipped at the operator's request.".into())),
+                ("ptr", true) => (
+                    MailInstallStepStatus::Skipped,
+                    Some("Skipped at the operator's request.".into()),
+                ),
                 _ => (MailInstallStepStatus::Done, None),
             };
-            MailInstallStep { title: title.to_string(), status, detail }
+            MailInstallStep {
+                title: title.to_string(),
+                status,
+                detail,
+            }
         })
         .collect()
 }
@@ -139,8 +157,14 @@ pub fn build_mail(sim: &Sim) {
         hostname,
         steps: steps_paused_at_ptr(false),
         domains: vec![
-            MailDomain { name: PRIMARY_DOMAIN.into(), dns_status: MailCheckStatus::Warn },
-            MailDomain { name: SECOND_DOMAIN.into(), dns_status: MailCheckStatus::Pass },
+            MailDomain {
+                name: PRIMARY_DOMAIN.into(),
+                dns_status: MailCheckStatus::Warn,
+            },
+            MailDomain {
+                name: SECOND_DOMAIN.into(),
+                dns_status: MailCheckStatus::Pass,
+            },
         ],
         mailboxes: vec![
             mailbox("hello", PRIMARY_DOMAIN, "FutureForge Studios"),
@@ -168,10 +192,15 @@ pub fn domain_of(address: &str) -> &str {
 fn split_address(address: &str) -> PResult<(String, String)> {
     let address = address.trim().to_ascii_lowercase();
     let Some((local, domain)) = address.split_once('@') else {
-        return Err(ProviderError::invalid(format!("{address:?} is not an email address")));
+        return Err(ProviderError::invalid(format!(
+            "{address:?} is not an email address"
+        )));
     };
-    if local.is_empty() || domain.is_empty() || !domain.contains('.') || address.contains(char::is_whitespace) {
-        return Err(ProviderError::invalid(format!("{address:?} is not an email address")));
+    if local.is_empty() || domain.is_empty() || !domain.contains('.') || address.contains(char::is_whitespace)
+    {
+        return Err(ProviderError::invalid(format!(
+            "{address:?} is not an email address"
+        )));
     }
     Ok((local.to_string(), domain.to_string()))
 }
@@ -180,7 +209,9 @@ fn normalise_domain(name: &str) -> PResult<String> {
     let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
     let valid = !name.is_empty()
         && name.contains('.')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
         && !name.starts_with('.')
         && !name.contains("..");
     if !valid {
@@ -194,10 +225,18 @@ fn normalise_domain(name: &str) -> PResult<String> {
 pub fn generate_password() -> String {
     const ALPHABET: &[u8] = b"abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let mut rng = rand::thread_rng();
-    (0..20).map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char).collect()
+    (0..20)
+        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+        .collect()
 }
 
-fn check(id: &str, label: &str, status: MailCheckStatus, detail: impl Into<String>, remedy: Option<&str>) -> MailCheck {
+fn check(
+    id: &str,
+    label: &str,
+    status: MailCheckStatus,
+    detail: impl Into<String>,
+    remedy: Option<&str>,
+) -> MailCheck {
     MailCheck {
         id: id.into(),
         label: label.into(),
@@ -278,8 +317,20 @@ pub fn expected_records(domain: &MailDomain, hostname: &str) -> Vec<MailDnsRecor
         published(true),
         true,
     ));
-    out.push(record("TXT", &format!("_mta-sts.{d}"), "v=STSv1; id=2026110601".into(), published(false), false));
-    out.push(record("CNAME", &format!("mta-sts.{d}"), format!("{hostname}."), published(false), false));
+    out.push(record(
+        "TXT",
+        &format!("_mta-sts.{d}"),
+        "v=STSv1; id=2026110601".into(),
+        published(false),
+        false,
+    ));
+    out.push(record(
+        "CNAME",
+        &format!("mta-sts.{d}"),
+        format!("{hostname}."),
+        published(false),
+        false,
+    ));
     out.push(record(
         "TXT",
         &format!("_smtp._tls.{d}"),
@@ -287,25 +338,62 @@ pub fn expected_records(domain: &MailDomain, hostname: &str) -> Vec<MailDnsRecor
         published(false),
         false,
     ));
-    out.push(record("CNAME", &format!("autoconfig.{d}"), format!("{hostname}."), published(true), true));
-    out.push(record("CNAME", &format!("autodiscover.{d}"), format!("{hostname}."), published(false), false));
-    out.push(record("SRV", &format!("_imaps._tcp.{d}"), format!("0 1 993 {hostname}."), published(false), false));
-    out.push(record("SRV", &format!("_submission._tcp.{d}"), format!("0 1 587 {hostname}."), published(false), false));
+    out.push(record(
+        "CNAME",
+        &format!("autoconfig.{d}"),
+        format!("{hostname}."),
+        published(true),
+        true,
+    ));
+    out.push(record(
+        "CNAME",
+        &format!("autodiscover.{d}"),
+        format!("{hostname}."),
+        published(false),
+        false,
+    ));
+    out.push(record(
+        "SRV",
+        &format!("_imaps._tcp.{d}"),
+        format!("0 1 993 {hostname}."),
+        published(false),
+        false,
+    ));
+    out.push(record(
+        "SRV",
+        &format!("_submission._tcp.{d}"),
+        format!("0 1 587 {hostname}."),
+        published(false),
+        false,
+    ));
     out
 }
 
 pub fn zone_file(domain: &str, records: &[MailDnsRecord]) -> String {
-    let mut b = format!("; Yunori Mail Server records for {domain}\n; generated by yunori-mail {VERSION}\n$ORIGIN {domain}.\n$TTL 3600\n\n");
+    let mut b = format!(
+        "; Yunori Mail Server records for {domain}\n; generated by yunori-mail {VERSION}\n$ORIGIN {domain}.\n$TTL 3600\n\n"
+    );
     for r in records {
-        let name = if r.name == domain { "@".to_string() } else { format!("{}.", r.name) };
+        let name = if r.name == domain {
+            "@".to_string()
+        } else {
+            format!("{}.", r.name)
+        };
         let value = r.expected.clone().unwrap_or_default();
         let value = match r.rtype.as_str() {
             "TXT" => {
                 // Long TXT values are split into 255-byte strings, as a zone
                 // file requires.
-                let chunks: Vec<String> =
-                    value.as_bytes().chunks(255).map(|c| format!("\"{}\"", String::from_utf8_lossy(c))).collect();
-                if chunks.len() > 1 { format!("( {} )", chunks.join(" ")) } else { chunks.join("") }
+                let chunks: Vec<String> = value
+                    .as_bytes()
+                    .chunks(255)
+                    .map(|c| format!("\"{}\"", String::from_utf8_lossy(c)))
+                    .collect();
+                if chunks.len() > 1 {
+                    format!("( {} )", chunks.join(" "))
+                } else {
+                    chunks.join("")
+                }
             }
             _ => value,
         };
@@ -323,7 +411,10 @@ impl SimMail {
         let w = self.0.world.lock();
         let m = &w.mail;
         if !m.installed {
-            return MailServerStatusInfo { installed: false, ..Default::default() };
+            return MailServerStatusInfo {
+                installed: false,
+                ..Default::default()
+            };
         }
         let services = ["stalwart", "yunori-mail", "unbound"]
             .iter()
@@ -358,14 +449,47 @@ impl Mail for SimMail {
     }
 
     async fn preflight(&self, _ctx: &Ctx, p: MailPreflightParams) -> PResult<Vec<MailCheck>> {
-        let hostname = p.hostname.filter(|h| !h.is_empty()).unwrap_or_else(|| format!("mail.{PRIMARY_DOMAIN}"));
+        let hostname = p
+            .hostname
+            .filter(|h| !h.is_empty())
+            .unwrap_or_else(|| format!("mail.{PRIMARY_DOMAIN}"));
         let id = &self.0.id;
         Ok(vec![
-            check("os", "Operating system", MailCheckStatus::Pass, format!("{} {} ({})", id.os, id.os_version, id.arch), None),
-            check("memory", "Memory", MailCheckStatus::Pass, format!("{} GiB available; 2 GiB is the minimum", id.memory_total >> 30), None),
-            check("disk", "Disk space", MailCheckStatus::Pass, "41 GiB free on /; 10 GiB is the minimum", None),
-            check("hostname", "Mail hostname", MailCheckStatus::Pass, format!("{hostname} resolves to {MAIL_IP}, which is this server"), None),
-            check("ports", "Mail ports", MailCheckStatus::Pass, "Ports 25, 465, 587, 993 and 443 are free", None),
+            check(
+                "os",
+                "Operating system",
+                MailCheckStatus::Pass,
+                format!("{} {} ({})", id.os, id.os_version, id.arch),
+                None,
+            ),
+            check(
+                "memory",
+                "Memory",
+                MailCheckStatus::Pass,
+                format!("{} GiB available; 2 GiB is the minimum", id.memory_total >> 30),
+                None,
+            ),
+            check(
+                "disk",
+                "Disk space",
+                MailCheckStatus::Pass,
+                "41 GiB free on /; 10 GiB is the minimum",
+                None,
+            ),
+            check(
+                "hostname",
+                "Mail hostname",
+                MailCheckStatus::Pass,
+                format!("{hostname} resolves to {MAIL_IP}, which is this server"),
+                None,
+            ),
+            check(
+                "ports",
+                "Mail ports",
+                MailCheckStatus::Pass,
+                "Ports 25, 465, 587, 993 and 443 are free",
+                None,
+            ),
             check(
                 "outbound_25",
                 "Outbound port 25",
@@ -373,9 +497,27 @@ impl Mail for SimMail {
                 "Outbound SMTP on port 25 is reachable from this server. Some providers block it later; switch to relay sending if deliveries stall.",
                 None,
             ),
-            check("existing_mta", "Existing mail software", MailCheckStatus::Pass, "No Postfix, Exim or Dovecot installation found", None),
-            check("systemd", "systemd", MailCheckStatus::Pass, "systemd 252 is managing services", None),
-            check("resolver", "DNS resolver", MailCheckStatus::Pass, "A local validating resolver can be installed (unbound)", None),
+            check(
+                "existing_mta",
+                "Existing mail software",
+                MailCheckStatus::Pass,
+                "No Postfix, Exim or Dovecot installation found",
+                None,
+            ),
+            check(
+                "systemd",
+                "systemd",
+                MailCheckStatus::Pass,
+                "systemd 252 is managing services",
+                None,
+            ),
+            check(
+                "resolver",
+                "DNS resolver",
+                MailCheckStatus::Pass,
+                "A local validating resolver can be installed (unbound)",
+                None,
+            ),
         ])
     }
 
@@ -383,8 +525,10 @@ impl Mail for SimMail {
         let (services, hostname, domain_detail, dns_status) = {
             let w = self.0.world.lock();
             require_installed(&w)?;
-            let services: Vec<(String, bool)> =
-                ["stalwart", "yunori-mail", "unbound"].iter().map(|n| (n.to_string(), unit_active(&w, &service_unit(n)))).collect();
+            let services: Vec<(String, bool)> = ["stalwart", "yunori-mail", "unbound"]
+                .iter()
+                .map(|n| (n.to_string(), unit_active(&w, &service_unit(n))))
+                .collect();
             let mut worst = MailCheckStatus::Pass;
             let mut parts = Vec::new();
             for d in &w.mail.domains {
@@ -402,18 +546,32 @@ impl Mail for SimMail {
         for (name, active) in services {
             let unit = service_unit(&name);
             checks.push(if active {
-                check(&format!("service_{name}"), &format!("Service {name}"), MailCheckStatus::Pass, format!("{unit} is active"), None)
+                check(
+                    &format!("service_{name}"),
+                    &format!("Service {name}"),
+                    MailCheckStatus::Pass,
+                    format!("{unit} is active"),
+                    None,
+                )
             } else {
                 check(
                     &format!("service_{name}"),
                     &format!("Service {name}"),
                     MailCheckStatus::Fail,
                     format!("{unit} is not running"),
-                    Some(&format!("Start it with `systemctl start {unit}` and check `journalctl -u {unit}`.")),
+                    Some(&format!(
+                        "Start it with `systemctl start {unit}` and check `journalctl -u {unit}`."
+                    )),
                 )
             });
         }
-        checks.push(check("ports", "Mail ports", MailCheckStatus::Pass, "Listening on 25, 465, 587, 993 and 443", None));
+        checks.push(check(
+            "ports",
+            "Mail ports",
+            MailCheckStatus::Pass,
+            "Listening on 25, 465, 587, 993 and 443",
+            None,
+        ));
         checks.push(check(
             "ptr",
             "Reverse DNS (PTR)",
@@ -425,7 +583,9 @@ impl Mail for SimMail {
             "dnsbl_spamhaus",
             "Spamhaus ZEN",
             MailCheckStatus::Fail,
-            format!("{MAIL_IP} is listed (127.0.0.4, SBL CSS); most receivers will reject or junk mail from it"),
+            format!(
+                "{MAIL_IP} is listed (127.0.0.4, SBL CSS); most receivers will reject or junk mail from it"
+            ),
             Some("Request removal at check.spamhaus.org and send through a relay until the listing clears."),
         );
         zen.help_url = Some("https://check.spamhaus.org/".into());
@@ -435,7 +595,11 @@ impl Mail for SimMail {
             "DNS records",
             dns_status,
             domain_detail,
-            if dns_status == MailCheckStatus::Pass { None } else { Some("Publish the records shown under Domains › DNS at your DNS provider.") },
+            if dns_status == MailCheckStatus::Pass {
+                None
+            } else {
+                Some("Publish the records shown under Domains › DNS at your DNS provider.")
+            },
         ));
         checks.push(check(
             "certificate",
@@ -444,21 +608,54 @@ impl Mail for SimMail {
             format!("Let's Encrypt certificate covers {hostname}; {MAIL_CERT_DAYS} days left, renews automatically"),
             None,
         ));
-        checks.push(check("audit", "Security audit", MailCheckStatus::Pass, "Last audit 4 hours ago: no findings", None));
-        checks.push(check("disk", "Disk space", MailCheckStatus::Pass, "Mail store uses 1.2 GiB; 41 GiB free", None));
-        checks.push(check("queue", "Outbound queue", MailCheckStatus::Pass, "3 messages queued, oldest 4 minutes", None));
+        checks.push(check(
+            "audit",
+            "Security audit",
+            MailCheckStatus::Pass,
+            "Last audit 4 hours ago: no findings",
+            None,
+        ));
+        checks.push(check(
+            "disk",
+            "Disk space",
+            MailCheckStatus::Pass,
+            "Mail store uses 1.2 GiB; 41 GiB free",
+            None,
+        ));
+        checks.push(check(
+            "queue",
+            "Outbound queue",
+            MailCheckStatus::Pass,
+            "3 messages queued, oldest 4 minutes",
+            None,
+        ));
         Ok(checks)
     }
 
     async fn deploy(&self, ctx: &Ctx, p: MailDeployParams, s: StreamRef) -> PResult<MailDeployResult> {
         let domain = normalise_domain(&p.domain)?;
-        let hostname = if p.hostname.is_empty() { format!("mail.{domain}") } else { normalise_domain(&p.hostname)? };
-        let version = if p.version.is_empty() { VERSION.to_string() } else { p.version.clone() };
-        let first_local = if p.first_mailbox.is_empty() { "hello".to_string() } else { p.first_mailbox.to_ascii_lowercase() };
+        let hostname = if p.hostname.is_empty() {
+            format!("mail.{domain}")
+        } else {
+            normalise_domain(&p.hostname)?
+        };
+        let version = if p.version.is_empty() {
+            VERSION.to_string()
+        } else {
+            p.version.clone()
+        };
+        let first_local = if p.first_mailbox.is_empty() {
+            "hello".to_string()
+        } else {
+            p.first_mailbox.to_ascii_lowercase()
+        };
         let first_mailbox = format!("{first_local}@{domain}");
 
         let lines = [
-            format!("Verifying yunori-mail {version} archive (sha256 {}…)", p.sha256.chars().take(12).collect::<String>()),
+            format!(
+                "Verifying yunori-mail {version} archive (sha256 {}…)",
+                p.sha256.chars().take(12).collect::<String>()
+            ),
             "Check this server: all preflight checks passed".to_string(),
             format!("Your domain: {domain}, mail hostname {hostname}"),
             format!("Point the mail hostname here: {hostname} → {MAIL_IP}"),
@@ -475,12 +672,27 @@ impl Mail for SimMail {
         if p.skip_ptr {
             progress(ctx, &*s, Duration::from_millis(120), "Set reverse DNS: skipped").await?;
         } else {
-            progress(ctx, &*s, Duration::from_millis(120), format!("Set reverse DNS: waiting — {PTR_DETAIL}")).await?;
+            progress(
+                ctx,
+                &*s,
+                Duration::from_millis(120),
+                format!("Set reverse DNS: waiting — {PTR_DETAIL}"),
+            )
+            .await?;
         }
-        progress(ctx, &*s, Duration::from_millis(120), format!("Create your first mailbox: {first_mailbox}")).await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::from_millis(120),
+            format!("Create your first mailbox: {first_mailbox}"),
+        )
+        .await?;
 
         let password = generate_password();
-        let token = format!("sim-{:016x}", mix(self.0.seed ^ Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64));
+        let token = format!(
+            "sim-{:016x}",
+            mix(self.0.seed ^ Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64)
+        );
         let steps = steps_paused_at_ptr(p.skip_ptr);
 
         {
@@ -491,27 +703,41 @@ impl Mail for SimMail {
             m.hostname = hostname.clone();
             m.steps = steps.clone();
             if m.domain(&domain).is_none() {
-                m.domains.push(MailDomain { name: domain.clone(), dns_status: MailCheckStatus::Fail });
+                m.domains.push(MailDomain {
+                    name: domain.clone(),
+                    dns_status: MailCheckStatus::Fail,
+                });
             }
             if m.mailbox(&first_mailbox).is_none() {
-                m.mailboxes.push(Mailbox { address: first_mailbox.clone(), display_name: None });
+                m.mailboxes.push(Mailbox {
+                    address: first_mailbox.clone(),
+                    display_name: None,
+                });
             }
             for local in ["postmaster", "abuse"] {
                 let address = format!("{local}@{domain}");
                 if m.alias(&address).is_none() && m.mailbox(&address).is_none() {
-                    m.aliases.push(MailAliasEntry { address, mailbox: first_mailbox.clone() });
+                    m.aliases.push(MailAliasEntry {
+                        address,
+                        mailbox: first_mailbox.clone(),
+                    });
                 }
             }
         }
 
-        let outcome = if p.skip_ptr { MailDeployOutcome::Ready } else { MailDeployOutcome::Paused };
+        let outcome = if p.skip_ptr {
+            MailDeployOutcome::Ready
+        } else {
+            MailDeployOutcome::Paused
+        };
         let _ = progress(
             ctx,
             &*s,
             Duration::ZERO,
             match outcome {
                 MailDeployOutcome::Ready => "Finish: Yunori Mail Server is ready".to_string(),
-                _ => "Finish: paused at \"Set reverse DNS\"; the console will pick up where this left off".to_string(),
+                _ => "Finish: paused at \"Set reverse DNS\"; the console will pick up where this left off"
+                    .to_string(),
             },
         )
         .await;
@@ -519,7 +745,11 @@ impl Mail for SimMail {
         Ok(MailDeployResult {
             outcome,
             version,
-            paused_at: if p.skip_ptr { None } else { Some("Set reverse DNS".into()) },
+            paused_at: if p.skip_ptr {
+                None
+            } else {
+                Some("Set reverse DNS".into())
+            },
             setup_url: Some(format!("https://{hostname}/console/setup#token={token}")),
             console_url: Some(format!("https://{hostname}/console")),
             first_mailbox: Some(first_mailbox),
@@ -534,10 +764,34 @@ impl Mail for SimMail {
             require_installed(&w)?;
             w.mail.version.clone()
         };
-        progress(ctx, &*s, Duration::ZERO, "Checking for a newer Yunori Mail Server release…").await?;
-        progress(ctx, &*s, Duration::from_millis(400), format!("yunori-mail {version} is installed")).await?;
-        progress(ctx, &*s, Duration::from_millis(300), "Stalwart is at the version this release pins").await?;
-        progress(ctx, &*s, Duration::from_millis(200), format!("{version} is the latest release; nothing to do")).await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            "Checking for a newer Yunori Mail Server release…",
+        )
+        .await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::from_millis(400),
+            format!("yunori-mail {version} is installed"),
+        )
+        .await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::from_millis(300),
+            "Stalwart is at the version this release pins",
+        )
+        .await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::from_millis(200),
+            format!("{version} is the latest release; nothing to do"),
+        )
+        .await?;
         Ok(())
     }
 
@@ -567,7 +821,10 @@ impl Mail for SimMail {
         }
         // Nothing is published for a brand-new domain, which is exactly what
         // the DNS page should say until the operator acts.
-        w.mail.domains.push(MailDomain { name, dns_status: MailCheckStatus::Fail });
+        w.mail.domains.push(MailDomain {
+            name,
+            dns_status: MailCheckStatus::Fail,
+        });
         Ok(())
     }
 
@@ -586,7 +843,9 @@ impl Mail for SimMail {
             )));
         }
         w.mail.domains.remove(idx);
-        w.mail.aliases.retain(|a| !domain_of(&a.address).eq_ignore_ascii_case(&name));
+        w.mail
+            .aliases
+            .retain(|a| !domain_of(&a.address).eq_ignore_ascii_case(&name));
         Ok(())
     }
 
@@ -610,7 +869,11 @@ impl Mail for SimMail {
             .mail
             .mailboxes
             .iter()
-            .filter(|m| filter.as_deref().is_none_or(|d| domain_of(&m.address).eq_ignore_ascii_case(d)))
+            .filter(|m| {
+                filter
+                    .as_deref()
+                    .is_none_or(|d| domain_of(&m.address).eq_ignore_ascii_case(d))
+            })
             .map(|m| MailboxEntry {
                 address: m.address.clone(),
                 display_name: m.display_name.clone(),
@@ -633,10 +896,14 @@ impl Mail for SimMail {
         let mut w = self.0.world.lock();
         require_installed(&w)?;
         if w.mail.domain(&domain).is_none() {
-            return Err(ProviderError::not_found(format!("domain {domain} is not served by this host")));
+            return Err(ProviderError::not_found(format!(
+                "domain {domain} is not served by this host"
+            )));
         }
         if w.mail.mailbox(&address).is_some() {
-            return Err(ProviderError::conflict(format!("mailbox {address} already exists")));
+            return Err(ProviderError::conflict(format!(
+                "mailbox {address} already exists"
+            )));
         }
         if let Some(alias) = w.mail.alias(&address) {
             return Err(ProviderError::conflict(format!(
@@ -648,7 +915,9 @@ impl Mail for SimMail {
             address,
             display_name: p.display_name.filter(|d| !d.trim().is_empty()),
         });
-        Ok(MailPasswordResult { password: generate_password() })
+        Ok(MailPasswordResult {
+            password: generate_password(),
+        })
     }
 
     async fn mailbox_password(&self, _ctx: &Ctx, p: MailAddressParams) -> PResult<MailPasswordResult> {
@@ -659,7 +928,9 @@ impl Mail for SimMail {
         if w.mail.mailbox(&address).is_none() {
             return Err(ProviderError::not_found(format!("mailbox {address}")));
         }
-        Ok(MailPasswordResult { password: generate_password() })
+        Ok(MailPasswordResult {
+            password: generate_password(),
+        })
     }
 
     async fn remove_mailbox(&self, _ctx: &Ctx, p: MailAddressParams) -> PResult<()> {
@@ -667,12 +938,19 @@ impl Mail for SimMail {
         let address = format!("{local}@{domain}");
         let mut w = self.0.world.lock();
         require_installed(&w)?;
-        let Some(idx) = w.mail.mailboxes.iter().position(|m| m.address.eq_ignore_ascii_case(&address)) else {
+        let Some(idx) = w
+            .mail
+            .mailboxes
+            .iter()
+            .position(|m| m.address.eq_ignore_ascii_case(&address))
+        else {
             return Err(ProviderError::not_found(format!("mailbox {address}")));
         };
         w.mail.mailboxes.remove(idx);
         // Aliases that delivered to the mailbox go with it.
-        w.mail.aliases.retain(|a| !a.mailbox.eq_ignore_ascii_case(&address));
+        w.mail
+            .aliases
+            .retain(|a| !a.mailbox.eq_ignore_ascii_case(&address));
         Ok(())
     }
 
@@ -684,7 +962,11 @@ impl Mail for SimMail {
             .mail
             .aliases
             .iter()
-            .filter(|a| filter.as_deref().is_none_or(|d| domain_of(&a.address).eq_ignore_ascii_case(d)))
+            .filter(|a| {
+                filter
+                    .as_deref()
+                    .is_none_or(|d| domain_of(&a.address).eq_ignore_ascii_case(d))
+            })
             .cloned()
             .collect();
         out.sort_by(|a, b| a.address.cmp(&b.address));
@@ -700,13 +982,17 @@ impl Mail for SimMail {
         let mut w = self.0.world.lock();
         require_installed(&w)?;
         if w.mail.domain(&alias_domain).is_none() {
-            return Err(ProviderError::not_found(format!("domain {alias_domain} is not served by this host")));
+            return Err(ProviderError::not_found(format!(
+                "domain {alias_domain} is not served by this host"
+            )));
         }
         if w.mail.mailbox(&mailbox).is_none() {
             return Err(ProviderError::not_found(format!("mailbox {mailbox}")));
         }
         if w.mail.mailbox(&alias).is_some() {
-            return Err(ProviderError::conflict(format!("{alias} is a mailbox; an alias cannot shadow it")));
+            return Err(ProviderError::conflict(format!(
+                "{alias} is a mailbox; an alias cannot shadow it"
+            )));
         }
         if let Some(existing) = w.mail.alias(&alias) {
             return Err(ProviderError::conflict(format!(
@@ -714,7 +1000,10 @@ impl Mail for SimMail {
                 existing.mailbox
             )));
         }
-        w.mail.aliases.push(MailAliasEntry { address: alias, mailbox });
+        w.mail.aliases.push(MailAliasEntry {
+            address: alias,
+            mailbox,
+        });
         Ok(())
     }
 
@@ -723,7 +1012,12 @@ impl Mail for SimMail {
         let alias = format!("{local}@{domain}");
         let mut w = self.0.world.lock();
         require_installed(&w)?;
-        let Some(idx) = w.mail.aliases.iter().position(|a| a.address.eq_ignore_ascii_case(&alias)) else {
+        let Some(idx) = w
+            .mail
+            .aliases
+            .iter()
+            .position(|a| a.address.eq_ignore_ascii_case(&alias))
+        else {
             return Err(ProviderError::not_found(format!("alias {alias}")));
         };
         w.mail.aliases.remove(idx);
@@ -763,8 +1057,20 @@ impl Mail for SimMail {
             require_installed(&w)?;
             w.mail.hostname.clone()
         };
-        progress(ctx, &*s, Duration::ZERO, format!("Checking the certificate for {hostname}…")).await?;
-        progress(ctx, &*s, Duration::from_millis(350), format!("Covers {hostname}; {MAIL_CERT_DAYS} days left")).await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            format!("Checking the certificate for {hostname}…"),
+        )
+        .await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::from_millis(350),
+            format!("Covers {hostname}; {MAIL_CERT_DAYS} days left"),
+        )
+        .await?;
         let outcome = "The current certificate is valid and covers every name; nothing to do.".to_string();
         progress(ctx, &*s, Duration::from_millis(250), &outcome).await?;
         Ok(MailCertificateRenewResult { outcome })

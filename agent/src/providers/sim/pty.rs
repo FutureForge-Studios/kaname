@@ -25,8 +25,8 @@ use super::services::find_unit;
 use super::state::{GIB, KIB, MIB, Sim, human_duration, mix, parse_stamp};
 use super::system::{disks, sample};
 use crate::providers::{
-    Ctx, Encoding, FileEntry, PResult, ProcessInfo, ProviderError, Pty, PtyOpenParams, PtyOpenResult, PtyResizeParams,
-    Stream, StreamRef,
+    Ctx, Encoding, FileEntry, PResult, ProcessInfo, ProviderError, Pty, PtyOpenParams, PtyOpenResult,
+    PtyResizeParams, Stream, StreamRef,
 };
 
 const CTRL_C: u8 = 0x03;
@@ -73,7 +73,11 @@ pub struct PtySession {
 impl PtySession {
     pub fn new(sim: Arc<Sim>, fs: FsRef, who: &str, cwd: &str, cols: i64, rows: i64) -> Arc<PtySession> {
         let user = who.split('@').next().unwrap_or_default().to_string();
-        let cwd = if cwd.is_empty() { "/root".to_string() } else { cwd.to_string() };
+        let cwd = if cwd.is_empty() {
+            "/root".to_string()
+        } else {
+            cwd.to_string()
+        };
         let now = Utc::now();
         let pid = 4000 + (mix(sim.seed ^ now.timestamp_nanos_opt().unwrap_or(0) as u64) % 20000) as i64;
         Arc::new(PtySession {
@@ -108,7 +112,8 @@ impl PtySession {
     /* ------------------------------ loop ----------------------------- */
 
     pub async fn run(&self, ctx: &Ctx, stream: &dyn Stream) -> PResult<i64> {
-        self.write(stream, &format!("{}{}", self.banner(), self.prompt())).await?;
+        self.write(stream, &format!("{}{}", self.banner(), self.prompt()))
+            .await?;
 
         loop {
             let chunk = tokio::select! {
@@ -232,11 +237,18 @@ impl PtySession {
 
     fn prompt(&self) -> String {
         let mut cwd = self.current_dir();
-        let (colour, sigil) = if self.user == "root" { (ANSI_ROOT, "#") } else { (ANSI_USER, "$") };
+        let (colour, sigil) = if self.user == "root" {
+            (ANSI_ROOT, "#")
+        } else {
+            (ANSI_USER, "$")
+        };
         if cwd == "/root" || cwd == format!("/home/{}", self.user) {
             cwd = "~".into();
         }
-        format!("{colour}{}{ANSI_RESET}:{ANSI_DIR}{cwd}{ANSI_RESET}{sigil} ", self.who)
+        format!(
+            "{colour}{}{ANSI_RESET}:{ANSI_DIR}{cwd}{ANSI_RESET}{sigil} ",
+            self.who
+        )
     }
 
     /* ---------------------------- commands --------------------------- */
@@ -246,7 +258,9 @@ impl PtySession {
             return String::new();
         }
         let argv = split_args(line);
-        let Some(cmd) = argv.first() else { return String::new() };
+        let Some(cmd) = argv.first() else {
+            return String::new();
+        };
         let args: Vec<String> = argv[1..].to_vec();
 
         match cmd.as_str() {
@@ -306,7 +320,11 @@ impl PtySession {
     }
 
     fn home(&self) -> String {
-        if self.user == "root" { "/root".into() } else { format!("/home/{}", self.user) }
+        if self.user == "root" {
+            "/root".into()
+        } else {
+            format!("/home/{}", self.user)
+        }
     }
 
     fn resolve(&self, arg: &str) -> String {
@@ -324,7 +342,8 @@ impl PtySession {
     fn cd(&self, args: &[String]) -> String {
         let target = args.first().map(String::as_str).unwrap_or("");
         if target == "-" {
-            let mut st = self.state.lock();
+            let mut guard = self.state.lock();
+            let st = &mut *guard;
             std::mem::swap(&mut st.cwd, &mut st.previous);
             return format!("{}\r\n", st.cwd);
         }
@@ -333,7 +352,11 @@ impl PtySession {
         let actual = {
             let fs = self.fs.read();
             match fs.lookup(&resolved, true) {
-                Err(_) => return format!("{ANSI_ERR}bash: cd: {resolved}: No such file or directory{ANSI_RESET}\r\n"),
+                Err(_) => {
+                    return format!(
+                        "{ANSI_ERR}bash: cd: {resolved}: No such file or directory{ANSI_RESET}\r\n"
+                    );
+                }
                 Ok((n, _)) if !n.is_dir() => {
                     return format!("{ANSI_ERR}bash: cd: {resolved}: Not a directory{ANSI_RESET}\r\n");
                 }
@@ -341,7 +364,8 @@ impl PtySession {
             }
         };
 
-        let mut st = self.state.lock();
+        let mut guard = self.state.lock();
+        let st = &mut *guard;
         st.previous = std::mem::replace(&mut st.cwd, actual);
         String::new()
     }
@@ -357,13 +381,19 @@ impl PtySession {
             target = arg;
         }
 
-        let resolved = if target.is_empty() { self.current_dir() } else { self.resolve(target) };
+        let resolved = if target.is_empty() {
+            self.current_dir()
+        } else {
+            self.resolve(target)
+        };
 
         let fs = self.fs.read();
         let (n, actual) = match fs.lookup(&resolved, true) {
             Ok(v) => v,
             Err(_) => {
-                return format!("{ANSI_ERR}ls: cannot access '{resolved}': No such file or directory{ANSI_RESET}\r\n");
+                return format!(
+                    "{ANSI_ERR}ls: cannot access '{resolved}': No such file or directory{ANSI_RESET}\r\n"
+                );
             }
         };
         if !n.is_dir() {
@@ -392,7 +422,12 @@ impl PtySession {
         const COLUMNS: usize = 4;
         let width = entries.iter().map(|e| e.name.chars().count()).max().unwrap_or(0);
         for (i, entry) in entries.iter().enumerate() {
-            b.push_str(&format!("{}{:<width$}{ANSI_RESET}  ", colour_for(entry), entry.name, width = width));
+            b.push_str(&format!(
+                "{}{:<width$}{ANSI_RESET}  ",
+                colour_for(entry),
+                entry.name,
+                width = width
+            ));
             if (i + 1) % COLUMNS == 0 {
                 b.push_str("\r\n");
             }
@@ -415,10 +450,12 @@ impl PtySession {
                 fs.lookup(&resolved, true).ok().map(|(n, _)| n.clone())
             };
             match looked {
-                None => b.push_str(&format!("{ANSI_ERR}cat: {resolved}: No such file or directory{ANSI_RESET}\r\n")),
-                Some(n) if n.is_dir() => {
-                    b.push_str(&format!("{ANSI_ERR}cat: {resolved}: Is a directory{ANSI_RESET}\r\n"))
-                }
+                None => b.push_str(&format!(
+                    "{ANSI_ERR}cat: {resolved}: No such file or directory{ANSI_RESET}\r\n"
+                )),
+                Some(n) if n.is_dir() => b.push_str(&format!(
+                    "{ANSI_ERR}cat: {resolved}: Is a directory{ANSI_RESET}\r\n"
+                )),
                 Some(n) if n.is_virtual() => {
                     if let Some(stream) = logs::stream_for_path(&self.sim, &resolved) {
                         b.push_str(&self.render_log_lines(&stream, 20));
@@ -481,7 +518,10 @@ impl PtySession {
             }
         };
         if n.is_virtual() {
-            return format!("{ANSI_WARN}tail: {resolved}: binary file ({} bytes){ANSI_RESET}\r\n", n.size());
+            return format!(
+                "{ANSI_WARN}tail: {resolved}: binary file ({} bytes){ANSI_RESET}\r\n",
+                n.size()
+            );
         }
 
         let text = String::from_utf8_lossy(&n.data);
@@ -575,7 +615,13 @@ impl PtySession {
         let s = sample(&self.sim, Utc::now());
         let cached = s.memory_cached.unwrap_or(0);
         let free = (s.memory_total - s.memory_used - cached).max(0);
-        let format = |v: i64| if human { human_bytes(v) } else { (v / KIB).to_string() };
+        let format = |v: i64| {
+            if human {
+                human_bytes(v)
+            } else {
+                (v / KIB).to_string()
+            }
+        };
 
         let mut b = format!(
             "{:>15} {:>11} {:>11} {:>11} {:>11} {:>11}\r\n",
@@ -632,7 +678,10 @@ impl PtySession {
             ));
         }
         if !full {
-            b.push_str(&format!("{ANSI_DIM}(showing {} of {total}; try `ps aux`){ANSI_RESET}\r\n", rows.len()));
+            b.push_str(&format!(
+                "{ANSI_DIM}(showing {} of {total}; try `ps aux`){ANSI_RESET}\r\n",
+                rows.len()
+            ));
         }
         b
     }
@@ -642,7 +691,9 @@ impl PtySession {
             return "systemctl: try `systemctl status <unit>`\r\n".into();
         }
         if args[0] != "status" || args.len() < 2 {
-            return format!("{ANSI_WARN}systemctl: only `status <unit>` is available in this shell{ANSI_RESET}\r\n");
+            return format!(
+                "{ANSI_WARN}systemctl: only `status <unit>` is available in this shell{ANSI_RESET}\r\n"
+            );
         }
 
         let mut name = args[1].clone();
@@ -656,7 +707,12 @@ impl PtySession {
                 return format!("{ANSI_ERR}Unit {name} could not be found.{ANSI_RESET}\r\n");
             };
             let info = w.units[idx].info.clone();
-            let pids: Vec<ProcessInfo> = w.procs.iter().filter(|p| p.unit == name).map(|p| p.info.clone()).collect();
+            let pids: Vec<ProcessInfo> = w
+                .procs
+                .iter()
+                .filter(|p| p.unit == name)
+                .map(|p| p.info.clone())
+                .collect();
             (info, pids)
         };
 
@@ -699,7 +755,11 @@ impl PtySession {
             b.push_str(&format!("     CGroup: /system.slice/{}\r\n", info.unit));
             for (i, proc) in pids.iter().enumerate() {
                 let branch = if i == pids.len() - 1 { "└─" } else { "├─" };
-                b.push_str(&format!("             {branch}{} {}\r\n", proc.pid, truncate_text(&proc.cmdline, 52)));
+                b.push_str(&format!(
+                    "             {branch}{} {}\r\n",
+                    proc.pid,
+                    truncate_text(&proc.cmdline, 52)
+                ));
             }
         }
         b
@@ -747,7 +807,11 @@ fn mode_string(kind: &str, octal: &str) -> String {
         "device" => "c",
         _ => "-",
     };
-    let mut digits: String = if octal.len() == 4 { octal[1..].to_string() } else { octal.to_string() };
+    let mut digits: String = if octal.len() == 4 {
+        octal[1..].to_string()
+    } else {
+        octal.to_string()
+    };
     while digits.len() < 3 {
         digits.insert(0, '0');
     }
@@ -780,7 +844,11 @@ fn colour_for(entry: &FileEntry) -> &'static str {
 }
 
 fn block_size(bytes: i64, human: bool) -> String {
-    if human { human_bytes(bytes) } else { (bytes / KIB).to_string() }
+    if human {
+        human_bytes(bytes)
+    } else {
+        (bytes / KIB).to_string()
+    }
 }
 
 pub fn human_bytes(bytes: i64) -> String {
@@ -861,15 +929,29 @@ pub struct SimPty(pub Arc<Sim>);
 
 #[async_trait]
 impl Pty for SimPty {
-    async fn open(&self, ctx: &Ctx, session_id: &str, p: PtyOpenParams, s: StreamRef) -> PResult<PtyOpenResult> {
+    async fn open(
+        &self,
+        ctx: &Ctx,
+        session_id: &str,
+        p: PtyOpenParams,
+        s: StreamRef,
+    ) -> PResult<PtyOpenResult> {
         let user = p.user.filter(|u| !u.is_empty()).unwrap_or_else(|| "root".into());
         let cwd = p.cwd.filter(|c| !c.is_empty()).unwrap_or_else(|| {
-            if user == "root" { "/root".to_string() } else { format!("/home/{user}") }
+            if user == "root" {
+                "/root".to_string()
+            } else {
+                format!("/home/{user}")
+            }
         });
 
         let who = format!("{user}@{}", self.0.short_host());
         let session = PtySession::new(self.0.clone(), self.0.fs.clone(), &who, &cwd, p.cols, p.rows);
-        self.0.world.lock().ptys.insert(session_id.to_string(), session.clone());
+        self.0
+            .world
+            .lock()
+            .ptys
+            .insert(session_id.to_string(), session.clone());
 
         let result = session.run(ctx, &*s).await;
         self.0.world.lock().ptys.remove(session_id);
@@ -905,7 +987,10 @@ mod tests {
 
     #[test]
     fn split_args_honours_quotes() {
-        assert_eq!(split_args("echo 'hello world' \"a b\" c"), vec!["echo", "hello world", "a b", "c"]);
+        assert_eq!(
+            split_args("echo 'hello world' \"a b\" c"),
+            vec!["echo", "hello world", "a b", "c"]
+        );
         assert_eq!(split_args("   "), Vec::<String>::new());
     }
 

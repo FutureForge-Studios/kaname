@@ -54,11 +54,20 @@ struct ContainerSeed {
 }
 
 fn tcp(host: i64, guest: i64) -> ContainerPort {
-    ContainerPort { container_port: guest, host_port: Some(host), host_ip: Some("0.0.0.0".into()), protocol: "tcp".into() }
+    ContainerPort {
+        container_port: guest,
+        host_port: Some(host),
+        host_ip: Some("0.0.0.0".into()),
+        protocol: "tcp".into(),
+    }
 }
 
 fn mount(source: &str, destination: &str, rw: bool) -> ContainerMount {
-    ContainerMount { source: source.into(), destination: destination.into(), rw }
+    ContainerMount {
+        source: source.into(),
+        destination: destination.into(),
+        rw,
+    }
 }
 
 fn catalogue() -> Vec<ContainerSeed> {
@@ -69,7 +78,10 @@ fn catalogue() -> Vec<ContainerSeed> {
             state: "running",
             age_days: 41,
             ports: vec![tcp(6379, 6379)],
-            labels: vec![("com.docker.compose.project", "kaname"), ("com.docker.compose.service", "redis")],
+            labels: vec![
+                ("com.docker.compose.project", "kaname"),
+                ("com.docker.compose.service", "redis"),
+            ],
             networks: vec!["kaname_default"],
             mounts: vec![mount("/var/lib/docker/volumes/kaname_redis/_data", "/data", true)],
             process: "redis-server",
@@ -87,7 +99,10 @@ fn catalogue() -> Vec<ContainerSeed> {
             state: "running",
             age_days: 41,
             ports: vec![tcp(9000, 9000), tcp(9001, 9001)],
-            labels: vec![("com.docker.compose.project", "kaname"), ("com.docker.compose.service", "minio")],
+            labels: vec![
+                ("com.docker.compose.project", "kaname"),
+                ("com.docker.compose.service", "minio"),
+            ],
             networks: vec!["kaname_default"],
             mounts: vec![mount("/srv/minio", "/data", true)],
             process: "minio",
@@ -105,7 +120,10 @@ fn catalogue() -> Vec<ContainerSeed> {
             state: "running",
             age_days: 26,
             ports: vec![tcp(6432, 5432)],
-            labels: vec![("com.docker.compose.project", "kaname"), ("com.docker.compose.service", "pgbouncer")],
+            labels: vec![
+                ("com.docker.compose.project", "kaname"),
+                ("com.docker.compose.service", "pgbouncer"),
+            ],
             networks: vec!["kaname_default"],
             mounts: vec![mount("/etc/pgbouncer", "/etc/pgbouncer", false)],
             process: "pgbouncer",
@@ -141,7 +159,10 @@ fn catalogue() -> Vec<ContainerSeed> {
             state: "exited",
             age_days: 12,
             ports: vec![tcp(5678, 5678)],
-            labels: vec![("com.docker.compose.project", "automation"), ("com.docker.compose.service", "n8n")],
+            labels: vec![
+                ("com.docker.compose.project", "automation"),
+                ("com.docker.compose.service", "n8n"),
+            ],
             networks: vec!["automation_default"],
             mounts: vec![mount("/srv/n8n", "/home/node/.n8n", true)],
             process: "node",
@@ -218,7 +239,11 @@ pub fn build_containers(sim: &Sim) {
                 created_at: stamp(created),
                 started_at: None,
                 ports: seed.ports,
-                labels: seed.labels.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<BTreeMap<_, _>>(),
+                labels: seed
+                    .labels
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<BTreeMap<_, _>>(),
                 networks: seed.networks.iter().map(|n| n.to_string()).collect(),
                 mounts: seed.mounts,
                 restart_count: seed.restarts,
@@ -230,14 +255,19 @@ pub fn build_containers(sim: &Sim) {
 
             match seed.state {
                 "running" => {
-                    let started = created + chrono::Duration::seconds((mix(sim.seed ^ i ^ 0xe1) % 3600) as i64);
+                    let started =
+                        created + chrono::Duration::seconds((mix(sim.seed ^ i ^ 0xe1) % 3600) as i64);
                     info.started_at = Some(stamp(started));
                     info.status = format!("Up {}", human_duration(now - started));
                 }
                 "exited" => {
                     let stopped = now - chrono::Duration::hours(2 + (mix(sim.seed ^ i ^ 0xe2) % 40) as i64);
                     info.started_at = Some(stamp(created));
-                    info.status = format!("Exited ({}) {} ago", seed.exit_code, human_duration(now - stopped));
+                    info.status = format!(
+                        "Exited ({}) {} ago",
+                        seed.exit_code,
+                        human_duration(now - stopped)
+                    );
                 }
                 _ => info.status = "Created".into(),
             }
@@ -282,7 +312,11 @@ fn with_stats(sim: &Sim, c: &Container, now: DateTime<Utc>) -> ContainerInfo {
     }
     let t = now.timestamp_millis() as f64 / 1000.0;
     let seed = sim.seed ^ hash_string(&c.info.id);
-    info.cpu_percent = Some(round2(clampf(c.cpu_base * (1.0 + 1.6 * drift(seed, t / 40.0, 2)), 0.0, 100.0)));
+    info.cpu_percent = Some(round2(clampf(
+        c.cpu_base * (1.0 + 1.6 * drift(seed, t / 40.0, 2)),
+        0.0,
+        100.0,
+    )));
     info.memory_usage = Some((c.rss_base as f64 * (1.0 + 0.14 * drift(seed ^ 0x3, t / 300.0, 2))) as i64);
     info
 }
@@ -290,7 +324,9 @@ fn with_stats(sim: &Sim, c: &Container, now: DateTime<Utc>) -> ContainerInfo {
 /// Rebuilds containerd's process set so the host process table always
 /// agrees with the container table.
 pub fn respawn_containerd(sim: &Sim, w: &mut World) {
-    let Some(idx) = find_unit(w, "containerd.service") else { return };
+    let Some(idx) = find_unit(w, "containerd.service") else {
+        return;
+    };
     if w.units[idx].info.active_state != "active" {
         return;
     }
@@ -348,7 +384,13 @@ impl Containers for SimContainers {
             .containers
             .iter()
             .filter(|c| p.all || c.info.state == "running")
-            .map(|c| if p.with_stats { with_stats(&self.0, c, now) } else { c.info.clone() })
+            .map(|c| {
+                if p.with_stats {
+                    with_stats(&self.0, c, now)
+                } else {
+                    c.info.clone()
+                }
+            })
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
@@ -422,7 +464,10 @@ impl Containers for SimContainers {
                 return Err(ProviderError::not_found(format!("container {}", p.id)));
             };
             if w.containers[idx].info.state == "running" && !p.force {
-                return Err(ProviderError::conflict(format!("container {} is running", w.containers[idx].info.name)));
+                return Err(ProviderError::conflict(format!(
+                    "container {} is running",
+                    w.containers[idx].info.name
+                )));
             }
             let target = w.containers.remove(idx);
             respawn_containerd(&self.0, &mut w);
@@ -476,7 +521,10 @@ impl Containers for SimContainers {
                 w.containers[idx].fs = Some(fs);
             }
             let c = &w.containers[idx];
-            (c.fs.clone().expect("container filesystem"), format!("root@{}", &c.info.id[..12]))
+            (
+                c.fs.clone().expect("container filesystem"),
+                format!("root@{}", &c.info.id[..12]),
+            )
         };
 
         let session = PtySession::new(self.0.clone(), fs, &prompt, "/", p.cols, p.rows);
@@ -520,6 +568,9 @@ impl Containers for SimContainers {
         }
 
         respawn_containerd(&self.0, &mut w);
-        Ok(ContainerPruneResult { reclaimed_bytes: reclaimed, removed })
+        Ok(ContainerPruneResult {
+            reclaimed_bytes: reclaimed,
+            removed,
+        })
     }
 }

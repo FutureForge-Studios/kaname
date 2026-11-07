@@ -12,8 +12,8 @@ use super::files::{clean_path, path_base, tree_size, uid_for};
 use super::services::transition;
 use super::state::Sim;
 use crate::providers::{
-    Ctx, PResult, ProviderError, SiteConfigResult, SiteCreateParams, SiteInfo, SiteRemoveParams, SiteTestConfigResult,
-    SiteUpdateParams, Sites,
+    Ctx, PResult, ProviderError, SiteConfigResult, SiteCreateParams, SiteInfo, SiteRemoveParams,
+    SiteTestConfigResult, SiteUpdateParams, Sites,
 };
 
 #[derive(Clone)]
@@ -27,11 +27,51 @@ pub fn build_web(sim: &Sim) {
     let domain = sim.id.domain.clone();
 
     let seeds: Vec<(String, Vec<String>, String, &str, &str, &str, bool)> = vec![
-        (domain.clone(), vec![domain.clone(), format!("www.{domain}")], format!("/var/www/{domain}/public"), "static", "", "", true),
-        (format!("api.{domain}"), vec![format!("api.{domain}")], format!("/var/www/api.{domain}/public"), "proxy", "", "http://127.0.0.1:3000", true),
-        (format!("blog.{domain}"), vec![format!("blog.{domain}")], format!("/var/www/blog.{domain}/public"), "php", "8.2", "", true),
-        (format!("app.{domain}"), vec![format!("app.{domain}")], format!("/var/www/app.{domain}/current"), "node", "20", "http://127.0.0.1:4000", true),
-        (format!("staging.{domain}"), vec![format!("staging.{domain}")], format!("/var/www/staging.{domain}/public"), "static", "", "", false),
+        (
+            domain.clone(),
+            vec![domain.clone(), format!("www.{domain}")],
+            format!("/var/www/{domain}/public"),
+            "static",
+            "",
+            "",
+            true,
+        ),
+        (
+            format!("api.{domain}"),
+            vec![format!("api.{domain}")],
+            format!("/var/www/api.{domain}/public"),
+            "proxy",
+            "",
+            "http://127.0.0.1:3000",
+            true,
+        ),
+        (
+            format!("blog.{domain}"),
+            vec![format!("blog.{domain}")],
+            format!("/var/www/blog.{domain}/public"),
+            "php",
+            "8.2",
+            "",
+            true,
+        ),
+        (
+            format!("app.{domain}"),
+            vec![format!("app.{domain}")],
+            format!("/var/www/app.{domain}/current"),
+            "node",
+            "20",
+            "http://127.0.0.1:4000",
+            true,
+        ),
+        (
+            format!("staging.{domain}"),
+            vec![format!("staging.{domain}")],
+            format!("/var/www/staging.{domain}/public"),
+            "static",
+            "",
+            "",
+            false,
+        ),
     ];
 
     let mut sites = Vec::new();
@@ -42,16 +82,27 @@ pub fn build_web(sim: &Sim) {
             webroot: webroot.clone(),
             server_names: names,
             runtime: runtime.into(),
-            runtime_version: if version.is_empty() { None } else { Some(version.into()) },
+            runtime_version: if version.is_empty() {
+                None
+            } else {
+                Some(version.into())
+            },
             enabled,
         };
-        let entry = Site { info, upstream: upstream.into(), force_https: true };
+        let entry = Site {
+            info,
+            upstream: upstream.into(),
+            force_https: true,
+        };
 
         {
             let mut fs = sim.fs.write();
             fs.file(&entry.info.config_path, &render_site_config(&entry));
             if enabled {
-                fs.link(&format!("/etc/nginx/sites-enabled/{name}"), &format!("../sites-available/{name}"));
+                fs.link(
+                    &format!("/etc/nginx/sites-enabled/{name}"),
+                    &format!("../sites-available/{name}"),
+                );
             }
             fs.dir_as(&webroot, "0755", "www-data", 33);
         }
@@ -69,7 +120,13 @@ pub fn seed_webroot(sim: &Sim, entry: &Site) {
     match entry.info.runtime.as_str() {
         "php" => {
             fs.file_as(&format!("{root}/index.php"), "<?php\ndeclare(strict_types=1);\nrequire __DIR__ . '/../vendor/autoload.php';\n\n$app = new App\\Kernel();\n$app->handle($_SERVER, $_GET, $_POST);\n", "0644", "www-data", 33);
-            fs.file_as(&format!("{root}/.htaccess"), "RewriteEngine On\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteRule ^ index.php [L]\n", "0644", "www-data", 33);
+            fs.file_as(
+                &format!("{root}/.htaccess"),
+                "RewriteEngine On\nRewriteCond %{REQUEST_FILENAME} !-f\nRewriteRule ^ index.php [L]\n",
+                "0644",
+                "www-data",
+                33,
+            );
             fs.dir_as(&format!("{root}/wp-content/uploads"), "0755", "www-data", 33);
             fs.blob(&format!("{root}/wp-content/uploads/2026-08-hero.jpg"), 1_884_112);
         }
@@ -77,7 +134,10 @@ pub fn seed_webroot(sim: &Sim, entry: &Site) {
             fs.file_as(&format!("{root}/server.js"), "import { createServer } from 'node:http';\n\ncreateServer((_req, res) => {\n  res.writeHead(200, { 'content-type': 'application/json' });\n  res.end(JSON.stringify({ ok: true }));\n}).listen(4000);\n", "0644", "deploy", 1000);
             fs.file_as(
                 &format!("{root}/package.json"),
-                &format!("{{\n  \"name\": \"{}\",\n  \"type\": \"module\",\n  \"private\": true\n}}\n", entry.info.name),
+                &format!(
+                    "{{\n  \"name\": \"{}\",\n  \"type\": \"module\",\n  \"private\": true\n}}\n",
+                    entry.info.name
+                ),
                 "0644",
                 "deploy",
                 1000,
@@ -87,8 +147,20 @@ pub fn seed_webroot(sim: &Sim, entry: &Site) {
             fs.file_as(&format!("{root}/index.html"), "<!doctype html>\n<title>upstream</title>\n<p>Requests are proxied to the application server.</p>\n", "0644", "www-data", 33);
         }
         _ => {
-            fs.file_as(&format!("{root}/index.html"), &static_index_html(&entry.info.name), "0644", "www-data", 33);
-            fs.file_as(&format!("{root}/robots.txt"), "User-agent: *\nDisallow:\n", "0644", "www-data", 33);
+            fs.file_as(
+                &format!("{root}/index.html"),
+                &static_index_html(&entry.info.name),
+                "0644",
+                "www-data",
+                33,
+            );
+            fs.file_as(
+                &format!("{root}/robots.txt"),
+                "User-agent: *\nDisallow:\n",
+                "0644",
+                "www-data",
+                33,
+            );
             fs.file_as(&format!("{root}/assets/app.css"), ":root{color-scheme:dark}\nbody{margin:0;font:16px/1.6 system-ui,sans-serif;background:#0b0c0e;color:#e7e9ec}\nmain{max-width:60ch;margin:12vh auto;padding:0 1.5rem}\n", "0644", "www-data", 33);
             fs.blob(&format!("{root}/assets/app.js"), 118_442);
             fs.blob(&format!("{root}/favicon.ico"), 15_086);
@@ -128,9 +200,15 @@ pub fn render_site_config(entry: &Site) -> String {
             "server {{\n    listen 80;\n    listen [::]:80;\n    server_name {names};\n    return 301 https://$host$request_uri;\n}}\n\n"
         ));
     }
-    b.push_str(&format!("server {{\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name {names};\n\n"));
-    b.push_str(&format!("    ssl_certificate     /etc/letsencrypt/live/{name}/fullchain.pem;\n"));
-    b.push_str(&format!("    ssl_certificate_key /etc/letsencrypt/live/{name}/privkey.pem;\n"));
+    b.push_str(&format!(
+        "server {{\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name {names};\n\n"
+    ));
+    b.push_str(&format!(
+        "    ssl_certificate     /etc/letsencrypt/live/{name}/fullchain.pem;\n"
+    ));
+    b.push_str(&format!(
+        "    ssl_certificate_key /etc/letsencrypt/live/{name}/privkey.pem;\n"
+    ));
     b.push_str("    include snippets/ssl-params.conf;\n\n");
     b.push_str(&format!("    root {};\n", entry.info.webroot));
     b.push_str(&format!("    access_log /var/log/nginx/{name}.access.log;\n"));
@@ -145,7 +223,11 @@ pub fn render_site_config(entry: &Site) -> String {
             ));
         }
         "proxy" | "node" | "container" => {
-            let upstream = if entry.upstream.is_empty() { "http://127.0.0.1:3000" } else { entry.upstream.as_str() };
+            let upstream = if entry.upstream.is_empty() {
+                "http://127.0.0.1:3000"
+            } else {
+                entry.upstream.as_str()
+            };
             b.push_str(&format!(
                 "    location / {{\n        proxy_pass {upstream};\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n    }}\n"
             ));
@@ -154,7 +236,9 @@ pub fn render_site_config(entry: &Site) -> String {
             b.push_str("    location / {\n        include uwsgi_params;\n        uwsgi_pass unix:/run/uwsgi/app.sock;\n    }\n");
         }
         _ => {
-            b.push_str("    index index.html;\n\n    location / {\n        try_files $uri $uri/ =404;\n    }\n");
+            b.push_str(
+                "    index index.html;\n\n    location / {\n        try_files $uri $uri/ =404;\n    }\n",
+            );
         }
     }
     b.push_str("}\n");
@@ -188,7 +272,11 @@ impl Sites for SimSites {
                 enabled: true,
                 config_path: format!("/etc/nginx/sites-available/{}", p.name),
             };
-            let entry = Site { info, upstream: p.upstream.clone().unwrap_or_default(), force_https: p.force_https };
+            let entry = Site {
+                info,
+                upstream: p.upstream.clone().unwrap_or_default(),
+                force_https: p.force_https,
+            };
             w.sites.push(entry.clone());
             entry
         };
@@ -201,12 +289,17 @@ impl Sites for SimSites {
         {
             let mut fs = self.0.fs.write();
             fs.file(&entry.info.config_path, &render_site_config(&entry));
-            fs.link(&format!("/etc/nginx/sites-enabled/{}", p.name), &format!("../sites-available/{}", p.name));
+            fs.link(
+                &format!("/etc/nginx/sites-enabled/{}", p.name),
+                &format!("../sites-available/{}", p.name),
+            );
             fs.dir_as(&webroot, "0755", &owner, uid);
         }
         seed_webroot(&self.0, &entry);
 
-        Ok(SiteConfigResult { config_path: entry.info.config_path })
+        Ok(SiteConfigResult {
+            config_path: entry.info.config_path,
+        })
     }
 
     async fn update(&self, _ctx: &Ctx, p: SiteUpdateParams) -> PResult<SiteConfigResult> {
@@ -246,7 +339,9 @@ impl Sites for SimSites {
                 fs.detach(&link);
             }
         }
-        Ok(SiteConfigResult { config_path: snapshot.info.config_path })
+        Ok(SiteConfigResult {
+            config_path: snapshot.info.config_path,
+        })
     }
 
     async fn remove(&self, _ctx: &Ctx, p: SiteRemoveParams) -> PResult<()> {

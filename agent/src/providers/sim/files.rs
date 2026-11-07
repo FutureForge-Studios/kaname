@@ -22,10 +22,10 @@ use super::containers::Container;
 use super::state::{MIB, Sim, hash_string, mix, progress, stamp};
 use super::system::Identity;
 use crate::providers::{
-    Ctx, DirectoryListing, Encoding, FileEntry, Files, FsArchiveParams, FsChmodParams, FsChownParams, FsCopyParams,
-    FsDownloadParams, FsDownloadResult, FsExtractParams, FsListParams, FsMkdirParams, FsMoveParams, FsReadParams,
-    FsReadResult, FsRemoveParams, FsUploadParams, FsUsageParams, FsUsageResult, FsWriteParams, PResult,
-    ProviderError, StorageUsageEntry, StreamRef,
+    Ctx, DirectoryListing, Encoding, FileEntry, Files, FsArchiveParams, FsChmodParams, FsChownParams,
+    FsCopyParams, FsDownloadParams, FsDownloadResult, FsExtractParams, FsListParams, FsMkdirParams,
+    FsMoveParams, FsReadParams, FsReadResult, FsRemoveParams, FsUploadParams, FsUsageParams, FsUsageResult,
+    FsWriteParams, PResult, ProviderError, StorageUsageEntry, StreamRef,
 };
 
 const MAX_SYMLINK_DEPTH: usize = 32;
@@ -188,7 +188,10 @@ fn segments(p: &str) -> Vec<String> {
 impl MemFs {
     pub fn new() -> MemFs {
         let epoch = Utc::now() - chrono::Duration::days(37);
-        MemFs { root: Node::directory("/", epoch), epoch }
+        MemFs {
+            root: Node::directory("/", epoch),
+            epoch,
+        }
     }
 
     pub fn dir(&mut self, p: &str) {
@@ -209,7 +212,8 @@ impl MemFs {
     }
 
     pub fn file_as(&mut self, p: &str, content: &str, mode: &str, owner: &str, uid: i64) {
-        let modified = self.epoch + chrono::Duration::seconds((mix(p.len() as u64) % (20 * 24 * 3600)) as i64);
+        let modified =
+            self.epoch + chrono::Duration::seconds((mix(p.len() as u64) % (20 * 24 * 3600)) as i64);
         let mut n = Node::new_file(&path_base(p), content.as_bytes().to_vec(), mode, modified);
         n.owner = owner.into();
         n.group = owner.into();
@@ -244,7 +248,8 @@ impl MemFs {
         for segment in segments(p) {
             let replace = cur.children.get(&segment).is_none_or(|c| !c.is_dir());
             if replace {
-                cur.children.insert(segment.clone(), Node::directory(&segment, epoch));
+                cur.children
+                    .insert(segment.clone(), Node::directory(&segment, epoch));
             }
             cur = cur.children.get_mut(&segment).expect("just inserted");
         }
@@ -265,7 +270,9 @@ impl MemFs {
     /// cycle fails loudly instead of hanging a request.
     fn walk(&self, p: &str, follow: bool, depth: usize) -> PResult<(&Node, String)> {
         if depth > MAX_SYMLINK_DEPTH {
-            return Err(ProviderError::Io(std::io::Error::other("too many levels of symbolic links")));
+            return Err(ProviderError::Io(std::io::Error::other(
+                "too many levels of symbolic links",
+            )));
         }
 
         let mut cur = &self.root;
@@ -325,7 +332,8 @@ impl MemFs {
 
     pub fn parent_mut(&mut self, p: &str) -> PResult<&mut Node> {
         let canonical = self.parent_path(p)?;
-        self.node_mut(&canonical).ok_or_else(|| ProviderError::not_found(canonical))
+        self.node_mut(&canonical)
+            .ok_or_else(|| ProviderError::not_found(canonical))
     }
 
     /* ------------------------------ entries -------------------------- */
@@ -369,23 +377,46 @@ impl Default for MemFs {
 }
 
 fn mime_by_ext() -> &'static HashMap<&'static str, &'static str> {
-    static TABLE: once_cell::sync::Lazy<HashMap<&'static str, &'static str>> = once_cell::sync::Lazy::new(|| {
-        HashMap::from([
-            (".html", "text/html"), (".htm", "text/html"), (".css", "text/css"),
-            (".js", "application/javascript"), (".mjs", "application/javascript"),
-            (".json", "application/json"), (".yml", "application/yaml"), (".yaml", "application/yaml"),
-            (".md", "text/markdown"), (".txt", "text/plain"), (".log", "text/plain"),
-            (".conf", "text/plain"), (".cf", "text/plain"), (".ini", "text/plain"), (".toml", "text/plain"),
-            (".sh", "application/x-shellscript"), (".php", "application/x-httpd-php"),
-            (".py", "text/x-python"), (".sql", "application/sql"), (".env", "text/plain"),
-            (".pem", "application/x-pem-file"), (".key", "application/x-pem-file"),
-            (".crt", "application/x-x509-ca-cert"), (".png", "image/png"), (".jpg", "image/jpeg"),
-            (".svg", "image/svg+xml"), (".ico", "image/vnd.microsoft.icon"),
-            (".gz", "application/gzip"), (".zst", "application/zstd"), (".zip", "application/zip"),
-            (".tar", "application/x-tar"), (".deb", "application/vnd.debian.binary-package"),
-            (".service", "text/plain"), (".timer", "text/plain"), (".socket", "text/plain"),
-        ])
-    });
+    static TABLE: once_cell::sync::Lazy<HashMap<&'static str, &'static str>> =
+        once_cell::sync::Lazy::new(|| {
+            HashMap::from([
+                (".html", "text/html"),
+                (".htm", "text/html"),
+                (".css", "text/css"),
+                (".js", "application/javascript"),
+                (".mjs", "application/javascript"),
+                (".json", "application/json"),
+                (".yml", "application/yaml"),
+                (".yaml", "application/yaml"),
+                (".md", "text/markdown"),
+                (".txt", "text/plain"),
+                (".log", "text/plain"),
+                (".conf", "text/plain"),
+                (".cf", "text/plain"),
+                (".ini", "text/plain"),
+                (".toml", "text/plain"),
+                (".sh", "application/x-shellscript"),
+                (".php", "application/x-httpd-php"),
+                (".py", "text/x-python"),
+                (".sql", "application/sql"),
+                (".env", "text/plain"),
+                (".pem", "application/x-pem-file"),
+                (".key", "application/x-pem-file"),
+                (".crt", "application/x-x509-ca-cert"),
+                (".png", "image/png"),
+                (".jpg", "image/jpeg"),
+                (".svg", "image/svg+xml"),
+                (".ico", "image/vnd.microsoft.icon"),
+                (".gz", "application/gzip"),
+                (".zst", "application/zstd"),
+                (".zip", "application/zip"),
+                (".tar", "application/x-tar"),
+                (".deb", "application/vnd.debian.binary-package"),
+                (".service", "text/plain"),
+                (".timer", "text/plain"),
+                (".socket", "text/plain"),
+            ])
+        });
     &TABLE
 }
 
@@ -486,7 +517,9 @@ pub fn clean_path(p: &str) -> PResult<String> {
         return Err(ProviderError::invalid(format!("path must be absolute: {p}")));
     }
     if p.split('/').any(|s| s == "..") {
-        return Err(ProviderError::invalid(format!("path may not traverse upwards: {p}")));
+        return Err(ProviderError::invalid(format!(
+            "path may not traverse upwards: {p}"
+        )));
     }
     Ok(path_clean(p))
 }
@@ -509,7 +542,13 @@ fn sort_entries(entries: &mut [FileEntry]) {
     });
 }
 
-pub fn write_file(sim: &Sim, target: &str, data: Vec<u8>, mode: &str, create_parents: bool) -> PResult<FileEntry> {
+pub fn write_file(
+    sim: &Sim,
+    target: &str,
+    data: Vec<u8>,
+    mode: &str,
+    create_parents: bool,
+) -> PResult<FileEntry> {
     let mut fs = sim.fs.write();
     if create_parents {
         fs.mkdir_all(&path_dir(target));
@@ -519,14 +558,21 @@ pub fn write_file(sim: &Sim, target: &str, data: Vec<u8>, mode: &str, create_par
     let now = Utc::now();
 
     let (delta, owner) = {
-        let parent = fs.node_mut(&parent_path).ok_or_else(|| ProviderError::not_found(parent_path.clone()))?;
+        let parent = fs
+            .node_mut(&parent_path)
+            .ok_or_else(|| ProviderError::not_found(parent_path.clone()))?;
         match parent.children.get(&name) {
             Some(existing) if existing.is_dir() => {
                 return Err(ProviderError::conflict(format!("{target} is a directory")));
             }
             Some(existing) => (
                 data.len() as i64 - existing.size(),
-                Some((existing.owner.clone(), existing.group.clone(), existing.uid, existing.gid)),
+                Some((
+                    existing.owner.clone(),
+                    existing.group.clone(),
+                    existing.uid,
+                    existing.gid,
+                )),
             ),
             None => (data.len() as i64, None),
         }
@@ -541,7 +587,9 @@ pub fn write_file(sim: &Sim, target: &str, data: Vec<u8>, mode: &str, create_par
         n.gid = gid;
     }
     let entry = fs.entry(&n, target);
-    let parent = fs.node_mut(&parent_path).ok_or_else(|| ProviderError::not_found(parent_path.clone()))?;
+    let parent = fs
+        .node_mut(&parent_path)
+        .ok_or_else(|| ProviderError::not_found(parent_path.clone()))?;
     parent.children.insert(name, n);
     Ok(entry)
 }
@@ -579,7 +627,11 @@ impl Files for SimFiles {
         }
 
         Ok(DirectoryListing {
-            parent: if target == "/" { None } else { Some(path_dir(&target)) },
+            parent: if target == "/" {
+                None
+            } else {
+                Some(path_dir(&target))
+            },
             path: target,
             entries,
             truncated,
@@ -602,7 +654,11 @@ impl Files for SimFiles {
             return Err(ProviderError::invalid(format!("{target} is not a regular file")));
         }
 
-        let mut data: Vec<u8> = if n.is_virtual() { binary_filler(&target, n.virtual_size) } else { n.data.clone() };
+        let mut data: Vec<u8> = if n.is_virtual() {
+            binary_filler(&target, n.virtual_size)
+        } else {
+            n.data.clone()
+        };
         let mut truncated = false;
         if p.max_bytes > 0 && data.len() as i64 > p.max_bytes {
             data.truncate(p.max_bytes as usize);
@@ -610,7 +666,12 @@ impl Files for SimFiles {
         }
 
         match String::from_utf8(data) {
-            Ok(text) => Ok(FsReadResult { content: text, encoding: "utf8".into(), truncated, size: n.size() }),
+            Ok(text) => Ok(FsReadResult {
+                content: text,
+                encoding: "utf8".into(),
+                truncated,
+                size: n.size(),
+            }),
             Err(e) => Ok(FsReadResult {
                 content: base64::engine::general_purpose::STANDARD.encode(e.into_bytes()),
                 encoding: "base64".into(),
@@ -664,7 +725,11 @@ impl Files for SimFiles {
 
         let source_path = fs.parent_path(&from)?;
         let from_name = path_base(&from);
-        if fs.node_mut(&source_path).and_then(|s| s.children.get(&from_name)).is_none() {
+        if fs
+            .node_mut(&source_path)
+            .and_then(|s| s.children.get(&from_name))
+            .is_none()
+        {
             return Err(ProviderError::not_found(from));
         }
         if from == "/" || to.starts_with(&format!("{from}/")) {
@@ -673,7 +738,10 @@ impl Files for SimFiles {
 
         let target_path = fs.parent_path(&to)?;
         let name = path_base(&to);
-        let clash_size = fs.node_mut(&target_path).and_then(|t| t.children.get(&name)).map(tree_size);
+        let clash_size = fs
+            .node_mut(&target_path)
+            .and_then(|t| t.children.get(&name))
+            .map(tree_size);
         if let Some(size) = clash_size {
             if !p.overwrite {
                 return Err(ProviderError::conflict(format!("{to} already exists")));
@@ -707,7 +775,10 @@ impl Files for SimFiles {
         let mut clone = n.clone();
         let target_path = fs.parent_path(&to)?;
         let name = path_base(&to);
-        let clash_size = fs.node_mut(&target_path).and_then(|t| t.children.get(&name)).map(tree_size);
+        let clash_size = fs
+            .node_mut(&target_path)
+            .and_then(|t| t.children.get(&name))
+            .map(tree_size);
         if let Some(size) = clash_size {
             if !p.overwrite {
                 return Err(ProviderError::conflict(format!("{to} already exists")));
@@ -735,7 +806,9 @@ impl Files for SimFiles {
             }
             let parent_path = fs.parent_path(&target)?;
             let name = path_base(&target);
-            let parent = fs.node_mut(&parent_path).ok_or_else(|| ProviderError::not_found(parent_path.clone()))?;
+            let parent = fs
+                .node_mut(&parent_path)
+                .ok_or_else(|| ProviderError::not_found(parent_path.clone()))?;
             let Some(n) = parent.children.get(&name) else {
                 return Err(ProviderError::not_found(target));
             };
@@ -754,8 +827,14 @@ impl Files for SimFiles {
         let mut fs = self.0.fs.write();
         for target in targets {
             let (_, resolved) = fs.lookup(&target, false)?;
-            let canonical = if resolved == target { target.clone() } else { resolved };
-            let n = fs.node_mut(&canonical).ok_or_else(|| ProviderError::not_found(target.clone()))?;
+            let canonical = if resolved == target {
+                target.clone()
+            } else {
+                resolved
+            };
+            let n = fs
+                .node_mut(&canonical)
+                .ok_or_else(|| ProviderError::not_found(target.clone()))?;
             let mode = p.mode.clone();
             apply_recursive(n, p.recursive, &|x| x.mode = mode.clone());
         }
@@ -769,7 +848,9 @@ impl Files for SimFiles {
         let mut fs = self.0.fs.write();
         for target in targets {
             let (_, resolved) = fs.lookup(&target, false)?;
-            let n = fs.node_mut(&resolved).ok_or_else(|| ProviderError::not_found(target.clone()))?;
+            let n = fs
+                .node_mut(&resolved)
+                .ok_or_else(|| ProviderError::not_found(target.clone()))?;
             apply_recursive(n, p.recursive, &|x| {
                 if let Some(owner) = &owner {
                     x.owner = owner.clone();
@@ -800,7 +881,13 @@ impl Files for SimFiles {
             (raw, files)
         };
 
-        progress(ctx, &*s, Duration::ZERO, format!("creating {destination} ({})", p.format)).await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            format!("creating {destination} ({})", p.format),
+        )
+        .await?;
         for source in &sources {
             progress(ctx, &*s, Duration::from_millis(90), format!("adding: {source}")).await?;
         }
@@ -826,7 +913,13 @@ impl Files for SimFiles {
         };
         self.0.account_bytes(compressed);
 
-        let _ = progress(ctx, &*s, Duration::ZERO, format!("wrote {destination} ({files} files, {compressed} bytes)")).await;
+        let _ = progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            format!("wrote {destination} ({files} files, {compressed} bytes)"),
+        )
+        .await;
         Ok(entry)
     }
 
@@ -855,12 +948,24 @@ impl Files for SimFiles {
             format!("{base}/assets/app.js"),
         ];
 
-        progress(ctx, &*s, Duration::ZERO, format!("extracting {source} into {destination}")).await?;
+        progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            format!("extracting {source} into {destination}"),
+        )
+        .await?;
 
         let mut extracted = 0;
         for member in &members {
             let target = path_join(&destination, member);
-            progress(ctx, &*s, Duration::from_millis(70), format!("  inflating: {target}")).await?;
+            progress(
+                ctx,
+                &*s,
+                Duration::from_millis(70),
+                format!("  inflating: {target}"),
+            )
+            .await?;
 
             {
                 let mut fs = self.0.fs.write();
@@ -871,8 +976,15 @@ impl Files for SimFiles {
                         return Err(ProviderError::conflict(format!("{target} already exists")));
                     }
                     let content = format!("extracted from {}\n", path_base(&source));
-                    let n = Node::new_file(&path_base(&target), content.clone().into_bytes(), "0644", Utc::now());
-                    fs.mkdir_all(&path_dir(&target)).children.insert(path_base(&target), n);
+                    let n = Node::new_file(
+                        &path_base(&target),
+                        content.clone().into_bytes(),
+                        "0644",
+                        Utc::now(),
+                    );
+                    fs.mkdir_all(&path_dir(&target))
+                        .children
+                        .insert(path_base(&target), n);
                     self.0.account_bytes(content.len() as i64);
                 }
             }
@@ -891,7 +1003,11 @@ impl Files for SimFiles {
             if n.kind != "file" {
                 return Err(ProviderError::invalid(format!("{target} is not a regular file")));
             }
-            if n.is_virtual() { binary_filler(&target, n.virtual_size) } else { n.data.clone() }
+            if n.is_virtual() {
+                binary_filler(&target, n.virtual_size)
+            } else {
+                n.data.clone()
+            }
         };
 
         const WINDOW: usize = 64 * 1024;
@@ -900,7 +1016,10 @@ impl Files for SimFiles {
                 .await
                 .map_err(|e| ProviderError::internal(format!("stream {target}: {e}")))?;
         }
-        Ok(FsDownloadResult { size: payload.len() as i64, mime: mime_of(&path_base(&target)) })
+        Ok(FsDownloadResult {
+            size: payload.len() as i64,
+            mime: mime_of(&path_base(&target)),
+        })
     }
 
     async fn upload(&self, _ctx: &Ctx, p: FsUploadParams, s: StreamRef) -> PResult<FileEntry> {
@@ -918,7 +1037,10 @@ impl Files for SimFiles {
         {
             buffer.extend_from_slice(&chunk);
             if p.size > 0 && buffer.len() as i64 > p.size {
-                return Err(ProviderError::invalid(format!("upload exceeded the declared {} bytes", p.size)));
+                return Err(ProviderError::invalid(format!(
+                    "upload exceeded the declared {} bytes",
+                    p.size
+                )));
             }
         }
 
@@ -934,11 +1056,21 @@ impl Files for SimFiles {
         let mut entries = Vec::new();
         collect(root, &resolved, 1, p.depth, &mounts, &mut entries);
         entries.sort_by(|a, b| b.bytes.cmp(&a.bytes));
-        Ok(FsUsageResult { entries, total: tree_size(root) })
+        Ok(FsUsageResult {
+            entries,
+            total: tree_size(root),
+        })
     }
 }
 
-fn collect(n: &Node, at: &str, depth: i64, max_depth: i64, mounts: &[&str], out: &mut Vec<StorageUsageEntry>) {
+fn collect(
+    n: &Node,
+    at: &str,
+    depth: i64,
+    max_depth: i64,
+    mounts: &[&str],
+    out: &mut Vec<StorageUsageEntry>,
+) {
     if !n.is_dir() || depth > max_depth {
         return;
     }
@@ -972,8 +1104,22 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
     let short = id.hostname.split('.').next().unwrap_or_default().to_string();
 
     for d in [
-        "/boot", "/dev", "/etc", "/home", "/media", "/mnt", "/opt", "/proc", "/root", "/run", "/srv", "/sys", "/tmp",
-        "/usr", "/var", "/lost+found",
+        "/boot",
+        "/dev",
+        "/etc",
+        "/home",
+        "/media",
+        "/mnt",
+        "/opt",
+        "/proc",
+        "/root",
+        "/run",
+        "/srv",
+        "/sys",
+        "/tmp",
+        "/usr",
+        "/var",
+        "/lost+found",
     ] {
         f.dir(d);
     }
@@ -988,7 +1134,10 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
     f.blob("/boot/vmlinuz-6.1.0-18-amd64", 8_284_672);
     f.blob("/boot/initrd.img-6.1.0-18-amd64", 42_118_912);
     f.blob("/boot/System.map-6.1.0-18-amd64", 5_412_336);
-    f.file("/boot/config-6.1.0-18-amd64", "CONFIG_LOCALVERSION=\"-18-amd64\"\nCONFIG_64BIT=y\nCONFIG_X86_64=y\nCONFIG_SMP=y\n");
+    f.file(
+        "/boot/config-6.1.0-18-amd64",
+        "CONFIG_LOCALVERSION=\"-18-amd64\"\nCONFIG_64BIT=y\nCONFIG_X86_64=y\nCONFIG_SMP=y\n",
+    );
     f.file("/boot/grub/grub.cfg", "set default=\"0\"\nset timeout=5\n\nmenuentry 'Debian GNU/Linux' {\n\tlinux /boot/vmlinuz-6.1.0-18-amd64 root=/dev/vda1 ro quiet\n\tinitrd /boot/initrd.img-6.1.0-18-amd64\n}\n");
 
     /* ---------------------------- /etc ---------------------------- */
@@ -1003,7 +1152,10 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
     );
     f.file("/etc/machine-id", &format!("{}\n", id.machine_id));
     f.file("/etc/timezone", &format!("{}\n", id.timezone));
-    f.file("/etc/resolv.conf", "nameserver 127.0.0.1\noptions edns0 trust-ad\nsearch kaname.internal\n");
+    f.file(
+        "/etc/resolv.conf",
+        "nameserver 127.0.0.1\noptions edns0 trust-ad\nsearch kaname.internal\n",
+    );
     f.file("/etc/fstab", "# /etc/fstab: static file system information.\nUUID=9f2c1b70-4d5e-4b21-9c0a-2f1a7e6d4c33 /               ext4    errors=remount-ro 0 1\nUUID=1a4d-9C2E                            /boot           ext4    defaults          0 2\nUUID=c81f9a5d-3e7b-4f10-8a26-5d9e0c4b7a12 /srv            xfs     defaults,noatime  0 2\nUUID=7b3e2c41-8f6a-4d09-b52c-16e8d3f0a945 /var/lib/docker ext4    defaults          0 2\n/dev/vda3                                 none            swap    sw                0 0\n");
     f.file("/etc/passwd", "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\nbin:x:2:2:bin:/bin:/usr/sbin/nologin\nsys:x:3:3:sys:/dev:/usr/sbin/nologin\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\nmessagebus:x:100:107::/nonexistent:/usr/sbin/nologin\nsshd:x:104:65534::/run/sshd:/usr/sbin/nologin\npostgres:x:108:117:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash\nmysql:x:110:120:MariaDB Server,,,:/nonexistent:/bin/false\nstalwart:x:115:125:Stalwart Mail Server,,,:/opt/stalwart:/usr/sbin/nologin\nunbound:x:116:126::/var/lib/unbound:/usr/sbin/nologin\ndeploy:x:1000:1000:Deploy,,,:/home/deploy:/bin/bash\nalice:x:1001:1001:Alice Nakamura,,,:/home/alice:/bin/bash\n");
     f.file("/etc/group", "root:x:0:\nadm:x:4:deploy,alice\nsudo:x:27:deploy\nwww-data:x:33:deploy\nshadow:x:42:\nstalwart:x:125:\nunbound:x:126:\ndocker:x:998:deploy\ndeploy:x:1000:\nalice:x:1001:\n");
@@ -1025,18 +1177,39 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
     f.file("/etc/ssh/sshd_config", SSHD_CONFIG_FILE);
     f.file(
         "/etc/ssh/ssh_host_ed25519_key.pub",
-        &format!("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB1sIm9kQ2Fq7Rr0dY6vQ3sT8xN4mZ5wLpCe2hUjKt0F root@{}\n", id.hostname),
+        &format!(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB1sIm9kQ2Fq7Rr0dY6vQ3sT8xN4mZ5wLpCe2hUjKt0F root@{}\n",
+            id.hostname
+        ),
     );
     f.file_as("/etc/ssh/ssh_host_ed25519_key", "-----BEGIN OPENSSH PRIVATE KEY-----\n(simulated host key; no key material is kept)\n-----END OPENSSH PRIVATE KEY-----\n", "0600", "root", 0);
 
     // Yunori Mail Server: the console's own config, Stalwart underneath
     // it, and the local resolver it insists on.
-    f.file_as("/etc/yunori-mail/config.toml", &yunori_config(id), "0640", "root", 0);
+    f.file_as(
+        "/etc/yunori-mail/config.toml",
+        &yunori_config(id),
+        "0640",
+        "root",
+        0,
+    );
     f.dir_as("/var/lib/yunori-mail", "0700", "root", 0);
     f.blob("/var/lib/yunori-mail/state.sqlite", 1_179_648);
-    f.file_as("/var/lib/yunori-mail/vault.age", "age-encryption.org/v1\n(simulated; no secrets are kept)\n", "0600", "root", 0);
+    f.file_as(
+        "/var/lib/yunori-mail/vault.age",
+        "age-encryption.org/v1\n(simulated; no secrets are kept)\n",
+        "0600",
+        "root",
+        0,
+    );
     f.dir_as("/opt/stalwart", "0750", "stalwart", 115);
-    f.file_as("/opt/stalwart/etc/config.toml", STALWART_CONFIG, "0640", "stalwart", 115);
+    f.file_as(
+        "/opt/stalwart/etc/config.toml",
+        STALWART_CONFIG,
+        "0640",
+        "stalwart",
+        115,
+    );
     f.blob("/opt/stalwart/bin/stalwart-mail", 48_234_496);
     f.dir_as("/opt/stalwart/data", "0700", "stalwart", 115);
     f.blob("/opt/stalwart/data/blobs/index.db", 268_435_456);
@@ -1054,7 +1227,13 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
     f.file("/etc/systemd/system/kanamed.service", "[Unit]\nDescription=Kaname agent\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=/usr/local/bin/kanamed run\nRestart=always\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n");
     f.dir("/etc/letsencrypt/live");
     f.dir("/etc/letsencrypt/archive");
-    f.file_as("/etc/kaname/agent.env", "KANAME_URL=https://panel.kaname.internal\nKANAME_LOG_LEVEL=info\n", "0640", "root", 0);
+    f.file_as(
+        "/etc/kaname/agent.env",
+        "KANAME_URL=https://panel.kaname.internal\nKANAME_LOG_LEVEL=info\n",
+        "0640",
+        "root",
+        0,
+    );
 
     /* --------------------------- /home ---------------------------- */
     for (name, uid) in [("deploy", 1000), ("alice", 1001)] {
@@ -1076,10 +1255,22 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
     f.file_as("/home/deploy/projects/storefront/package.json", "{\n  \"name\": \"storefront\",\n  \"version\": \"2.4.1\",\n  \"private\": true,\n  \"scripts\": {\n    \"build\": \"vite build\",\n    \"dev\": \"vite\"\n  }\n}\n", "0644", "deploy", 1000);
     f.file_as("/home/deploy/deploy.sh", "#!/bin/sh\nset -eu\ncd /home/deploy/projects/storefront\ngit pull --ff-only\npnpm install --frozen-lockfile\npnpm build\nrsync -a --delete dist/ /var/www/example.com/public/\nsystemctl reload nginx\n", "0755", "deploy", 1000);
 
-    f.file_as("/root/.bashrc", "export PS1='\\[\\e[1;31m\\]\\u@\\h\\[\\e[0m\\]:\\w# '\nalias ll='ls -alF'\nalias la='ls -A'\n", "0644", "root", 0);
+    f.file_as(
+        "/root/.bashrc",
+        "export PS1='\\[\\e[1;31m\\]\\u@\\h\\[\\e[0m\\]:\\w# '\nalias ll='ls -alF'\nalias la='ls -A'\n",
+        "0644",
+        "root",
+        0,
+    );
     f.file_as("/root/.profile", ". \"$HOME/.bashrc\"\n", "0644", "root", 0);
     f.dir_as("/root/.ssh", "0700", "root", 0);
-    f.file_as("/root/.ssh/authorized_keys", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFq8xJ2vZ9nR0dTgY6mC1sL4pW7hB3eKuQaXrN5tOiVd ops@kaname\n", "0600", "root", 0);
+    f.file_as(
+        "/root/.ssh/authorized_keys",
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFq8xJ2vZ9nR0dTgY6mC1sL4pW7hB3eKuQaXrN5tOiVd ops@kaname\n",
+        "0600",
+        "root",
+        0,
+    );
 
     /* ---------------------------- /var ---------------------------- */
     f.dir("/var/backups");
@@ -1105,8 +1296,14 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
     f.blob("/var/log/nginx/access.log", 214_884_112);
     f.blob("/var/log/nginx/error.log", 4_118_223);
     f.blob("/var/log/nginx/access.log.1", 188_291_072);
-    f.blob(&format!("/var/log/journal/{}/system.journal", id.machine_id), 117_440_512);
-    f.blob(&format!("/var/log/journal/{}/user-1000.journal", id.machine_id), 8_388_608);
+    f.blob(
+        &format!("/var/log/journal/{}/system.journal", id.machine_id),
+        117_440_512,
+    );
+    f.blob(
+        &format!("/var/log/journal/{}/user-1000.journal", id.machine_id),
+        8_388_608,
+    );
 
     /* ---------------------------- /srv ---------------------------- */
     f.dir("/srv/minio/kaname-backups");
@@ -1118,22 +1315,43 @@ pub fn build_filesystem(id: &Identity) -> FsRef {
     f.dir("/usr/local/bin");
     f.dir("/usr/share/nginx");
     for (name, size) in [
-        ("bash", 1_265_648), ("cat", 43_936), ("ls", 142_144), ("grep", 199_720),
-        ("sed", 129_768), ("awk", 694_320), ("tar", 499_072), ("curl", 253_616),
-        ("git", 3_723_048), ("psql", 727_800), ("systemctl", 1_035_896),
-        ("journalctl", 92_312), ("docker", 65_339_392), ("python3", 7_968), ("node", 92_450_816),
+        ("bash", 1_265_648),
+        ("cat", 43_936),
+        ("ls", 142_144),
+        ("grep", 199_720),
+        ("sed", 129_768),
+        ("awk", 694_320),
+        ("tar", 499_072),
+        ("curl", 253_616),
+        ("git", 3_723_048),
+        ("psql", 727_800),
+        ("systemctl", 1_035_896),
+        ("journalctl", 92_312),
+        ("docker", 65_339_392),
+        ("python3", 7_968),
+        ("node", 92_450_816),
     ] {
         f.blob(&format!("/usr/bin/{name}"), size);
     }
     for (name, size) in [
-        ("sshd", 924_120), ("nginx", 1_285_680), ("unbound", 1_034_112),
-        ("nft", 226_808), ("cron", 55_824), ("service", 9_136),
+        ("sshd", 924_120),
+        ("nginx", 1_285_680),
+        ("unbound", 1_034_112),
+        ("nft", 226_808),
+        ("cron", 55_824),
+        ("service", 9_136),
     ] {
         f.blob(&format!("/usr/sbin/{name}"), size);
     }
     f.blob("/usr/local/bin/kanamed", 12_582_912);
     f.blob("/usr/local/bin/yunori-mail", 18_874_368);
-    f.file_as("/usr/local/bin/kaname-nightly.sh", "#!/bin/sh\nset -eu\n/usr/local/bin/kanamed version\nrestic backup /var/www /etc --tag nightly\n", "0755", "root", 0);
+    f.file_as(
+        "/usr/local/bin/kaname-nightly.sh",
+        "#!/bin/sh\nset -eu\n/usr/local/bin/kanamed version\nrestic backup /var/www /etc --tag nightly\n",
+        "0755",
+        "root",
+        0,
+    );
 
     /* -------------------- procfs, close enough -------------------- */
     f.file(
@@ -1180,13 +1398,30 @@ fn meminfo_file(id: &Identity) -> String {
 /// root, not the host's.
 pub fn build_container_filesystem(c: &Container) -> FsRef {
     let mut f = MemFs::new();
-    for d in ["/bin", "/dev", "/etc", "/proc", "/root", "/sys", "/tmp", "/usr/bin", "/usr/local/bin", "/var/log"] {
+    for d in [
+        "/bin",
+        "/dev",
+        "/etc",
+        "/proc",
+        "/root",
+        "/sys",
+        "/tmp",
+        "/usr/bin",
+        "/usr/local/bin",
+        "/var/log",
+    ] {
         f.dir(d);
     }
     let short = &c.info.id[..12];
     f.file("/etc/hostname", &format!("{short}\n"));
-    f.file("/etc/hosts", &format!("127.0.0.1\tlocalhost\n172.18.0.2\t{short}\n"));
-    f.file("/etc/os-release", "PRETTY_NAME=\"Alpine Linux v3.20\"\nNAME=\"Alpine Linux\"\nID=alpine\nVERSION_ID=3.20.1\n");
+    f.file(
+        "/etc/hosts",
+        &format!("127.0.0.1\tlocalhost\n172.18.0.2\t{short}\n"),
+    );
+    f.file(
+        "/etc/os-release",
+        "PRETTY_NAME=\"Alpine Linux v3.20\"\nNAME=\"Alpine Linux\"\nID=alpine\nVERSION_ID=3.20.1\n",
+    );
     f.file("/etc/resolv.conf", "nameserver 127.0.0.11\noptions ndots:0\n");
     for name in ["sh", "ls", "cat", "env"] {
         f.blob(&format!("/bin/{name}"), 812_408);
@@ -1196,11 +1431,17 @@ pub fn build_container_filesystem(c: &Container) -> FsRef {
     let image = &c.info.image;
     if image.starts_with("redis") {
         f.blob("/data/dump.rdb", 18_874_368);
-        f.file("/etc/redis.conf", "bind 0.0.0.0\nport 6379\nappendonly yes\nsave 900 1\n");
+        f.file(
+            "/etc/redis.conf",
+            "bind 0.0.0.0\nport 6379\nappendonly yes\nsave 900 1\n",
+        );
     } else if image.starts_with("minio") {
         f.dir("/data/kaname-backups");
     } else if image.contains("uptime-kuma") || image.contains("n8n") {
-        f.file("/app/package.json", &format!("{{\n  \"name\": \"{}\",\n  \"private\": true\n}}\n", c.info.name));
+        f.file(
+            "/app/package.json",
+            &format!("{{\n  \"name\": \"{}\",\n  \"private\": true\n}}\n", c.info.name),
+        );
         f.blob("/app/server/server.js", 284_112);
     }
     Arc::new(RwLock::new(f))
