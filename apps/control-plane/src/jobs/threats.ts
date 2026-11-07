@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from "@kaname/db";
-import { ipBlocks, threatEvents } from "@kaname/db/schema";
+import { ipBlocks, jobs, threatEvents } from "@kaname/db/schema";
 import { JOB_SPECS, type ThreatDisposition } from "@kaname/contract";
 import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
 import type { JobContext, JobHandler } from "./worker.js";
@@ -196,5 +196,43 @@ export async function restorePending(
       .update(threatEvents)
       .set({ disposition: row.disposition })
       .where(and(eq(threatEvents.id, row.id), eq(threatEvents.disposition, "pending")));
+  }
+}
+
+/**
+ * Settles the rows held by ban and unban jobs that ended without their
+ * handler deciding: a lease that lapsed with its worker, a job that
+ * expired waiting for an offline agent, or one an operator cancelled.
+ * The handler treats those as "still outstanding", so without this the
+ * rows would read "pending" for ever. Only rows still pending are put
+ * back, so a later request that has since settled them is left alone.
+ */
+export async function releaseAbandoned(
+  db: JobContext["db"],
+  ended: ReadonlyArray<{ id: string; reason: string }>,
+): Promise<void> {
+  if (ended.length === 0) return;
+  const rows = await db
+    .select({ id: jobs.id, type: jobs.type, params: jobs.params })
+    .from(jobs)
+    .where(
+      and(
+        inArray(
+          jobs.id,
+          ended.map((e) => e.id),
+        ),
+        inArray(jobs.type, ["fw.ban", "fw.unban"]),
+      ),
+    );
+  const now = new Date();
+  for (const job of rows) {
+    const revert = (job.params as { revert?: DispositionRevert[] } | null)?.revert ?? [];
+    const reason = ended.find((e) => e.id === job.id)?.reason ?? "the request did not complete";
+    for (const row of revert) {
+      await db
+        .update(threatEvents)
+        .set({ disposition: row.disposition, dispositionError: reason, updatedAt: now })
+        .where(and(eq(threatEvents.id, row.id), eq(threatEvents.disposition, "pending")));
+    }
   }
 }
