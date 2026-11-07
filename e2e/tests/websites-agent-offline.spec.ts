@@ -99,7 +99,10 @@ test("work queued against a disconnected host waits for it and then runs", async
     .poll(() => connection(edge.id), { timeout: 60_000, message: `${HOST} never reconnected` })
     .toBe("connected");
 
-  await page.getByRole("button", { name: /Job activity/ }).first().click();
+  await page
+    .getByRole("button", { name: /Job activity/ })
+    .first()
+    .click();
   await expectJobStatus(drawerJob(page, "Create site", name), "Succeeded", 90_000);
   await page.keyboard.press("Escape");
   await expect(row).toContainText("Active");

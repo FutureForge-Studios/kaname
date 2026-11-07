@@ -58,7 +58,13 @@ test.describe("logs", () => {
       const worse = await api.get<Line[]>(
         `/logs/search?server_id=${forge.id}&source=${encodeURIComponent(source.id)}&level=warn&limit=500&since=${encodeURIComponent(new Date(Date.now() - 86_400_000).toISOString())}`,
       );
-      expect(worse.some((line) => line.level === "error")).toBe(true);
+      // Both reads end at "now"; ignore the oldest lines, which the two
+      // windows may not share, and every error in the rest must be kept.
+      const shared = [...all].sort((a, b) => (a.ts < b.ts ? 1 : -1)).slice(0, 400);
+      const kept = new Set(worse.map((line) => `${line.ts}|${line.message}`));
+      for (const line of shared.filter((l) => l.level === "error")) {
+        expect(kept.has(`${line.ts}|${line.message}`), line.message).toBe(true);
+      }
     }
 
     /* A substring nobody logs empties the view, and says why. */
@@ -67,9 +73,10 @@ test.describe("logs", () => {
     await expect(page).toHaveURL(/q=e2e-no-such-line-9f3a/);
     await expect(page.getByText("No log line in this range matches these filters")).toBeVisible();
 
-    /* Filters live in the URL, so back restores the previous view. */
-    await page.goBack();
-    await expect(page.getByLabel("Search log lines on the host")).toHaveValue("");
+    /* Filters live in the URL, so a reload keeps exactly this view. */
+    await page.reload();
+    await expect(page.getByLabel("Search log lines on the host")).toHaveValue("e2e-no-such-line-9f3a");
+    await expect(page.getByText("No log line in this range matches these filters")).toBeVisible();
   });
 
   test("a live tail follows new lines and stops when asked", async ({ page }) => {
@@ -90,7 +97,7 @@ test.describe("logs", () => {
     const first = await count();
     await expect.poll(count, { timeout: 60_000, message: "the tail opened but never followed" }).toBeGreaterThan(first);
 
-    await page.getByRole("button", { name: "Stop" }).click();
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
     await expect(page.getByText("streaming")).toBeHidden();
     await expect(page.getByRole("button", { name: "Live tail" })).toBeVisible();
   });

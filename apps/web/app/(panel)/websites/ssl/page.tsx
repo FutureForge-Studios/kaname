@@ -120,7 +120,10 @@ export default function SslPage() {
 
   const [issuing, setIssuing] = React.useState(false);
   useOpenFromQuery("new", () => setIssuing(true), can("websites.ssl:write"));
-  const noServer = serverPrerequisite(selection, "A certificate is ordered and installed on the host that serves the name.");
+  const noServer = serverPrerequisite(
+    selection,
+    "A certificate is ordered and installed on the host that serves the name.",
+  );
   const [pendingRevoke, setPendingRevoke] = React.useState<Certificate | null>(null);
   const [watchedJobId, setWatchedJobId] = React.useState<string | null>(null);
 

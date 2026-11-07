@@ -84,9 +84,9 @@ test("a deploy runs as a job, moves its row to succeeded and keeps its log", asy
   const after = await deploymentsOf(www.id);
   expect(after).toHaveLength(before.length + 1);
   const newest = after.find((d) => !before.some((b) => b.id === d.id))!;
-  await expect.poll(async () => (await get<DeploymentRow>(`/deployments/${newest.id}`)).status).toBe(
-    "succeeded",
-  );
+  await expect
+    .poll(async () => (await get<DeploymentRow>(`/deployments/${newest.id}`)).status)
+    .toBe("succeeded");
   expect(newest.triggered_by_name).toBeTruthy();
 
   /* The site's own history shows it on top. */
@@ -181,9 +181,9 @@ test("rolling back finishes as a deployment and leaves the site deployable", asy
   expect(after).toHaveLength(history.length + 1);
   const rollback = after.find((d) => !history.some((h) => h.id === d.id))!;
   expect(rollback.commit_sha).toBe(target.commit_sha);
-  await expect.poll(async () => (await get<DeploymentRow>(`/deployments/${rollback.id}`)).status).toBe(
-    "succeeded",
-  );
+  await expect
+    .poll(async () => (await get<DeploymentRow>(`/deployments/${rollback.id}`)).status)
+    .toBe("succeeded");
 
   await page.goto(`/websites/deployments?site_id=${docs.id}`);
   const table = page.getByRole("table", { name: "Deployments" });

@@ -460,7 +460,9 @@ test("a search with no match is an empty state, not an error", async ({ page }) 
   await expect(page.getByText("No matches")).toBeVisible();
   await expect(page.getByRole("main").getByRole("alert")).toHaveCount(0);
   await page.getByRole("button", { name: "Clear search and filters" }).click();
-  await expect(rowWith(page.getByRole("table", { name: "Sites" }), "futureforge-www")).toBeVisible();
+  await expect(
+    rowWith(page.getByRole("table", { name: "Sites" }), "futureforge-www"),
+  ).toBeVisible();
 });
 
 test("the detail tab survives a refresh and Back returns to the list", async ({ page }) => {
