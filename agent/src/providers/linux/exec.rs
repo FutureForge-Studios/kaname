@@ -90,7 +90,11 @@ pub async fn run_with(ctx: &Ctx, o: ExecOptions) -> PResult<String> {
     if out.success() {
         Ok(out.stdout)
     } else {
-        Err(exec_error(&o.name, pick_output(&out.stderr, &out.stdout), out.code))
+        Err(exec_error(
+            &o.name,
+            pick_output(&out.stderr, &out.stdout),
+            out.code,
+        ))
     }
 }
 
@@ -101,7 +105,11 @@ pub async fn run_with(ctx: &Ctx, o: ExecOptions) -> PResult<String> {
 pub async fn run_raw(ctx: &Ctx, o: &ExecOptions) -> PResult<Output> {
     let mut cmd = command(o)?;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    cmd.stdin(if o.stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    cmd.stdin(if o.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     cmd.kill_on_drop(true);
 
     let mut child = cmd.spawn().map_err(|e| spawn_error(&o.name, e))?;
@@ -165,7 +173,11 @@ pub async fn run_stream(
 ) -> PResult<Output> {
     let mut cmd = command(&o)?;
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    cmd.stdin(if o.stdin.is_some() { Stdio::piped() } else { Stdio::null() });
+    cmd.stdin(if o.stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
     cmd.kill_on_drop(true);
 
     let mut child = cmd.spawn().map_err(|e| spawn_error(&o.name, e))?;
@@ -182,7 +194,8 @@ pub async fn run_stream(
     // capture keeps the tail so a failure can be explained without buffering
     // a whole `apt upgrade` in memory.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(256);
-    let pump = |reader: Box<dyn tokio::io::AsyncRead + Unpin + Send>, tx: tokio::sync::mpsc::Sender<String>| async move {
+    let pump = |reader: Box<dyn tokio::io::AsyncRead + Unpin + Send>,
+                tx: tokio::sync::mpsc::Sender<String>| async move {
         let mut lines = BufReader::new(reader).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             if tx.send(line).await.is_err() {
@@ -239,7 +252,10 @@ fn command(o: &ExecOptions) -> PResult<Command> {
     }
     if o.clear_env {
         cmd.env_clear();
-        cmd.env("PATH", std::env::var("PATH").unwrap_or_else(|_| "/usr/sbin:/usr/bin:/sbin:/bin".into()));
+        cmd.env(
+            "PATH",
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/sbin:/usr/bin:/sbin:/bin".into()),
+        );
     }
     if o.c_locale {
         cmd.env("LC_ALL", "C").env("LANG", "C");
@@ -285,8 +301,12 @@ pub fn credential(name: &str) -> PResult<(u32, u32, Vec<u32>)> {
 
 fn spawn_error(name: &str, e: std::io::Error) -> ProviderError {
     match e.kind() {
-        std::io::ErrorKind::NotFound => ProviderError::unsupported_because(format!("{name} is not installed")),
-        std::io::ErrorKind::PermissionDenied => ProviderError::PermissionDenied(format!("cannot run {name}: {e}")),
+        std::io::ErrorKind::NotFound => {
+            ProviderError::unsupported_because(format!("{name} is not installed"))
+        }
+        std::io::ErrorKind::PermissionDenied => {
+            ProviderError::PermissionDenied(format!("cannot run {name}: {e}"))
+        }
         _ => ProviderError::internal(format!("starting {name}: {e}")),
     }
 }
@@ -330,7 +350,14 @@ pub fn which(name: &str) -> Option<PathBuf> {
     }
     let path = std::env::var_os("PATH").unwrap_or_default();
     let mut dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
-    for extra in ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"] {
+    for extra in [
+        "/usr/local/sbin",
+        "/usr/local/bin",
+        "/usr/sbin",
+        "/usr/bin",
+        "/sbin",
+        "/bin",
+    ] {
         let extra = PathBuf::from(extra);
         if !dirs.contains(&extra) {
             dirs.push(extra);
@@ -359,7 +386,9 @@ pub fn dir_exists(path: &str) -> bool {
 }
 
 pub fn read_trimmed(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path).map(|s| s.trim().to_string()).unwrap_or_default()
+    std::fs::read_to_string(path)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// The first candidate that is present, which is how this module copes
@@ -439,7 +468,9 @@ mod tests {
         let ctx = Ctx::background();
         let out = run(&ctx, "sh", &["-c", "echo hi"]).await.unwrap();
         assert_eq!(out.trim(), "hi");
-        let err = run(&ctx, "sh", &["-c", "echo bad >&2; exit 3"]).await.unwrap_err();
+        let err = run(&ctx, "sh", &["-c", "echo bad >&2; exit 3"])
+            .await
+            .unwrap_err();
         assert!(is_exit_code(&err, 3));
         match err {
             ProviderError::Exec { output, .. } => assert_eq!(output, "bad"),
@@ -450,7 +481,9 @@ mod tests {
     #[tokio::test]
     async fn missing_binary_is_unsupported() {
         let ctx = Ctx::background();
-        let err = run(&ctx, "definitely-not-a-binary-kaname", &[]).await.unwrap_err();
+        let err = run(&ctx, "definitely-not-a-binary-kaname", &[])
+            .await
+            .unwrap_err();
         assert!(matches!(err, ProviderError::Unsupported(_)));
     }
 

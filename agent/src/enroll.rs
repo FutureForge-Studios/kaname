@@ -90,7 +90,11 @@ pub async fn run(store: &mut Store, opts: EnrollOptions) -> anyhow::Result<()> {
         );
     }
     let out: EnrollResponse = serde_json::from_slice(&raw).context("decode enrollment response")?;
-    if out.server_id.is_empty() || out.certificate_pem.is_empty() || out.ca_pem.is_empty() || out.connect_url.is_empty() {
+    if out.server_id.is_empty()
+        || out.certificate_pem.is_empty()
+        || out.ca_pem.is_empty()
+        || out.connect_url.is_empty()
+    {
         bail!("enrollment response is missing an identity field");
     }
 
@@ -124,21 +128,27 @@ pub fn certificate_request(key: &SigningKey, hostname: &str) -> anyhow::Result<S
     use x509_cert::der::EncodePem;
     use x509_cert::name::Name;
 
-    let subject_name = if hostname.is_empty() { "kanamed".to_string() } else { hostname.to_string() };
+    let subject_name = if hostname.is_empty() {
+        "kanamed".to_string()
+    } else {
+        hostname.to_string()
+    };
     let subject: Name = format!("CN={},O=Kaname Agents", escape_rdn(&subject_name))
         .parse()
         .context("build csr subject")?;
     let mut builder = RequestBuilder::new(subject, key).context("start csr")?;
     if !hostname.is_empty() {
         if let Ok(name) = x509_cert::der::asn1::Ia5String::new(hostname) {
-            let san = x509_cert::ext::pkix::SubjectAltName(vec![x509_cert::ext::pkix::name::GeneralName::DnsName(name)]);
+            let san =
+                x509_cert::ext::pkix::SubjectAltName(vec![x509_cert::ext::pkix::name::GeneralName::DnsName(
+                    name,
+                )]);
             let _ = builder.add_extension(&san);
         }
     }
-    let csr = builder
-        .build::<p256::ecdsa::DerSignature>()
-        .context("sign csr")?;
-    csr.to_pem(x509_cert::der::pem::LineEnding::LF).context("encode csr")
+    let csr = builder.build::<p256::ecdsa::DerSignature>().context("sign csr")?;
+    csr.to_pem(x509_cert::der::pem::LineEnding::LF)
+        .context("encode csr")
 }
 
 fn escape_rdn(value: &str) -> String {
@@ -229,13 +239,19 @@ pub mod hostprobe {
 
     pub fn boot_time() -> String {
         let uptime = read_trimmed("/proc/uptime");
-        let secs: f64 = uptime.split(' ').next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        let secs: f64 = uptime
+            .split(' ')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0);
         let boot = chrono::Utc::now() - chrono::Duration::milliseconds((secs * 1000.0) as i64);
         boot.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 
     pub fn read_trimmed(path: &str) -> String {
-        std::fs::read_to_string(path).map(|s| s.trim().to_string()).unwrap_or_default()
+        std::fs::read_to_string(path)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
     }
 }
 
@@ -251,7 +267,12 @@ mod tests {
         let (_, der) = pem_rfc7468::decode_vec(pem.as_bytes()).unwrap();
         use x509_parser::prelude::FromDer;
         let (_, csr) = x509_parser::certification_request::X509CertificationRequest::from_der(&der).unwrap();
-        assert!(csr.certification_request_info.subject.to_string().contains("host.example"));
+        assert!(
+            csr.certification_request_info
+                .subject
+                .to_string()
+                .contains("host.example")
+        );
         csr.verify_signature().unwrap();
     }
 

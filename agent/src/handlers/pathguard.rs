@@ -59,7 +59,9 @@ impl PathGuard {
             return Err(WireError::invalid(format!("path must be absolute: {raw}")));
         }
         if raw.split('/').any(|segment| segment == "..") {
-            return Err(WireError::invalid(format!("path may not traverse upwards: {raw}")));
+            return Err(WireError::invalid(format!(
+                "path may not traverse upwards: {raw}"
+            )));
         }
 
         // Managed hosts are POSIX, so paths are cleaned with POSIX rules
@@ -188,7 +190,10 @@ pub fn resolve_existing(p: &str) -> io::Result<String> {
 /// Whether `candidate` is `root` or lies beneath it. A sibling whose name
 /// merely starts with the root is not within it.
 pub fn within(candidate: &str, root: &str) -> bool {
-    candidate == root || candidate.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
+    candidate == root
+        || candidate
+            .strip_prefix(root)
+            .is_some_and(|rest| rest.starts_with('/'))
 }
 
 #[cfg(test)]
@@ -203,19 +208,46 @@ mod tests {
             ("relative", "var/www/html", ErrorCode::InvalidParams),
             ("dot relative", "./var/www", ErrorCode::InvalidParams),
             ("bare traversal", "../../etc/shadow", ErrorCode::InvalidParams),
-            ("traversal out of a legitimate root", "/var/www/../../etc/shadow", ErrorCode::InvalidParams),
-            ("traversal wearing a dot segment", "/var/www/./../../etc", ErrorCode::InvalidParams),
+            (
+                "traversal out of a legitimate root",
+                "/var/www/../../etc/shadow",
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "traversal wearing a dot segment",
+                "/var/www/./../../etc",
+                ErrorCode::InvalidParams,
+            ),
             ("trailing traversal", "/var/www/..", ErrorCode::InvalidParams),
             ("traversal off the root", "/..", ErrorCode::InvalidParams),
-            ("null byte truncation", "/var/www/index.html\x00.jpg", ErrorCode::InvalidParams),
-            ("windows drive path", r"C:\Windows\System32\config\SAM", ErrorCode::InvalidParams),
-            ("windows unc path", r"\\server\share\secret", ErrorCode::InvalidParams),
-            ("windows relative backslash", r"..\..\etc\shadow", ErrorCode::InvalidParams),
+            (
+                "null byte truncation",
+                "/var/www/index.html\x00.jpg",
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "windows drive path",
+                r"C:\Windows\System32\config\SAM",
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "windows unc path",
+                r"\\server\share\secret",
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "windows relative backslash",
+                r"..\..\etc\shadow",
+                ErrorCode::InvalidParams,
+            ),
         ];
         for (name, raw, code) in cases {
             match guard.check(raw) {
                 Ok(got) => panic!("{name}: check({raw:?}) accepted the path and returned {got:?}"),
-                Err(err) => assert_eq!(err.code, *code, "{name}: check({raw:?}) failed with the wrong code"),
+                Err(err) => assert_eq!(
+                    err.code, *code,
+                    "{name}: check({raw:?}) failed with the wrong code"
+                ),
             }
         }
     }
@@ -229,7 +261,10 @@ mod tests {
             ("/var/www/", "/var/www"),
             ("/var//www///html", "/var/www/html"),
             ("/var/./www/./html", "/var/www/html"),
-            ("/etc/nginx/sites-available/example.conf", "/etc/nginx/sites-available/example.conf"),
+            (
+                "/etc/nginx/sites-available/example.conf",
+                "/etc/nginx/sites-available/example.conf",
+            ),
             // Nothing in the agent percent-decodes a path, so this is a
             // directory literally called "..%2f..", not a traversal.
             ("/var/www/..%2f..", "/var/www/..%2f.."),
@@ -263,8 +298,15 @@ mod tests {
         }
         // The prefix trap: a sibling whose name merely starts with the
         // guarded one is an ordinary directory and must stay reachable.
-        for raw in ["/var/lib/kaname-backups", "/var/lib/kaname.old/notes.txt", "/var/lib", "/var/lib/other/kaname"] {
-            guard.check(raw).unwrap_or_else(|e| panic!("check({raw:?}) was denied: {e}"));
+        for raw in [
+            "/var/lib/kaname-backups",
+            "/var/lib/kaname.old/notes.txt",
+            "/var/lib",
+            "/var/lib/other/kaname",
+        ] {
+            guard
+                .check(raw)
+                .unwrap_or_else(|e| panic!("check({raw:?}) was denied: {e}"));
         }
     }
 
@@ -272,7 +314,10 @@ mod tests {
     fn honours_every_denied_directory() {
         let guard = PathGuard::denying(&["/var/lib/kaname", "/etc/kaname"]);
         for raw in ["/var/lib/kaname/agent.key", "/etc/kaname/agent.toml"] {
-            assert!(guard.check(raw).is_err(), "check({raw:?}) was allowed past a denied directory");
+            assert!(
+                guard.check(raw).is_err(),
+                "check({raw:?}) was allowed past a denied directory"
+            );
         }
         guard.check("/srv/app").expect("an unrelated path was denied");
     }
@@ -292,7 +337,10 @@ mod tests {
             vec!["/var/www", ""],
         ] {
             let batch: Vec<String> = batch.into_iter().map(String::from).collect();
-            assert!(guard.check_all(&batch).is_err(), "check_all({batch:?}) was accepted");
+            assert!(
+                guard.check_all(&batch).is_err(),
+                "check_all({batch:?}) was accepted"
+            );
         }
 
         let got = guard
@@ -347,7 +395,9 @@ mod tests {
 
         let guard = PathGuard::new(&[&state]);
         let via_link = format!("{}/agent.key", link.display());
-        let err = guard.check(&via_link).expect_err("a symlink into the state dir was accepted");
+        let err = guard
+            .check(&via_link)
+            .expect_err("a symlink into the state dir was accepted");
         assert_eq!(err.code, ErrorCode::PermissionDenied);
 
         // A file that does not exist yet under the symlink is still caught:

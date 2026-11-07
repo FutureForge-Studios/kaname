@@ -41,7 +41,8 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     Backups, Certs, Containers, Ctx, Databases, Dns, Event, Files, Firewall, HostInfo, Logs, Mail, Options,
-    PResult, Processes, Provider, ProviderError, ProviderRef, Pty, Services, Sites, Ssh, System, cap, emit, topic,
+    PResult, Processes, Provider, ProviderError, ProviderRef, Pty, Services, Sites, Ssh, System, cap, emit,
+    topic,
 };
 
 /// How often the background watcher re-samples the host for the state
@@ -79,7 +80,9 @@ impl Shared {
         if self.has(capability) {
             Ok(())
         } else {
-            Err(ProviderError::unsupported_because(format!("{capability} is not installed")))
+            Err(ProviderError::unsupported_because(format!(
+                "{capability} is not installed"
+            )))
         }
     }
 
@@ -267,7 +270,9 @@ async fn watch(shared: Arc<Shared>, cancel: CancellationToken) {
 }
 
 async fn sample_disk_pressure(shared: &Arc<Shared>, ctx: &Ctx, pressured: &mut HashMap<String, bool>) {
-    let Ok(disks) = system::collect_disks(ctx).await else { return };
+    let Ok(disks) = system::collect_disks(ctx).await else {
+        return;
+    };
     for d in disks {
         let over = d.used_percent >= DISK_PRESSURE_PERCENT;
         if over && !pressured.get(&d.mount).copied().unwrap_or(false) {
@@ -283,7 +288,9 @@ async fn sample_failed_units(shared: &Arc<Shared>, ctx: &Ctx, failed: &mut HashS
         state: Some("failed".into()),
         ..Default::default()
     };
-    let Ok(units) = ops.list(ctx, params).await else { return };
+    let Ok(units) = ops.list(ctx, params).await else {
+        return;
+    };
 
     let mut current = HashSet::new();
     for unit in &units {
