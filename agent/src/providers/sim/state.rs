@@ -25,8 +25,8 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::backups;
-use super::containers::Container;
 use super::certs::Certificate;
+use super::containers::Container;
 use super::databases;
 use super::files::{self, FsRef};
 use super::firewall::{self, RollbackWindow};
@@ -37,8 +37,9 @@ use super::services::Unit;
 use super::sites::Site;
 use super::system::{self, Identity};
 use crate::providers::{
-    BackupSnapshotInfo, BanEntry, Ctx, DbDatabaseInfo, DbUserInfo, Encoding, Event, FirewallRuleInfo, ImageInfo,
-    Options, PResult, PackageInfo, SshConfigInfo, SshKeyInfo, SshSessionInfo, Stream, ThreatObservation, emit, topic,
+    BackupSnapshotInfo, BanEntry, Ctx, DbDatabaseInfo, DbUserInfo, Encoding, Event, FirewallRuleInfo,
+    ImageInfo, Options, PResult, PackageInfo, SshConfigInfo, SshKeyInfo, SshSessionInfo, Stream,
+    ThreatObservation, emit, topic,
 };
 
 /// Fixed so a given state directory always yields the same host. "kaname"
@@ -418,7 +419,9 @@ pub fn stamp(t: DateTime<Utc>) -> String {
 }
 
 pub fn parse_stamp(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s).ok().map(|t| t.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|t| t.with_timezone(&Utc))
 }
 
 pub fn clampf(v: f64, lo: f64, hi: f64) -> f64 {
@@ -431,10 +434,6 @@ pub fn round2(v: f64) -> f64 {
 
 pub fn pick<T: Clone>(seed: u64, n: i64, options: &[T]) -> T {
     options[(mix(seed ^ n as u64) % options.len() as u64) as usize].clone()
-}
-
-pub fn secs(d: Duration) -> chrono::Duration {
-    chrono::Duration::from_std(d).unwrap_or_else(|_| chrono::Duration::seconds(0))
 }
 
 pub fn human_duration(d: chrono::Duration) -> String {

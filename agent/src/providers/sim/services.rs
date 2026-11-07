@@ -16,8 +16,8 @@ use super::logs::{self, TailRequest};
 use super::processes::{ProcSpec, add_process};
 use super::state::{MIB, Sim, World, mix, stamp};
 use crate::providers::{
-    Ctx, LogRecord, PResult, ProviderError, ServiceInfo, ServiceListParams, ServiceLogsParams, Services, StreamRef,
-    topic,
+    Ctx, LogRecord, PResult, ProviderError, ServiceInfo, ServiceListParams, ServiceLogsParams, Services,
+    StreamRef, topic,
 };
 
 /// A systemd unit plus the resident memory it reports while up.
@@ -51,40 +51,304 @@ macro_rules! unit {
 }
 
 const UNIT_CATALOGUE: &[UnitSeed] = &[
-    unit!("systemd-journald.service", "Journal Service", true, "active", "running", 78 * MIB, 0),
-    unit!("systemd-udevd.service", "Rule-based Manager for Device Events and Files", true, "active", "running", 9 * MIB, 0),
-    unit!("systemd-logind.service", "User Login Management", true, "active", "running", 7 * MIB, 0),
-    unit!("systemd-resolved.service", "Network Name Resolution", true, "active", "running", 14 * MIB, 0),
-    unit!("systemd-timesyncd.service", "Network Time Synchronization", true, "active", "running", 5 * MIB, 0),
-    unit!("systemd-networkd.service", "Network Configuration", true, "active", "running", 8 * MIB, 0),
-    unit!("dbus.service", "D-Bus System Message Bus", true, "active", "running", 6 * MIB, 0),
-    unit!("cron.service", "Regular background program processing daemon", true, "active", "running", 4 * MIB, 0),
-    unit!("rsyslog.service", "System Logging Service", true, "active", "running", 11 * MIB, 0),
-    unit!("ssh.service", "OpenBSD Secure Shell server", true, "active", "running", 34 * MIB, 0),
-    unit!("nginx.service", "A high performance web server and a reverse proxy server", true, "active", "running", 97 * MIB, 2),
-    unit!("php8.2-fpm.service", "The PHP 8.2 FastCGI Process Manager", true, "active", "running", 374 * MIB, 1),
-    unit!("postgresql.service", "PostgreSQL RDBMS", true, "active", "exited", 0, 0),
-    unit!("postgresql@16-main.service", "PostgreSQL Cluster 16-main", true, "active", "running", 218 * MIB, 0),
-    unit!("mariadb.service", "MariaDB 10.11.6 database server", true, "active", "running", 412 * MIB, 0),
-    unit!("docker.socket", "Docker Socket for the API", true, "active", "listening", 0, 0),
-    unit!("docker.service", "Docker Application Container Engine", true, "active", "running", 118 * MIB, 0),
-    unit!("containerd.service", "containerd container runtime", true, "active", "running", 152 * MIB, 0),
-    unit!("stalwart-mail.service", "Stalwart Mail Server", true, "active", "running", 186 * MIB, 0),
-    unit!("yunori-mail.service", "Yunori Mail Server console and edge", true, "active", "running", 38 * MIB, 0),
-    unit!("unbound.service", "Unbound DNS server", true, "active", "running", 21 * MIB, 0),
-    unit!("fail2ban.service", "Fail2Ban Service", true, "active", "running", 31 * MIB, 0),
+    unit!(
+        "systemd-journald.service",
+        "Journal Service",
+        true,
+        "active",
+        "running",
+        78 * MIB,
+        0
+    ),
+    unit!(
+        "systemd-udevd.service",
+        "Rule-based Manager for Device Events and Files",
+        true,
+        "active",
+        "running",
+        9 * MIB,
+        0
+    ),
+    unit!(
+        "systemd-logind.service",
+        "User Login Management",
+        true,
+        "active",
+        "running",
+        7 * MIB,
+        0
+    ),
+    unit!(
+        "systemd-resolved.service",
+        "Network Name Resolution",
+        true,
+        "active",
+        "running",
+        14 * MIB,
+        0
+    ),
+    unit!(
+        "systemd-timesyncd.service",
+        "Network Time Synchronization",
+        true,
+        "active",
+        "running",
+        5 * MIB,
+        0
+    ),
+    unit!(
+        "systemd-networkd.service",
+        "Network Configuration",
+        true,
+        "active",
+        "running",
+        8 * MIB,
+        0
+    ),
+    unit!(
+        "dbus.service",
+        "D-Bus System Message Bus",
+        true,
+        "active",
+        "running",
+        6 * MIB,
+        0
+    ),
+    unit!(
+        "cron.service",
+        "Regular background program processing daemon",
+        true,
+        "active",
+        "running",
+        4 * MIB,
+        0
+    ),
+    unit!(
+        "rsyslog.service",
+        "System Logging Service",
+        true,
+        "active",
+        "running",
+        11 * MIB,
+        0
+    ),
+    unit!(
+        "ssh.service",
+        "OpenBSD Secure Shell server",
+        true,
+        "active",
+        "running",
+        34 * MIB,
+        0
+    ),
+    unit!(
+        "nginx.service",
+        "A high performance web server and a reverse proxy server",
+        true,
+        "active",
+        "running",
+        97 * MIB,
+        2
+    ),
+    unit!(
+        "php8.2-fpm.service",
+        "The PHP 8.2 FastCGI Process Manager",
+        true,
+        "active",
+        "running",
+        374 * MIB,
+        1
+    ),
+    unit!(
+        "postgresql.service",
+        "PostgreSQL RDBMS",
+        true,
+        "active",
+        "exited",
+        0,
+        0
+    ),
+    unit!(
+        "postgresql@16-main.service",
+        "PostgreSQL Cluster 16-main",
+        true,
+        "active",
+        "running",
+        218 * MIB,
+        0
+    ),
+    unit!(
+        "mariadb.service",
+        "MariaDB 10.11.6 database server",
+        true,
+        "active",
+        "running",
+        412 * MIB,
+        0
+    ),
+    unit!(
+        "docker.socket",
+        "Docker Socket for the API",
+        true,
+        "active",
+        "listening",
+        0,
+        0
+    ),
+    unit!(
+        "docker.service",
+        "Docker Application Container Engine",
+        true,
+        "active",
+        "running",
+        118 * MIB,
+        0
+    ),
+    unit!(
+        "containerd.service",
+        "containerd container runtime",
+        true,
+        "active",
+        "running",
+        152 * MIB,
+        0
+    ),
+    unit!(
+        "stalwart-mail.service",
+        "Stalwart Mail Server",
+        true,
+        "active",
+        "running",
+        186 * MIB,
+        0
+    ),
+    unit!(
+        "yunori-mail.service",
+        "Yunori Mail Server console and edge",
+        true,
+        "active",
+        "running",
+        38 * MIB,
+        0
+    ),
+    unit!(
+        "unbound.service",
+        "Unbound DNS server",
+        true,
+        "active",
+        "running",
+        21 * MIB,
+        0
+    ),
+    unit!(
+        "fail2ban.service",
+        "Fail2Ban Service",
+        true,
+        "active",
+        "running",
+        31 * MIB,
+        0
+    ),
     unit!("nftables.service", "nftables", true, "active", "exited", 0, 0),
-    unit!("kanamed.service", "Kaname agent", true, "active", "running", 26 * MIB, 0),
-    unit!("unattended-upgrades.service", "Unattended Upgrades Shutdown", true, "active", "running", 22 * MIB, 0),
-    unit!("clamav-freshclam.service", "ClamAV virus database updater", true, "failed", "failed", 0, 5),
-    unit!("ufw.service", "Uncomplicated firewall", false, "inactive", "dead", 0, 0),
-    unit!("redis-server.service", "Advanced key-value store", false, "inactive", "dead", 0, 0),
-    unit!("apt-daily.timer", "Daily apt download activities", true, "active", "waiting", 0, 0),
-    unit!("apt-daily-upgrade.timer", "Daily apt upgrade and clean activities", true, "active", "waiting", 0, 0),
-    unit!("certbot.timer", "Run certbot twice daily", true, "active", "waiting", 0, 0),
-    unit!("logrotate.timer", "Daily rotation of log files", true, "active", "waiting", 0, 0),
-    unit!("e2scrub_all.timer", "Periodic ext4 Online Metadata Check for All Filesystems", true, "active", "waiting", 0, 0),
-    unit!("man-db.timer", "Daily man-db regeneration", true, "active", "waiting", 0, 0),
+    unit!(
+        "kanamed.service",
+        "Kaname agent",
+        true,
+        "active",
+        "running",
+        26 * MIB,
+        0
+    ),
+    unit!(
+        "unattended-upgrades.service",
+        "Unattended Upgrades Shutdown",
+        true,
+        "active",
+        "running",
+        22 * MIB,
+        0
+    ),
+    unit!(
+        "clamav-freshclam.service",
+        "ClamAV virus database updater",
+        true,
+        "failed",
+        "failed",
+        0,
+        5
+    ),
+    unit!(
+        "ufw.service",
+        "Uncomplicated firewall",
+        false,
+        "inactive",
+        "dead",
+        0,
+        0
+    ),
+    unit!(
+        "redis-server.service",
+        "Advanced key-value store",
+        false,
+        "inactive",
+        "dead",
+        0,
+        0
+    ),
+    unit!(
+        "apt-daily.timer",
+        "Daily apt download activities",
+        true,
+        "active",
+        "waiting",
+        0,
+        0
+    ),
+    unit!(
+        "apt-daily-upgrade.timer",
+        "Daily apt upgrade and clean activities",
+        true,
+        "active",
+        "waiting",
+        0,
+        0
+    ),
+    unit!(
+        "certbot.timer",
+        "Run certbot twice daily",
+        true,
+        "active",
+        "waiting",
+        0,
+        0
+    ),
+    unit!(
+        "logrotate.timer",
+        "Daily rotation of log files",
+        true,
+        "active",
+        "waiting",
+        0,
+        0
+    ),
+    unit!(
+        "e2scrub_all.timer",
+        "Periodic ext4 Online Metadata Check for All Filesystems",
+        true,
+        "active",
+        "waiting",
+        0,
+        0
+    ),
+    unit!(
+        "man-db.timer",
+        "Daily man-db regeneration",
+        true,
+        "active",
+        "waiting",
+        0,
+        0
+    ),
 ];
 
 pub fn build_units(sim: &Sim) {
@@ -108,20 +372,27 @@ pub fn build_units(sim: &Sim) {
                 restart_count: seed.restarts,
             };
             if seed.active == "active" {
-                let since = boot + chrono::Duration::seconds(3 + (mix(sim.seed ^ i as u64 ^ 0x81) % 180) as i64);
+                let since =
+                    boot + chrono::Duration::seconds(3 + (mix(sim.seed ^ i as u64 ^ 0x81) % 180) as i64);
                 info.active_since = Some(stamp(since));
                 info.cpu_usage_ns = Some((mix(sim.seed ^ i as u64 ^ 0x82) % 900_000_000_000) as f64);
                 if seed.memory > 0 {
                     info.memory_current = Some(seed.memory);
                 }
             }
-            Unit { info, memory: seed.memory }
+            Unit {
+                info,
+                memory: seed.memory,
+            }
         })
         .collect();
 }
 
 pub fn unit_active(w: &World, name: &str) -> bool {
-    w.units.iter().find(|u| u.info.unit == name).is_some_and(|u| u.info.active_state == "active")
+    w.units
+        .iter()
+        .find(|u| u.info.unit == name)
+        .is_some_and(|u| u.info.active_state == "active")
 }
 
 pub fn find_unit(w: &World, name: &str) -> Option<usize> {
@@ -159,25 +430,73 @@ pub fn sync_unit_pids(w: &mut World) {
 /// count it had.
 pub fn unit_process_specs(_sim: &Sim, w: &World, name: &str, systemd: i64) -> Vec<ProcSpec> {
     let one = |command: &str, cmdline: &str, user: &str, rss: i64, threads: i64, cpu: f64| {
-        vec![ProcSpec::new(command, cmdline, user).unit(name).ppid(systemd).rss(rss).threads(threads).cpu(cpu)]
+        vec![
+            ProcSpec::new(command, cmdline, user)
+                .unit(name)
+                .ppid(systemd)
+                .rss(rss)
+                .threads(threads)
+                .cpu(cpu),
+        ]
     };
     let proc = |command: &str, cmdline: &str, user: &str, rss: i64, threads: i64, cpu: f64| {
-        ProcSpec::new(command, cmdline, user).unit(name).ppid(systemd).rss(rss).threads(threads).cpu(cpu)
+        ProcSpec::new(command, cmdline, user)
+            .unit(name)
+            .ppid(systemd)
+            .rss(rss)
+            .threads(threads)
+            .cpu(cpu)
     };
 
     match name {
-        "systemd-journald.service" => one("systemd-journal", "/lib/systemd/systemd-journald", "root", 78 * MIB, 1, 0.4),
-        "systemd-udevd.service" => one("systemd-udevd", "/lib/systemd/systemd-udevd", "root", 9 * MIB, 1, 0.0),
-        "systemd-logind.service" => one("systemd-logind", "/lib/systemd/systemd-logind", "root", 7 * MIB, 1, 0.0),
-        "systemd-resolved.service" => {
-            one("systemd-resolve", "/lib/systemd/systemd-resolved", "systemd-resolve", 14 * MIB, 1, 0.0)
-        }
-        "systemd-timesyncd.service" => {
-            one("systemd-timesyn", "/lib/systemd/systemd-timesyncd", "systemd-timesync", 5 * MIB, 2, 0.0)
-        }
-        "systemd-networkd.service" => {
-            one("systemd-network", "/lib/systemd/systemd-networkd", "systemd-network", 8 * MIB, 1, 0.0)
-        }
+        "systemd-journald.service" => one(
+            "systemd-journal",
+            "/lib/systemd/systemd-journald",
+            "root",
+            78 * MIB,
+            1,
+            0.4,
+        ),
+        "systemd-udevd.service" => one(
+            "systemd-udevd",
+            "/lib/systemd/systemd-udevd",
+            "root",
+            9 * MIB,
+            1,
+            0.0,
+        ),
+        "systemd-logind.service" => one(
+            "systemd-logind",
+            "/lib/systemd/systemd-logind",
+            "root",
+            7 * MIB,
+            1,
+            0.0,
+        ),
+        "systemd-resolved.service" => one(
+            "systemd-resolve",
+            "/lib/systemd/systemd-resolved",
+            "systemd-resolve",
+            14 * MIB,
+            1,
+            0.0,
+        ),
+        "systemd-timesyncd.service" => one(
+            "systemd-timesyn",
+            "/lib/systemd/systemd-timesyncd",
+            "systemd-timesync",
+            5 * MIB,
+            2,
+            0.0,
+        ),
+        "systemd-networkd.service" => one(
+            "systemd-network",
+            "/lib/systemd/systemd-networkd",
+            "systemd-network",
+            8 * MIB,
+            1,
+            0.0,
+        ),
         "dbus.service" => one(
             "dbus-daemon",
             "/usr/bin/dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only",
@@ -187,8 +506,22 @@ pub fn unit_process_specs(_sim: &Sim, w: &World, name: &str, systemd: i64) -> Ve
             0.0,
         ),
         "cron.service" => one("cron", "/usr/sbin/cron -f", "root", 4 * MIB, 1, 0.0),
-        "rsyslog.service" => one("rsyslogd", "/usr/sbin/rsyslogd -n -iNONE", "root", 11 * MIB, 4, 0.2),
-        "kanamed.service" => one("kanamed", "/usr/local/bin/kanamed run --simulate", "root", 26 * MIB, 9, 0.6),
+        "rsyslog.service" => one(
+            "rsyslogd",
+            "/usr/sbin/rsyslogd -n -iNONE",
+            "root",
+            11 * MIB,
+            4,
+            0.2,
+        ),
+        "kanamed.service" => one(
+            "kanamed",
+            "/usr/local/bin/kanamed run --simulate",
+            "root",
+            26 * MIB,
+            9,
+            0.6,
+        ),
         "unattended-upgrades.service" => one(
             "unattended-upgr",
             "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal",
@@ -198,18 +531,42 @@ pub fn unit_process_specs(_sim: &Sim, w: &World, name: &str, systemd: i64) -> Ve
             0.0,
         ),
         "unbound.service" => one("unbound", "/usr/sbin/unbound -d -p", "unbound", 21 * MIB, 4, 0.1),
-        "fail2ban.service" => {
-            one("fail2ban-server", "/usr/bin/python3 /usr/bin/fail2ban-server -xf start", "root", 31 * MIB, 7, 0.5)
-        }
+        "fail2ban.service" => one(
+            "fail2ban-server",
+            "/usr/bin/python3 /usr/bin/fail2ban-server -xf start",
+            "root",
+            31 * MIB,
+            7,
+            0.5,
+        ),
         "mariadb.service" => one("mariadbd", "/usr/sbin/mariadbd", "mysql", 412 * MIB, 21, 1.8),
-        "redis-server.service" => one("redis-server", "/usr/bin/redis-server 127.0.0.1:6379", "redis", 46 * MIB, 5, 0.7),
-        "clamav-freshclam.service" => {
-            one("freshclam", "/usr/bin/freshclam -d --foreground=true", "clamav", 88 * MIB, 1, 0.0)
-        }
+        "redis-server.service" => one(
+            "redis-server",
+            "/usr/bin/redis-server 127.0.0.1:6379",
+            "redis",
+            46 * MIB,
+            5,
+            0.7,
+        ),
+        "clamav-freshclam.service" => one(
+            "freshclam",
+            "/usr/bin/freshclam -d --foreground=true",
+            "clamav",
+            88 * MIB,
+            1,
+            0.0,
+        ),
         "ufw.service" => vec![],
 
         "ssh.service" => vec![
-            proc("sshd", "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups", "root", 12 * MIB, 1, 0.0),
+            proc(
+                "sshd",
+                "sshd: /usr/sbin/sshd -D [listener] 0 of 10-100 startups",
+                "root",
+                12 * MIB,
+                1,
+                0.0,
+            ),
             proc("sshd", "sshd: deploy [priv]", "root", 14 * MIB, 1, 0.0),
             proc("sshd", "sshd: deploy@pts/0", "deploy", 8 * MIB, 1, 0.0),
         ],
@@ -224,16 +581,36 @@ pub fn unit_process_specs(_sim: &Sim, w: &World, name: &str, systemd: i64) -> Ve
                 0.0,
             )];
             for _ in 0..4 {
-                specs.push(proc("nginx", "nginx: worker process", "www-data", 22 * MIB, 1, 1.4));
+                specs.push(proc(
+                    "nginx",
+                    "nginx: worker process",
+                    "www-data",
+                    22 * MIB,
+                    1,
+                    1.4,
+                ));
             }
             specs
         }
 
         "php8.2-fpm.service" => {
-            let mut specs =
-                vec![proc("php-fpm8.2", "php-fpm: master process (/etc/php/8.2/fpm/php-fpm.conf)", "root", 34 * MIB, 1, 0.0)];
+            let mut specs = vec![proc(
+                "php-fpm8.2",
+                "php-fpm: master process (/etc/php/8.2/fpm/php-fpm.conf)",
+                "root",
+                34 * MIB,
+                1,
+                0.0,
+            )];
             for _ in 0..5 {
-                specs.push(proc("php-fpm8.2", "php-fpm: pool www", "www-data", 68 * MIB, 1, 2.1));
+                specs.push(proc(
+                    "php-fpm8.2",
+                    "php-fpm: pool www",
+                    "www-data",
+                    68 * MIB,
+                    1,
+                    2.1,
+                ));
             }
             specs
         }
@@ -254,12 +631,22 @@ pub fn unit_process_specs(_sim: &Sim, w: &World, name: &str, systemd: i64) -> Ve
                 "autovacuum launcher",
                 "logical replication launcher",
             ] {
-                specs.push(proc("postgres", &format!("postgres: 16/main: {aux}"), "postgres", 18 * MIB, 1, 0.0));
+                specs.push(proc(
+                    "postgres",
+                    &format!("postgres: 16/main: {aux}"),
+                    "postgres",
+                    18 * MIB,
+                    1,
+                    0.0,
+                ));
             }
             for i in 0..6 {
                 specs.push(proc(
                     "postgres",
-                    &format!("postgres: 16/main: kaname kaname 127.0.0.1(5{:04}) idle", 1000 + i * 37),
+                    &format!(
+                        "postgres: 16/main: kaname kaname 127.0.0.1(5{:04}) idle",
+                        1000 + i * 37
+                    ),
                     "postgres",
                     26 * MIB,
                     1,
@@ -279,7 +666,14 @@ pub fn unit_process_specs(_sim: &Sim, w: &World, name: &str, systemd: i64) -> Ve
         ),
 
         "containerd.service" => {
-            let mut specs = vec![proc("containerd", "/usr/bin/containerd", "root", 74 * MIB, 18, 0.8)];
+            let mut specs = vec![proc(
+                "containerd",
+                "/usr/bin/containerd",
+                "root",
+                74 * MIB,
+                18,
+                0.8,
+            )];
             for c in &w.containers {
                 if c.info.state != "running" {
                     continue;
@@ -295,18 +689,35 @@ pub fn unit_process_specs(_sim: &Sim, w: &World, name: &str, systemd: i64) -> Ve
                     12,
                     0.0,
                 ));
-                specs.push(proc(&c.process, &c.process_args, &c.process_user, c.rss_base, 6, 1.6));
+                specs.push(proc(
+                    &c.process,
+                    &c.process_args,
+                    &c.process_user,
+                    c.rss_base,
+                    6,
+                    1.6,
+                ));
             }
             specs
         }
 
-        "stalwart-mail.service" => vec![
-            proc("stalwart-mail", "/opt/stalwart/bin/stalwart-mail --config /opt/stalwart/etc/config.toml", "stalwart", 186 * MIB, 14, 1.2),
-        ],
+        "stalwart-mail.service" => vec![proc(
+            "stalwart-mail",
+            "/opt/stalwart/bin/stalwart-mail --config /opt/stalwart/etc/config.toml",
+            "stalwart",
+            186 * MIB,
+            14,
+            1.2,
+        )],
 
-        "yunori-mail.service" => vec![
-            proc("yunori-mail", "/usr/local/bin/yunori-mail serve", "root", 38 * MIB, 6, 0.3),
-        ],
+        "yunori-mail.service" => vec![proc(
+            "yunori-mail",
+            "/usr/local/bin/yunori-mail serve",
+            "root",
+            38 * MIB,
+            6,
+            0.3,
+        )],
 
         _ => vec![],
     }
@@ -348,7 +759,9 @@ pub fn transition(sim: &Sim, name: &str, action: &str) -> PResult<ServiceInfo> {
             }
             "reload" => {
                 if w.units[idx].info.active_state != "active" {
-                    return Err(ProviderError::PreconditionFailed(format!("unit {name} is not running")));
+                    return Err(ProviderError::PreconditionFailed(format!(
+                        "unit {name} is not running"
+                    )));
                 }
             }
             "enable" => w.units[idx].info.enabled = true,
@@ -386,7 +799,11 @@ pub fn bring_up(sim: &Sim, w: &mut World, idx: usize, now: DateTime<Utc>) {
     if specs.is_empty() {
         // Oneshot units and timers reach `active` without a process.
         let u = &mut w.units[idx];
-        u.info.sub_state = if name.ends_with(".timer") { "waiting".into() } else { "exited".into() };
+        u.info.sub_state = if name.ends_with(".timer") {
+            "waiting".into()
+        } else {
+            "exited".into()
+        };
         return;
     }
     for spec in specs {

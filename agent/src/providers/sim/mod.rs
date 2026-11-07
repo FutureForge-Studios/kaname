@@ -35,8 +35,8 @@ use tokio::sync::mpsc;
 
 use self::state::{Sim, stamp};
 use super::{
-    Backups, Certs, Containers, Ctx, Databases, Dns, Event, Files, Firewall, HostInfo, Logs, Mail, Options, PResult,
-    Processes, Provider, ProviderRef, Pty, Services, Sites, Ssh, System, cap,
+    Backups, Certs, Containers, Ctx, Databases, Dns, Event, Files, Firewall, HostInfo, Logs, Mail, Options,
+    PResult, Processes, Provider, ProviderRef, Pty, Services, Sites, Ssh, System, cap,
 };
 
 /// One fake host, served through every sub-trait at once.
@@ -83,6 +83,7 @@ impl SimProvider {
     }
 
     /// The world behind the provider, for tests that want to look inside.
+    #[cfg(test)]
     pub fn sim(&self) -> &Arc<Sim> {
         &self.sim
     }
@@ -197,9 +198,9 @@ mod tests {
 
     use super::*;
     use crate::providers::{
-        Encoding, FsReadParams, FsWriteParams, MailAliasAddParams, MailAliasRemoveParams, MailAddressParams,
-        MailCheckStatus, MailDeployOutcome, MailDeployParams, MailDomainParams, MailListParams, MailboxAddParams,
-        ProviderError, SelfUpdateParams, Stream, StreamRef, topic,
+        Encoding, FsReadParams, FsWriteParams, MailAddressParams, MailAliasAddParams, MailAliasRemoveParams,
+        MailCheckStatus, MailDeployOutcome, MailDeployParams, MailDomainParams, MailListParams,
+        MailboxAddParams, ProviderError, SelfUpdateParams, Stream, StreamRef, topic,
     };
 
     /// Collects what a method streams and has nothing to say back.
@@ -237,7 +238,12 @@ mod tests {
 
     async fn open_sim(name: &str) -> ProviderRef {
         let dir = std::env::temp_dir().join(format!("kaname-sim-test-{name}"));
-        open(Options { agent_version: "0.1.0".into(), state_dir: dir }).await.expect("opening the simulator")
+        open(Options {
+            agent_version: "0.1.0".into(),
+            state_dir: dir,
+        })
+        .await
+        .expect("opening the simulator")
     }
 
     /// A simulated host exists so the panel can be developed without a
@@ -251,14 +257,21 @@ mod tests {
             .system()
             .self_update(
                 &Ctx::background(),
-                SelfUpdateParams { version: "0.2.0".into(), url: "https://example.com/kanamed".into(), sha256: "0".into() },
+                SelfUpdateParams {
+                    version: "0.2.0".into(),
+                    url: "https://example.com/kanamed".into(),
+                    sha256: "0".into(),
+                },
                 stream,
             )
             .await;
         match result {
             Err(ProviderError::Unsupported(_)) => {}
             Err(other) => panic!("expected Unsupported, got {other:?}"),
-            Ok(r) => panic!("a simulated host reported a self-update: restarting={}", r.restarting),
+            Ok(r) => panic!(
+                "a simulated host reported a self-update: restarting={}",
+                r.restarting
+            ),
         }
         provider.close().await;
     }
@@ -270,7 +283,10 @@ mod tests {
         assert!(caps.iter().any(|c| c == "yunori"), "{caps:?}");
         assert!(caps.iter().any(|c| c == "simulated"), "{caps:?}");
         for retired in ["mail", "postfix", "dovecot"] {
-            assert!(!caps.iter().any(|c| c == retired), "{retired} should not be advertised");
+            assert!(
+                !caps.iter().any(|c| c == retired),
+                "{retired} should not be advertised"
+            );
         }
         let host = provider.host(&Ctx::background()).await.unwrap();
         assert!(host.simulated);
@@ -283,9 +299,15 @@ mod tests {
         let a = open_sim("stable").await;
         let b = open_sim("stable").await;
         let ctx = Ctx::background();
-        assert_eq!(a.host(&ctx).await.unwrap().machine_id, b.host(&ctx).await.unwrap().machine_id);
+        assert_eq!(
+            a.host(&ctx).await.unwrap().machine_id,
+            b.host(&ctx).await.unwrap().machine_id
+        );
         let c = open_sim("other").await;
-        assert_ne!(a.host(&ctx).await.unwrap().machine_id, c.host(&ctx).await.unwrap().machine_id);
+        assert_ne!(
+            a.host(&ctx).await.unwrap().machine_id,
+            c.host(&ctx).await.unwrap().machine_id
+        );
         a.close().await;
         b.close().await;
         c.close().await;
@@ -302,7 +324,11 @@ mod tests {
         assert_eq!(status.version.as_deref(), Some("0.1.0"));
         assert!(!status.install_complete);
         assert_eq!(status.steps.len(), 12);
-        let ptr = status.steps.iter().find(|s| s.title == "Set reverse DNS").unwrap();
+        let ptr = status
+            .steps
+            .iter()
+            .find(|s| s.title == "Set reverse DNS")
+            .unwrap();
         assert_eq!(ptr.detail.as_deref(), Some(mail::PTR_DETAIL));
         assert_eq!(status.hostnames, vec!["mail.futureforge.dev".to_string()]);
         assert!(status.services.iter().all(|s| s.active));
@@ -314,32 +340,93 @@ mod tests {
 
         // An alias may not shadow a mailbox.
         let err = mail
-            .add_alias(&ctx, MailAliasAddParams { alias: "ops@futureforge.dev".into(), mailbox: "hello@futureforge.dev".into() })
+            .add_alias(
+                &ctx,
+                MailAliasAddParams {
+                    alias: "ops@futureforge.dev".into(),
+                    mailbox: "hello@futureforge.dev".into(),
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::Conflict(_)), "{err:?}");
 
         // A mailbox may not take an alias's address.
         let err = mail
-            .add_mailbox(&ctx, MailboxAddParams { address: "info@futureforge.dev".into(), ..Default::default() })
+            .add_mailbox(
+                &ctx,
+                MailboxAddParams {
+                    address: "info@futureforge.dev".into(),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::Conflict(_)), "{err:?}");
 
         // A domain with mailboxes stays.
-        let err = mail.remove_domain(&ctx, MailDomainParams { name: "kaname.sh".into() }).await.unwrap_err();
+        let err = mail
+            .remove_domain(
+                &ctx,
+                MailDomainParams {
+                    name: "kaname.sh".into(),
+                },
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(err, ProviderError::Conflict(_)), "{err:?}");
 
         // Unknown things are not found.
         for err in [
-            mail.remove_domain(&ctx, MailDomainParams { name: "nowhere.example".into() }).await.unwrap_err(),
-            mail.remove_mailbox(&ctx, MailAddressParams { address: "ghost@futureforge.dev".into() }).await.unwrap_err(),
-            mail.remove_alias(&ctx, MailAliasRemoveParams { alias: "ghost@futureforge.dev".into() }).await.unwrap_err(),
-            mail.mailbox_password(&ctx, MailAddressParams { address: "ghost@futureforge.dev".into() }).await.unwrap_err(),
-            mail.domain_dns(&ctx, MailDomainParams { name: "nowhere.example".into() }).await.unwrap_err(),
-            mail.add_mailbox(&ctx, MailboxAddParams { address: "x@nowhere.example".into(), ..Default::default() })
-                .await
-                .unwrap_err(),
+            mail.remove_domain(
+                &ctx,
+                MailDomainParams {
+                    name: "nowhere.example".into(),
+                },
+            )
+            .await
+            .unwrap_err(),
+            mail.remove_mailbox(
+                &ctx,
+                MailAddressParams {
+                    address: "ghost@futureforge.dev".into(),
+                },
+            )
+            .await
+            .unwrap_err(),
+            mail.remove_alias(
+                &ctx,
+                MailAliasRemoveParams {
+                    alias: "ghost@futureforge.dev".into(),
+                },
+            )
+            .await
+            .unwrap_err(),
+            mail.mailbox_password(
+                &ctx,
+                MailAddressParams {
+                    address: "ghost@futureforge.dev".into(),
+                },
+            )
+            .await
+            .unwrap_err(),
+            mail.domain_dns(
+                &ctx,
+                MailDomainParams {
+                    name: "nowhere.example".into(),
+                },
+            )
+            .await
+            .unwrap_err(),
+            mail.add_mailbox(
+                &ctx,
+                MailboxAddParams {
+                    address: "x@nowhere.example".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err(),
         ] {
             assert!(matches!(err, ProviderError::NotFound(_)), "{err:?}");
         }
@@ -348,42 +435,122 @@ mod tests {
         let password = mail
             .add_mailbox(
                 &ctx,
-                MailboxAddParams { address: "Bob@kaname.sh".into(), display_name: Some("Bob".into()), quota_mb: None },
+                MailboxAddParams {
+                    address: "Bob@kaname.sh".into(),
+                    display_name: Some("Bob".into()),
+                    quota_mb: None,
+                },
             )
             .await
             .unwrap();
         assert_eq!(password.password.chars().count(), 20);
-        let boxes = mail.list_mailboxes(&ctx, MailListParams { domain: Some("kaname.sh".into()) }).await.unwrap();
+        let boxes = mail
+            .list_mailboxes(
+                &ctx,
+                MailListParams {
+                    domain: Some("kaname.sh".into()),
+                },
+            )
+            .await
+            .unwrap();
         assert!(boxes.iter().any(|b| b.address == "bob@kaname.sh"));
         let err = mail
-            .add_mailbox(&ctx, MailboxAddParams { address: "bob@kaname.sh".into(), ..Default::default() })
+            .add_mailbox(
+                &ctx,
+                MailboxAddParams {
+                    address: "bob@kaname.sh".into(),
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, ProviderError::Conflict(_)));
 
-        mail.add_alias(&ctx, MailAliasAddParams { alias: "robert@kaname.sh".into(), mailbox: "bob@kaname.sh".into() })
+        mail.add_alias(
+            &ctx,
+            MailAliasAddParams {
+                alias: "robert@kaname.sh".into(),
+                mailbox: "bob@kaname.sh".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let boxes = mail
+            .list_mailboxes(
+                &ctx,
+                MailListParams {
+                    domain: Some("kaname.sh".into()),
+                },
+            )
             .await
             .unwrap();
-        let boxes = mail.list_mailboxes(&ctx, MailListParams { domain: Some("kaname.sh".into()) }).await.unwrap();
         let bob = boxes.iter().find(|b| b.address == "bob@kaname.sh").unwrap();
         assert_eq!(bob.aliases, vec!["robert@kaname.sh".to_string()]);
 
         for address in ["bob@kaname.sh", "team@kaname.sh"] {
-            mail.remove_mailbox(&ctx, MailAddressParams { address: address.into() }).await.unwrap();
+            mail.remove_mailbox(
+                &ctx,
+                MailAddressParams {
+                    address: address.into(),
+                },
+            )
+            .await
+            .unwrap();
         }
         // The alias went with its mailbox.
-        let aliases = mail.list_aliases(&ctx, MailListParams { domain: Some("kaname.sh".into()) }).await.unwrap();
+        let aliases = mail
+            .list_aliases(
+                &ctx,
+                MailListParams {
+                    domain: Some("kaname.sh".into()),
+                },
+            )
+            .await
+            .unwrap();
         assert!(!aliases.iter().any(|a| a.address == "robert@kaname.sh"));
-        mail.remove_domain(&ctx, MailDomainParams { name: "kaname.sh".into() }).await.unwrap();
-        assert!(!mail.list_domains(&ctx).await.unwrap().iter().any(|d| d.name == "kaname.sh"));
+        mail.remove_domain(
+            &ctx,
+            MailDomainParams {
+                name: "kaname.sh".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            !mail
+                .list_domains(&ctx)
+                .await
+                .unwrap()
+                .iter()
+                .any(|d| d.name == "kaname.sh")
+        );
 
         // DNS expectations: DKIM fails on the warn domain, with a long value.
-        let dns = mail.domain_dns(&ctx, MailDomainParams { name: "futureforge.dev".into() }).await.unwrap();
-        let dkim = dns.records.iter().find(|r| r.name.starts_with(&format!("{}._domainkey.", mail::DKIM_SELECTOR))).unwrap();
+        let dns = mail
+            .domain_dns(
+                &ctx,
+                MailDomainParams {
+                    name: "futureforge.dev".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let dkim = dns
+            .records
+            .iter()
+            .find(|r| {
+                r.name
+                    .starts_with(&format!("{}._domainkey.", mail::DKIM_SELECTOR))
+            })
+            .unwrap();
         assert_eq!(dkim.status, MailCheckStatus::Fail);
         assert!(dkim.expected.as_deref().unwrap().len() > 300);
         assert!(dkim.actual.is_empty());
-        assert!(dns.records.iter().any(|r| r.rtype == "MX" && r.status == MailCheckStatus::Pass));
+        assert!(
+            dns.records
+                .iter()
+                .any(|r| r.rtype == "MX" && r.status == MailCheckStatus::Pass)
+        );
         assert!(dns.zone_file.contains("$ORIGIN futureforge.dev."));
 
         // Doctor has the two deliberate findings.
@@ -421,9 +588,18 @@ mod tests {
             .unwrap();
         assert_eq!(result.outcome, MailDeployOutcome::Paused);
         assert_eq!(result.paused_at.as_deref(), Some("Set reverse DNS"));
-        assert!(result.setup_url.as_deref().unwrap().starts_with("https://mail.example.org/console/setup#token=sim-"));
+        assert!(
+            result
+                .setup_url
+                .as_deref()
+                .unwrap()
+                .starts_with("https://mail.example.org/console/setup#token=sim-")
+        );
         assert_eq!(result.first_mailbox.as_deref(), Some("hello@example.org"));
-        assert_eq!(result.first_mailbox_password.as_deref().map(|p| p.len()), Some(20));
+        assert_eq!(
+            result.first_mailbox_password.as_deref().map(|p| p.len()),
+            Some(20)
+        );
         assert!(collector.text().lines().count() >= 10);
 
         let domains = provider.mail().list_domains(&ctx).await.unwrap();
@@ -454,7 +630,11 @@ mod tests {
         assert_eq!(event.topic, topic::SERVICE_CHANGED);
         assert_eq!(event.data["unit"], "nginx.service");
 
-        let err = provider.services().status(&ctx, "nope.service").await.unwrap_err();
+        let err = provider
+            .services()
+            .status(&ctx, "nope.service")
+            .await
+            .unwrap_err();
         assert!(matches!(err, ProviderError::NotFound(_)));
         provider.close().await;
     }
@@ -482,16 +662,37 @@ mod tests {
             )
             .await
             .unwrap();
-        let read = files.read(&ctx, FsReadParams { path: "/srv/scratch/big.txt".into(), max_bytes: 16 }).await.unwrap();
+        let read = files
+            .read(
+                &ctx,
+                FsReadParams {
+                    path: "/srv/scratch/big.txt".into(),
+                    max_bytes: 16,
+                },
+            )
+            .await
+            .unwrap();
         assert!(read.truncated);
         assert_eq!(read.size, body.len() as i64);
         assert_eq!(read.content.len(), 16);
 
         let after = provider.system().metrics(&ctx).await.unwrap();
         let root_after = after.disks.iter().find(|d| d.mount == "/").unwrap().used;
-        assert!(root_after > root_before + 3 * 1024 * 1024, "{root_before} -> {root_after}");
+        assert!(
+            root_after > root_before + 3 * 1024 * 1024,
+            "{root_before} -> {root_after}"
+        );
 
-        let err = files.read(&ctx, FsReadParams { path: "/etc/../etc/passwd".into(), max_bytes: 0 }).await.unwrap_err();
+        let err = files
+            .read(
+                &ctx,
+                FsReadParams {
+                    path: "/etc/../etc/passwd".into(),
+                    max_bytes: 0,
+                },
+            )
+            .await
+            .unwrap_err();
         assert!(matches!(err, ProviderError::InvalidParams(_)));
 
         // The symlinked /bin resolves into /usr/bin.

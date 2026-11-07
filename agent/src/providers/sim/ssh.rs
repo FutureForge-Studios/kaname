@@ -38,8 +38,14 @@ pub fn write_sshd_config(sim: &Sim) {
     b.push_str(&format!("Port {}\n", config.port));
     b.push_str("AddressFamily any\nListenAddress 0.0.0.0\n\n");
     b.push_str(&format!("PermitRootLogin {}\n", config.permit_root_login));
-    b.push_str(&format!("PubkeyAuthentication {}\n", yes_no(config.pubkey_authentication)));
-    b.push_str(&format!("PasswordAuthentication {}\n", yes_no(config.password_authentication)));
+    b.push_str(&format!(
+        "PubkeyAuthentication {}\n",
+        yes_no(config.pubkey_authentication)
+    ));
+    b.push_str(&format!(
+        "PasswordAuthentication {}\n",
+        yes_no(config.password_authentication)
+    ));
     b.push_str("KbdInteractiveAuthentication no\n");
     b.push_str(&format!("MaxAuthTries {}\n", config.max_auth_tries));
     if !config.allow_users.is_empty() {
@@ -79,7 +85,10 @@ impl Ssh for SimSsh {
         for key in &p.keys {
             let fields: Vec<&str> = key.public_key.split_whitespace().collect();
             if fields.len() < 2 {
-                return Err(ProviderError::invalid(format!("public key for {} is malformed", p.user)));
+                return Err(ProviderError::invalid(format!(
+                    "public key for {} is malformed",
+                    p.user
+                )));
             }
             keys.push(SshKeyInfo {
                 fingerprint: fingerprint_of(fields[1]),
@@ -99,10 +108,20 @@ impl Ssh for SimSsh {
         let count = keys.len() as i64;
         self.0.world.lock().ssh_keys.insert(p.user.clone(), keys);
 
-        let home = if p.user == "root" { "/root".to_string() } else { format!("/home/{}", p.user) };
+        let home = if p.user == "root" {
+            "/root".to_string()
+        } else {
+            format!("/home/{}", p.user)
+        };
         let mut fs = self.0.fs.write();
         fs.dir_as(&format!("{home}/.ssh"), "0700", &p.user, uid_for(&p.user));
-        fs.file_as(&format!("{home}/.ssh/authorized_keys"), &authorized, "0600", &p.user, uid_for(&p.user));
+        fs.file_as(
+            &format!("{home}/.ssh/authorized_keys"),
+            &authorized,
+            "0600",
+            &p.user,
+            uid_for(&p.user),
+        );
         Ok(count)
     }
 
@@ -113,7 +132,9 @@ impl Ssh for SimSsh {
     async fn apply_config(&self, _ctx: &Ctx, p: SshConfigApplyParams) -> PResult<SshConfigApplyResult> {
         let token = {
             let mut w = self.0.world.lock();
-            let previous = RollbackWindow::Ssh { config: w.ssh_config.clone() };
+            let previous = RollbackWindow::Ssh {
+                config: w.ssh_config.clone(),
+            };
             let next = &mut w.ssh_config;
             if let Some(port) = p.port {
                 next.port = port;
@@ -141,7 +162,10 @@ impl Ssh for SimSsh {
             }
 
             if p.rollback_seconds > 0 {
-                let issued = format!("ssh-{:016x}", mix(self.0.seed ^ Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64));
+                let issued = format!(
+                    "ssh-{:016x}",
+                    mix(self.0.seed ^ Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64)
+                );
                 w.rollbacks.insert(issued.clone(), previous);
                 Some(issued)
             } else {
@@ -151,9 +175,15 @@ impl Ssh for SimSsh {
 
         write_sshd_config(&self.0);
         if let Some(token) = &token {
-            schedule_rollback(&self.0, token.clone(), Duration::from_secs(p.rollback_seconds as u64));
+            schedule_rollback(
+                &self.0,
+                token.clone(),
+                Duration::from_secs(p.rollback_seconds as u64),
+            );
         }
-        Ok(SshConfigApplyResult { rollback_token: token })
+        Ok(SshConfigApplyResult {
+            rollback_token: token,
+        })
     }
 
     async fn sessions(&self, _ctx: &Ctx) -> PResult<Vec<SshSessionInfo>> {

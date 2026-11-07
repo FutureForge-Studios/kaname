@@ -75,7 +75,10 @@ pub fn write_cert_files(sim: &Sim, cert: &Certificate) {
     let leaf = format!("-----BEGIN CERTIFICATE-----\n{body}-----END CERTIFICATE-----\n");
     fs.file(&format!("{dir}/fullchain.pem"), &leaf);
     fs.file(&format!("{dir}/cert.pem"), &leaf);
-    fs.file(&format!("{dir}/chain.pem"), "-----BEGIN CERTIFICATE-----\n# ISRG Root X1 chain\n-----END CERTIFICATE-----\n");
+    fs.file(
+        &format!("{dir}/chain.pem"),
+        "-----BEGIN CERTIFICATE-----\n# ISRG Root X1 chain\n-----END CERTIFICATE-----\n",
+    );
     fs.file_as(
         &format!("{dir}/privkey.pem"),
         "-----BEGIN PRIVATE KEY-----\n(simulated; no key material is kept)\n-----END PRIVATE KEY-----\n",
@@ -164,9 +167,20 @@ impl Certs for SimCerts {
         }
 
         write_cert_files(&self.0, &cert);
-        let _ = progress(ctx, &*s, Duration::ZERO, format!("Certificate saved at {}", cert.path)).await;
+        let _ = progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            format!("Certificate saved at {}", cert.path),
+        )
+        .await;
 
-        Ok(CertIssueResult { subject: cert.subject, sans: cert.sans, not_after: stamp(cert.not_after), path: cert.path })
+        Ok(CertIssueResult {
+            subject: cert.subject,
+            sans: cert.sans,
+            not_after: stamp(cert.not_after),
+            path: cert.path,
+        })
     }
 
     async fn renew(&self, ctx: &Ctx, p: CertRenewParams, s: StreamRef) -> PResult<CertRenewResult> {
@@ -183,10 +197,16 @@ impl Certs for SimCerts {
                 ctx,
                 &*s,
                 Duration::ZERO,
-                format!("Certificate not yet due for renewal ({} days remaining)", remaining.num_hours() / 24),
+                format!(
+                    "Certificate not yet due for renewal ({} days remaining)",
+                    remaining.num_hours() / 24
+                ),
             )
             .await;
-            return Err(ProviderError::PreconditionFailed(format!("{} is not due for renewal", p.subject)));
+            return Err(ProviderError::PreconditionFailed(format!(
+                "{} is not due for renewal",
+                p.subject
+            )));
         }
 
         for step in [
@@ -211,8 +231,16 @@ impl Certs for SimCerts {
         };
 
         write_cert_files(&self.0, &cert);
-        let _ = progress(ctx, &*s, Duration::ZERO, format!("Renewal successful, new expiry {}", stamp(cert.not_after))).await;
-        Ok(CertRenewResult { not_after: stamp(cert.not_after) })
+        let _ = progress(
+            ctx,
+            &*s,
+            Duration::ZERO,
+            format!("Renewal successful, new expiry {}", stamp(cert.not_after)),
+        )
+        .await;
+        Ok(CertRenewResult {
+            not_after: stamp(cert.not_after),
+        })
     }
 
     async fn revoke(&self, _ctx: &Ctx, p: CertRevokeParams) -> PResult<()> {
@@ -223,7 +251,10 @@ impl Certs for SimCerts {
             };
             w.certs.remove(idx);
         }
-        self.0.fs.write().detach(&format!("/etc/letsencrypt/live/{}", p.subject));
+        self.0
+            .fs
+            .write()
+            .detach(&format!("/etc/letsencrypt/live/{}", p.subject));
         Ok(())
     }
 
@@ -251,7 +282,10 @@ impl Certs for SimCerts {
         {
             let mut fs = self.0.fs.write();
             fs.dir(&dir);
-            fs.file(&format!("{dir}/fullchain.pem"), &format!("{}{}", p.certificate_pem, p.chain_pem.unwrap_or_default()));
+            fs.file(
+                &format!("{dir}/fullchain.pem"),
+                &format!("{}{}", p.certificate_pem, p.chain_pem.unwrap_or_default()),
+            );
             fs.file_as(&format!("{dir}/privkey.pem"), &p.key_pem, "0600", "root", 0);
         }
         Ok(CertInstallResult { path: cert.path })

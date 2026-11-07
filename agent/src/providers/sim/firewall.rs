@@ -28,9 +28,18 @@ use crate::providers::{
 /// Deliberately RFC 5737 documentation space. A simulated threat feed must
 /// never name an address someone could go and block.
 pub const THREAT_SOURCES: &[&str] = &[
-    "203.0.113.7", "203.0.113.42", "203.0.113.88", "203.0.113.201", "203.0.113.240",
-    "198.51.100.13", "198.51.100.66", "198.51.100.154", "198.51.100.219",
-    "192.0.2.9", "192.0.2.77", "192.0.2.133",
+    "203.0.113.7",
+    "203.0.113.42",
+    "203.0.113.88",
+    "203.0.113.201",
+    "203.0.113.240",
+    "198.51.100.13",
+    "198.51.100.66",
+    "198.51.100.154",
+    "198.51.100.219",
+    "192.0.2.9",
+    "192.0.2.77",
+    "192.0.2.133",
 ];
 
 /// Mirrors a fail2ban jail: enough failures in the window and the address
@@ -40,8 +49,14 @@ pub const AUTO_BAN_THRESHOLD: i64 = 120;
 /// A staged change that reverts itself unless confirmed.
 #[derive(Clone, Debug)]
 pub enum RollbackWindow {
-    Firewall { rules: Vec<FirewallRuleInfo>, inbound: String, outbound: String },
-    Ssh { config: SshConfigInfo },
+    Firewall {
+        rules: Vec<FirewallRuleInfo>,
+        inbound: String,
+        outbound: String,
+    },
+    Ssh {
+        config: SshConfigInfo,
+    },
 }
 
 pub fn build_security(sim: &Sim) {
@@ -62,24 +77,41 @@ pub fn build_security(sim: &Sim) {
         (50, "allow", "tcp", "587", "", "Submission"),
         (60, "allow", "tcp", "993", "", "IMAPS"),
         (70, "allow", "icmp", "", "", "ICMP echo"),
-        (80, "allow", "tcp", "5432", "10.20.30.0/24", "PostgreSQL from the private network"),
+        (
+            80,
+            "allow",
+            "tcp",
+            "5432",
+            "10.20.30.0/24",
+            "PostgreSQL from the private network",
+        ),
         (90, "deny", "tcp", "3306", "", "MariaDB is loopback only"),
     ];
     w.fw_rules = seeds
         .iter()
-        .map(|(priority, action, protocol, ports, source, comment)| FirewallRuleInfo {
-            id: format!("inet-filter-input-{priority}"),
-            priority: *priority,
-            action: action.to_string(),
-            direction: "inbound".into(),
-            protocol: protocol.to_string(),
-            port_spec: if ports.is_empty() { None } else { Some(ports.to_string()) },
-            source: if source.is_empty() { None } else { Some(source.to_string()) },
-            destination: None,
-            comment: Some(comment.to_string()),
-            enabled: true,
-            backend: "nftables".into(),
-        })
+        .map(
+            |(priority, action, protocol, ports, source, comment)| FirewallRuleInfo {
+                id: format!("inet-filter-input-{priority}"),
+                priority: *priority,
+                action: action.to_string(),
+                direction: "inbound".into(),
+                protocol: protocol.to_string(),
+                port_spec: if ports.is_empty() {
+                    None
+                } else {
+                    Some(ports.to_string())
+                },
+                source: if source.is_empty() {
+                    None
+                } else {
+                    Some(source.to_string())
+                },
+                destination: None,
+                comment: Some(comment.to_string()),
+                enabled: true,
+                backend: "nftables".into(),
+            },
+        )
         .collect();
 
     w.bans = HashMap::new();
@@ -196,7 +228,9 @@ pub fn jail_for(kind: &str) -> &'static str {
 fn threat_sample(kind: &str, ip: &str) -> String {
     match kind {
         "web_bruteforce" => format!("{ip} - - \"POST /wp-login.php HTTP/1.1\" 401 226"),
-        "mail_bruteforce" => format!("stalwart-mail: WARN Authentication failed (auth.failed) remoteIp = {ip}"),
+        "mail_bruteforce" => {
+            format!("stalwart-mail: WARN Authentication failed (auth.failed) remoteIp = {ip}")
+        }
         _ => format!("sshd: Failed password for invalid user admin from {ip} port 51234 ssh2"),
     }
 }
@@ -208,15 +242,18 @@ pub fn record_threat(sim: &Sim, ip: &str, burst: i64) -> ThreatObservation {
     let now = Utc::now();
     let mut w = sim.world.lock();
 
-    let observation = w.threats.entry(ip.to_string()).or_insert_with(|| ThreatObservation {
-        kind: "ssh_bruteforce".into(),
-        source_ip: ip.to_string(),
-        target: "sshd:22".into(),
-        attempts: 0,
-        first_seen: stamp(now),
-        last_seen: stamp(now),
-        sample: Some(threat_sample("ssh_bruteforce", ip)),
-    });
+    let observation = w
+        .threats
+        .entry(ip.to_string())
+        .or_insert_with(|| ThreatObservation {
+            kind: "ssh_bruteforce".into(),
+            source_ip: ip.to_string(),
+            target: "sshd:22".into(),
+            attempts: 0,
+            first_seen: stamp(now),
+            last_seen: stamp(now),
+            sample: Some(threat_sample("ssh_bruteforce", ip)),
+        });
     observation.attempts += burst;
     observation.last_seen = stamp(now);
     let mut delta = observation.clone();
@@ -243,7 +280,12 @@ pub fn rotate_ssh_session(sim: &Sim, round: i64) {
     let now = Utc::now();
     let session = SshSessionInfo {
         user: pick(sim.seed, round, &["deploy", "root", "alice"]).into(),
-        from_ip: pick(sim.seed ^ 0x3, round, &[sim.id.private_ip.as_str(), "10.20.30.4", "10.20.30.22"]).into(),
+        from_ip: pick(
+            sim.seed ^ 0x3,
+            round,
+            &[sim.id.private_ip.as_str(), "10.20.30.4", "10.20.30.22"],
+        )
+        .into(),
         tty: format!("pts/{}", round % 4),
         pid: 29000 + (mix(sim.seed ^ round as u64) % 800) as i64,
         started_at: stamp(now),
@@ -272,9 +314,15 @@ pub fn schedule_rollback(sim: &Arc<Sim>, token: String, after: Duration) {
 
         let staged = {
             let mut w = sim.world.lock();
-            let Some(staged) = w.rollbacks.remove(&token) else { return };
+            let Some(staged) = w.rollbacks.remove(&token) else {
+                return;
+            };
             match &staged {
-                RollbackWindow::Firewall { rules, inbound, outbound } => {
+                RollbackWindow::Firewall {
+                    rules,
+                    inbound,
+                    outbound,
+                } => {
                     w.fw_rules = rules.clone();
                     w.fw_inbound = inbound.clone();
                     w.fw_outbound = outbound.clone();
@@ -286,11 +334,21 @@ pub fn schedule_rollback(sim: &Arc<Sim>, token: String, after: Duration) {
 
         match staged {
             RollbackWindow::Firewall { .. } => {
-                tracing::warn!(provider = "sim", token, kind = "firewall", "rolled back an unconfirmed change");
+                tracing::warn!(
+                    provider = "sim",
+                    token,
+                    kind = "firewall",
+                    "rolled back an unconfirmed change"
+                );
                 write_nftables_config(&sim);
             }
             RollbackWindow::Ssh { .. } => {
-                tracing::warn!(provider = "sim", token, kind = "ssh", "rolled back an unconfirmed change");
+                tracing::warn!(
+                    provider = "sim",
+                    token,
+                    kind = "ssh",
+                    "rolled back an unconfirmed change"
+                );
                 ssh::write_sshd_config(&sim);
             }
         }
@@ -309,7 +367,9 @@ pub fn write_nftables_config(sim: &Sim) {
     let mut b = String::from("#!/usr/sbin/nft -f\nflush ruleset\n\ntable inet filter {\n");
     for (chain, direction, policy) in [("input", "inbound", &inbound), ("output", "outbound", &outbound)] {
         let policy = if policy == "deny" { "drop" } else { "accept" };
-        b.push_str(&format!("    chain {chain} {{\n        type filter hook {chain} priority 0; policy {policy};\n"));
+        b.push_str(&format!(
+            "    chain {chain} {{\n        type filter hook {chain} priority 0; policy {policy};\n"
+        ));
         if chain == "input" {
             b.push_str("        ct state established,related accept\n        iif \"lo\" accept\n");
         }
@@ -406,7 +466,10 @@ impl Firewall for SimFirewall {
                 outbound: std::mem::replace(&mut w.fw_outbound, p.default_outbound.clone()),
             };
             if p.rollback_seconds > 0 {
-                let issued = format!("fw-{:016x}", mix(self.0.seed ^ Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64));
+                let issued = format!(
+                    "fw-{:016x}",
+                    mix(self.0.seed ^ Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64)
+                );
                 w.rollbacks.insert(issued.clone(), previous);
                 Some(issued)
             } else {
@@ -416,9 +479,16 @@ impl Firewall for SimFirewall {
 
         write_nftables_config(&self.0);
         if let Some(token) = &token {
-            schedule_rollback(&self.0, token.clone(), Duration::from_secs(p.rollback_seconds as u64));
+            schedule_rollback(
+                &self.0,
+                token.clone(),
+                Duration::from_secs(p.rollback_seconds as u64),
+            );
         }
-        Ok(FwApplyResult { applied: rules.len() as i64, rollback_token: token })
+        Ok(FwApplyResult {
+            applied: rules.len() as i64,
+            rollback_token: token,
+        })
     }
 
     async fn confirm(&self, _ctx: &Ctx, p: FwConfirmParams) -> PResult<()> {
@@ -439,7 +509,13 @@ impl Firewall for SimFirewall {
         // the address it starts at rather than by a string the panel
         // cannot parse.
         let address = p.target.split('/').next().unwrap_or_default().to_string();
-        let mut entry = BanEntry { ip: address, jail: "manual".into(), banned_at: stamp(now), expires_at: None, attempts: 0 };
+        let mut entry = BanEntry {
+            ip: address,
+            jail: "manual".into(),
+            banned_at: stamp(now),
+            expires_at: None,
+            attempts: 0,
+        };
         if let Some(observation) = w.threats.get(&p.target) {
             entry.jail = jail_for(&observation.kind).into();
             entry.attempts = observation.attempts;
@@ -463,7 +539,11 @@ impl Firewall for SimFirewall {
         let now = Utc::now();
         let mut w = self.0.world.lock();
         w.bans.retain(|_, entry| {
-            entry.expires_at.as_deref().and_then(parse_stamp).is_none_or(|expiry| expiry >= now)
+            entry
+                .expires_at
+                .as_deref()
+                .and_then(parse_stamp)
+                .is_none_or(|expiry| expiry >= now)
         });
         let mut out: Vec<BanEntry> = w.bans.values().cloned().collect();
         out.sort_by(|a, b| b.banned_at.cmp(&a.banned_at));
@@ -472,7 +552,9 @@ impl Firewall for SimFirewall {
 
     async fn threats(&self, _ctx: &Ctx, p: FwThreatsParams) -> PResult<Vec<ThreatObservation>> {
         let since: Option<DateTime<Utc>> = match p.since.as_deref().filter(|s| !s.is_empty()) {
-            Some(s) => Some(parse_stamp(s).ok_or_else(|| ProviderError::invalid("since must be an RFC3339 timestamp"))?),
+            Some(s) => Some(
+                parse_stamp(s).ok_or_else(|| ProviderError::invalid("since must be an RFC3339 timestamp"))?,
+            ),
             None => None,
         };
 
