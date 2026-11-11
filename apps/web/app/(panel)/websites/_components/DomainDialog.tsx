@@ -158,6 +158,9 @@ export function DomainDialog({
     else create.mutate({ ...payload, name: form.name.trim().toLowerCase() }, close);
   };
 
+  /* Numbered in reading order: an edit cannot rename, so it has no name step. */
+  const step = editing ? 0 : 1;
+
   return (
     <FormDialog
       open={open}
@@ -174,140 +177,146 @@ export function DomainDialog({
       onSubmit={submit}
     >
       {!editing && (
-        <FormField
-          label="Domain name"
-          description="One row per name, so records and certificates never split across two entries."
-          error={errorFor("name")}
-          required
-        >
-          <Input
-            value={form.name}
-            onChange={(event) => set("name", event.target.value)}
-            placeholder="example.com"
-            mono
-            autoComplete="off"
-            spellCheck={false}
-            data-autofocus=""
-          />
-        </FormField>
+        <FormSection index={1} title="Name">
+          <FormField
+            label="Domain name"
+            description="One row per name, so records and certificates never split across two entries."
+            error={errorFor("name")}
+            required
+          >
+            <Input
+              value={form.name}
+              onChange={(event) => set("name", event.target.value)}
+              placeholder="example.com"
+              mono
+              autoComplete="off"
+              spellCheck={false}
+              data-autofocus=""
+            />
+          </FormField>
+        </FormSection>
       )}
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField
-          label="Site"
-          description="The site this name answers on. Optional."
-          error={errorFor("site_id")}
-        >
-          <Combobox
-            options={siteOptions}
-            value={form.siteId}
-            onValueChange={(next) => set("siteId", next ?? "")}
-            placeholder="Not attached"
-            emptyMessage="No site matches that name."
-            loading={sites.isLoading}
-            clearable
-            mono
-          />
-        </FormField>
+      <FormSection index={step + 1} title="Attachment">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField
+            label="Site"
+            description="The site this name answers on. Optional."
+            error={errorFor("site_id")}
+          >
+            <Combobox
+              options={siteOptions}
+              value={form.siteId}
+              onValueChange={(next) => set("siteId", next ?? "")}
+              placeholder="Not attached"
+              emptyMessage="No site matches that name."
+              loading={sites.isLoading}
+              clearable
+              mono
+            />
+          </FormField>
 
-        <FormField
-          label="Server"
-          description={
-            form.siteId
-              ? "Taken from the site this domain answers on."
-              : "Where verification resolves from. Optional."
-          }
-          error={errorFor("server_id")}
-        >
-          <Combobox
-            options={serverOptions}
-            value={effectiveServerId}
-            onValueChange={(next) => set("serverId", next ?? "")}
-            placeholder="Not attached"
-            emptyMessage="No server matches that name."
-            loading={servers.isLoading}
-            disabled={Boolean(form.siteId && siteServerId)}
-            clearable
-            mono
-          />
-        </FormField>
-      </div>
+          <FormField
+            label="Server"
+            description={
+              form.siteId
+                ? "Taken from the site this domain answers on."
+                : "Where verification resolves from. Optional."
+            }
+            error={errorFor("server_id")}
+          >
+            <Combobox
+              options={serverOptions}
+              value={effectiveServerId}
+              onValueChange={(next) => set("serverId", next ?? "")}
+              placeholder="Not attached"
+              emptyMessage="No server matches that name."
+              loading={servers.isLoading}
+              disabled={Boolean(form.siteId && siteServerId)}
+              clearable
+              mono
+            />
+          </FormField>
+        </div>
+      </FormSection>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField
-          label="DNS provider"
-          description="An API-driven provider gets drift detection and dns-01 challenges."
-        >
-          <Select
-            value={form.provider}
-            onChange={(event) => set("provider", event.target.value as DnsProvider)}
-            options={PROVIDERS.map((provider) => ({
-              value: provider,
-              label: DNS_PROVIDER_LABELS[provider],
-            }))}
-          />
-        </FormField>
+      <FormSection index={step + 2} title="Zone">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField
+            label="DNS provider"
+            description="An API-driven provider gets drift detection and dns-01 challenges."
+          >
+            <Select
+              value={form.provider}
+              onChange={(event) => set("provider", event.target.value as DnsProvider)}
+              options={PROVIDERS.map((provider) => ({
+                value: provider,
+                label: DNS_PROVIDER_LABELS[provider],
+              }))}
+            />
+          </FormField>
 
-        <FormField
-          label="Registrar"
-          description="Who the name is registered with. Optional."
-          error={errorFor("registrar")}
-        >
-          <Input
-            value={form.registrar}
-            onChange={(event) => set("registrar", event.target.value)}
-            placeholder="Gandi"
-            autoComplete="off"
-          />
-        </FormField>
-      </div>
+          <FormField
+            label="Registrar"
+            description="Who the name is registered with. Optional."
+            error={errorFor("registrar")}
+          >
+            <Input
+              value={form.registrar}
+              onChange={(event) => set("registrar", event.target.value)}
+              placeholder="Gandi"
+              autoComplete="off"
+            />
+          </FormField>
+        </div>
 
-      {form.provider !== "manual" && (
-        <FormField
-          label="Zone identifier"
-          description="Left blank, Kaname looks the zone up by name on the first sync."
-          error={errorFor("dns_zone_id")}
-        >
-          <Input
-            value={form.zoneId}
-            onChange={(event) => set("zoneId", event.target.value)}
-            placeholder="Discovered on sync"
-            mono
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </FormField>
-      )}
+        {form.provider !== "manual" && (
+          <FormField
+            label="Zone identifier"
+            description="Left blank, Kaname looks the zone up by name on the first sync."
+            error={errorFor("dns_zone_id")}
+          >
+            <Input
+              value={form.zoneId}
+              onChange={(event) => set("zoneId", event.target.value)}
+              placeholder="Discovered on sync"
+              mono
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </FormField>
+        )}
 
-      {form.provider !== "manual" && (
-        <FormField
-          label="API token"
-          description={`Zone:Read and DNS:Edit on this zone. Sealed when saved and never shown again${editing ? "; leave blank to keep the stored one" : ""}.`}
-        >
-          <Input
-            type="password"
-            value={form.apiToken}
-            onChange={(event) => set("apiToken", event.target.value)}
-            placeholder={editing ? "Unchanged" : "Paste the provider token"}
-            mono
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </FormField>
-      )}
+        {form.provider !== "manual" && (
+          <FormField
+            label="API token"
+            description={`Zone:Read and DNS:Edit on this zone. Sealed when saved and never shown again${editing ? "; leave blank to keep the stored one" : ""}.`}
+          >
+            <Input
+              type="password"
+              value={form.apiToken}
+              onChange={(event) => set("apiToken", event.target.value)}
+              placeholder={editing ? "Unchanged" : "Paste the provider token"}
+              mono
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </FormField>
+        )}
 
-      <Switch
-        checked={form.proxied}
-        onChange={(event) => set("proxied", event.target.checked)}
-        label="Proxy web traffic through the provider"
-        description="Never proxy a name that carries mail: SMTP does not traverse an HTTP proxy."
-        disabled={form.provider === "manual"}
-      />
-      {errorFor("proxied") && (
-        <p role="alert" className="text-xs text-[var(--kn-danger)]">
-          {errorFor("proxied")}
-        </p>
-      )}
+        <Switch
+          checked={form.proxied}
+          onChange={(event) => set("proxied", event.target.checked)}
+          label="Proxy web traffic through the provider"
+          description="Never proxy a name that carries mail: SMTP does not traverse an HTTP proxy."
+          disabled={form.provider === "manual"}
+        />
+        {errorFor("proxied") && (
+          <p role="alert" className="text-xs text-[var(--kn-danger)]">
+            {errorFor("proxied")}
+          </p>
+        )}
+      </FormSection>
     </FormDialog>
   );
 }

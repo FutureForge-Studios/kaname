@@ -247,7 +247,7 @@ function SettingsSection({
         }
       />
 
-      <Card padding="none" className="px-4 py-1">
+      <Card padding="none" className="px-4 py-1 max-sm:[&>div]:flex-wrap">
         {error && (
           <div className="py-3">
             <PageError error={error} onRetry={onSave} context={title} />

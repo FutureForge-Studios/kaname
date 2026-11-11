@@ -203,62 +203,68 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
           <DetailLayout
             rail={
               <>
-              <SectionCard title="Phases" headingLevel={3}>
-                <DeploymentPhases deployment={deployment} status={status} />
-              </SectionCard>
-              <SectionCard title="Run" headingLevel={3}>
-                <PropertyList dense labelWidth="sm">
-                  <PropertyRow label="Site">
-                    <Link
-                      href={`/websites/sites/${deployment.site_id}`}
-                      className="rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline"
+                <SectionCard title="Phases" headingLevel={3}>
+                  <DeploymentPhases deployment={deployment} status={status} />
+                </SectionCard>
+                <SectionCard title="Run" headingLevel={3}>
+                  <PropertyList dense labelWidth="sm">
+                    <PropertyRow label="Site">
+                      <Link
+                        href={`/websites/sites/${deployment.site_id}`}
+                        className="rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline"
+                      >
+                        {deployment.site_name}
+                      </Link>
+                    </PropertyRow>
+                    <PropertyRow label="Server">
+                      <HostAxes server={server} fallbackName={site.data?.server_name ?? null} />
+                    </PropertyRow>
+                    <PropertyRow label="Source">
+                      {deployment.source === "git" ? "Git repository" : "Uploaded build"}
+                    </PropertyRow>
+                    <PropertyRow
+                      label="Repository"
+                      mono
+                      copyValue={deployment.repo_url ?? undefined}
                     >
-                      {deployment.site_name}
-                    </Link>
-                  </PropertyRow>
-                  <PropertyRow label="Server">
-                    <HostAxes server={server} fallbackName={site.data?.server_name ?? null} />
-                  </PropertyRow>
-                  <PropertyRow label="Source">
-                    {deployment.source === "git" ? "Git repository" : "Uploaded build"}
-                  </PropertyRow>
-                  <PropertyRow label="Repository" mono copyValue={deployment.repo_url ?? undefined}>
-                    {deployment.repo_url}
-                  </PropertyRow>
-                  <PropertyRow label="Branch" mono>
-                    {deployment.branch}
-                  </PropertyRow>
-                  <PropertyRow
-                    label="Commit"
-                    mono
-                    copyValue={deployment.commit_sha ?? undefined}
-                    hint="The full object id this release was built from."
-                  >
-                    {shortSha(deployment.commit_sha)}
-                  </PropertyRow>
-                  <PropertyRow
-                    label="Release"
-                    mono
-                    copyValue={deployment.release_path ?? undefined}
-                    hint="The directory on the host that `current` points at while this release is live."
-                  >
-                    {deployment.release_path ?? "not on the host"}
-                  </PropertyRow>
-                  <PropertyRow label="Author">{deployment.commit_author}</PropertyRow>
-                  <PropertyRow label="Triggered by">
-                    {deployment.triggered_by_name ?? "Automation"}
-                  </PropertyRow>
-                  <PropertyRow label="Started">
-                    <RelativeTime value={deployment.started_at} fallback="not started" />
-                  </PropertyRow>
-                  <PropertyRow label="Finished">
-                    <RelativeTime value={deployment.finished_at} fallback="—" />
-                  </PropertyRow>
-                  <PropertyRow label="Duration">
-                    {deployment.duration_ms == null ? null : formatDuration(deployment.duration_ms)}
-                  </PropertyRow>
-                </PropertyList>
-              </SectionCard>
+                      {deployment.repo_url}
+                    </PropertyRow>
+                    <PropertyRow label="Branch" mono>
+                      {deployment.branch}
+                    </PropertyRow>
+                    <PropertyRow
+                      label="Commit"
+                      mono
+                      copyValue={deployment.commit_sha ?? undefined}
+                      hint="The full object id this release was built from."
+                    >
+                      {shortSha(deployment.commit_sha)}
+                    </PropertyRow>
+                    <PropertyRow
+                      label="Release"
+                      mono
+                      copyValue={deployment.release_path ?? undefined}
+                      hint="The directory on the host that `current` points at while this release is live."
+                    >
+                      {deployment.release_path ?? "not on the host"}
+                    </PropertyRow>
+                    <PropertyRow label="Author">{deployment.commit_author}</PropertyRow>
+                    <PropertyRow label="Triggered by">
+                      {deployment.triggered_by_name ?? "Automation"}
+                    </PropertyRow>
+                    <PropertyRow label="Started">
+                      <RelativeTime value={deployment.started_at} fallback="not started" />
+                    </PropertyRow>
+                    <PropertyRow label="Finished">
+                      <RelativeTime value={deployment.finished_at} fallback="—" />
+                    </PropertyRow>
+                    <PropertyRow label="Duration">
+                      {deployment.duration_ms == null
+                        ? null
+                        : formatDuration(deployment.duration_ms)}
+                    </PropertyRow>
+                  </PropertyList>
+                </SectionCard>
               </>
             }
           >
@@ -276,58 +282,58 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
               }
             >
               <CardInset padding="none" className="overflow-hidden">
-              {log.progress != null && (
-                <Progress
-                  value={log.progress}
-                  size="sm"
-                  tone={status === "failed" ? "danger" : "accent"}
-                  label="Build progress"
-                />
-              )}
-
-              {log.state === "expired" && (
-                <EmptyState
-                  icon={ScrollText}
-                  title="This build log has aged out"
-                  description="Kaname keeps job logs for a bounded window. The deployment record survives; its output does not."
-                  size="sm"
-                />
-              )}
-
-              {log.state === "error" && (
-                <div className="p-4">
-                  <PageError
-                    error={
-                      new ApiError({
-                        code: "network_error",
-                        status: 0,
-                        message: `The connection to the build log for ${label} dropped.`,
-                        remediation: {
-                          summary:
-                            "Reconnecting replays the log from its first line, so Kaname does not reattach on its own and duplicate what you have already read.",
-                          actions: [],
-                        },
-                      })
-                    }
-                    onRetry={log.retry}
+                {log.progress != null && (
+                  <Progress
+                    value={log.progress}
+                    size="sm"
+                    tone={status === "failed" ? "danger" : "accent"}
+                    label="Build progress"
                   />
-                </div>
-              )}
+                )}
 
-              {log.state !== "expired" && (
-                <LogViewer
-                  lines={log.lines}
-                  height={560}
-                  emptyLabel={
-                    log.state === "connecting"
-                      ? "Connecting to the build log."
-                      : running
-                        ? "Waiting for the agent to report."
-                        : "This run produced no output."
-                  }
-                  label={`${label} build log`}
-                />
-              )}
+                {log.state === "expired" && (
+                  <EmptyState
+                    icon={ScrollText}
+                    title="This build log has aged out"
+                    description="Kaname keeps job logs for a bounded window. The deployment record survives; its output does not."
+                    size="sm"
+                  />
+                )}
+
+                {log.state === "error" && (
+                  <div className="p-4">
+                    <PageError
+                      error={
+                        new ApiError({
+                          code: "network_error",
+                          status: 0,
+                          message: `The connection to the build log for ${label} dropped.`,
+                          remediation: {
+                            summary:
+                              "Reconnecting replays the log from its first line, so Kaname does not reattach on its own and duplicate what you have already read.",
+                            actions: [],
+                          },
+                        })
+                      }
+                      onRetry={log.retry}
+                    />
+                  </div>
+                )}
+
+                {log.state !== "expired" && (
+                  <LogViewer
+                    lines={log.lines}
+                    height={560}
+                    emptyLabel={
+                      log.state === "connecting"
+                        ? "Connecting to the build log."
+                        : running
+                          ? "Waiting for the agent to report."
+                          : "This run produced no output."
+                    }
+                    label={`${label} build log`}
+                  />
+                )}
               </CardInset>
             </SectionCard>
           </DetailLayout>

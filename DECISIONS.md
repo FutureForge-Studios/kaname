@@ -838,3 +838,38 @@ than 0.14em to limit this). Pills round the ends of a button group. The grid and
 more background layers on the scroll container; they are CSS gradients and cost nothing
 measurable. Light theme accent text keeps its own value (`#6A3EE8`) because primary-soft is
 2.4:1 on paper.
+
+## KD-039 — View modes and scoped accounts: resellers without tenancy
+
+**Decision.** Two independent ideas, never mixed:
+
+- **View mode** (`simplified` | `advanced`) is a per-user preference stored on `users.view_mode`
+  and switched from the top bar. It hides pages and changes the home; it never changes what the
+  API allows.
+- **Audience** (`operator` | `reseller` | `client`) is who the account is. A reseller is a user;
+  a client is a user whose `parent_id` is its reseller. There is no `org_id`, no tenant table
+  and no billing. What a scoped account may touch is one row per resource in `resource_owners`
+  (`site`, `domain`, `mailbox`, `database`), plus the servers listed in `account_limits`.
+
+Scoped accounts get a fixed grant list that is **inert** until a route opts in with
+`ownership(req)` (`apps/control-plane/src/routes/_ownership.ts`): that call is the route saying
+"I filter by owner", and returns `filter`, `assertOwns` (404, never "exists but not yours"),
+`reserve` (quota) and `claim`. A route that never opts in refuses scoped accounts, so every
+infrastructure, security and administration route stays operator-only without being edited.
+Quotas (sites, domains, mailboxes, databases, disk MB; null = no limit of its own) are set per
+reseller by an operator and per client by the reseller within its own; a reseller's usage counts
+its clients'. Branding (display name, up to four logo characters, support email/URL) belongs to
+the reseller and is shown to its clients.
+
+Owners and admins can **view as client / reseller**: a presentation-only preview held in the
+browser. It filters navigation and the home, is bannered, exits in one click, and never grants,
+impersonates or changes a request.
+
+**Why.** The owner wants to hand sites and mailboxes to clients and to small resellers without
+Kaname becoming shared-hosting software. Ownership rows on top of the existing scoped RBAC give
+that with one table and one helper; a tenant column would have touched every query.
+
+**Cost accepted.** Disk usage is what Kaname can measure without walking filesystems (database
+sizes plus mailbox allowances), so a site's files do not count. A resource has one owner; a
+reseller "sharing" a site with two clients is not modelled. PLAN.md §0's non-goal narrows to
+multi-tenant hierarchies and billing.

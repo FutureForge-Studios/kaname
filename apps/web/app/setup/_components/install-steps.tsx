@@ -25,6 +25,7 @@ import {
   Button,
   CardInset,
   CheckItem,
+  type CheckItemState,
   CheckList,
   FormField,
   Input,
@@ -233,10 +234,17 @@ const HEALTH_WORD: Record<ComponentHealth, string> = {
   unknown: "Unknown",
 };
 
+const HEALTH_CHECK: Record<ComponentHealth, CheckItemState> = {
+  healthy: "done",
+  degraded: "warning",
+  unreachable: "failed",
+  unknown: "current",
+};
+
 /*
- * One half of the install as a check: ticked once it answers, an open
- * circle while this page is still asking, and the status word in the
- * status colour either way.
+ * One half of the install as a check: ticked once it answers, a cross
+ * when it does not, an open circle while this page is still asking, and
+ * the status word in the status colour either way.
  */
 function HealthRow({
   label,
@@ -251,7 +259,7 @@ function HealthRow({
 }) {
   return (
     <CheckItem
-      state={status === "healthy" ? "done" : "current"}
+      state={HEALTH_CHECK[status]}
       title={<span>{label}</span>}
       description={detail}
       action={

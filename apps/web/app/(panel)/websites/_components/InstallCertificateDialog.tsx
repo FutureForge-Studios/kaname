@@ -140,85 +140,89 @@ export function InstallCertificateDialog({
       onSubmit={submit}
       size="lg"
     >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField label="Domain" error={errorFor("domain_id")} required>
-          <Combobox
-            options={domainOptions}
-            value={form.domainId}
-            onValueChange={(next) => {
-              const row = domainRows.find((candidate) => candidate.id === next);
-              setForm((previous) => ({
-                ...previous,
-                domainId: next ?? "",
-                serverId: row?.server_id ?? previous.serverId,
-              }));
-            }}
-            placeholder="Select a domain"
-            emptyMessage="No domain matches that name."
-            loading={domains.isLoading}
+      <FormSection index={1} title="Placement">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField label="Domain" error={errorFor("domain_id")} required>
+            <Combobox
+              options={domainOptions}
+              value={form.domainId}
+              onValueChange={(next) => {
+                const row = domainRows.find((candidate) => candidate.id === next);
+                setForm((previous) => ({
+                  ...previous,
+                  domainId: next ?? "",
+                  serverId: row?.server_id ?? previous.serverId,
+                }));
+              }}
+              placeholder="Select a domain"
+              emptyMessage="No domain matches that name."
+              loading={domains.isLoading}
+              mono
+            />
+          </FormField>
+
+          <FormField
+            label="Server"
+            description="The host whose vhost serves the domain."
+            error={errorFor("server_id")}
+            required
+          >
+            <Combobox
+              options={serverOptions}
+              value={form.serverId}
+              onValueChange={(next) => set("serverId", next ?? "")}
+              placeholder={
+                serverOptions.length === 0 ? "No host you can write to" : "Select a server"
+              }
+              emptyMessage="No server matches that name."
+              loading={servers.isLoading}
+              disabled={serverOptions.length === 0}
+              mono
+            />
+          </FormField>
+        </div>
+      </FormSection>
+
+      <FormSection index={2} title="Key pair">
+        <FormField
+          label="Certificate chain"
+          description={
+            selected
+              ? `PEM, the certificate for ${selected.name} first, then its intermediates.`
+              : "PEM, the leaf certificate first, then its intermediates."
+          }
+          error={errorFor("certificate_pem")}
+          required
+        >
+          <Textarea
+            value={form.certificatePem}
+            onChange={(event) => set("certificatePem", event.target.value)}
+            placeholder="-----BEGIN CERTIFICATE-----"
+            rows={6}
             mono
+            spellCheck={false}
+            autoComplete="off"
           />
         </FormField>
 
         <FormField
-          label="Server"
-          description="The host whose vhost serves the domain."
-          error={errorFor("server_id")}
+          label="Private key"
+          description="PEM, unencrypted. Sealed for the job that installs it, then discarded; it is never shown again."
+          error={errorFor("key_pem")}
           required
         >
-          <Combobox
-            options={serverOptions}
-            value={form.serverId}
-            onValueChange={(next) => set("serverId", next ?? "")}
-            placeholder={
-              serverOptions.length === 0 ? "No host you can write to" : "Select a server"
-            }
-            emptyMessage="No server matches that name."
-            loading={servers.isLoading}
-            disabled={serverOptions.length === 0}
+          <Textarea
+            value={form.keyPem}
+            onChange={(event) => set("keyPem", event.target.value)}
+            placeholder="-----BEGIN PRIVATE KEY-----"
+            rows={5}
             mono
+            spellCheck={false}
+            autoComplete="off"
+            data-1p-ignore
           />
         </FormField>
-      </div>
-
-      <FormField
-        label="Certificate chain"
-        description={
-          selected
-            ? `PEM, the certificate for ${selected.name} first, then its intermediates.`
-            : "PEM, the leaf certificate first, then its intermediates."
-        }
-        error={errorFor("certificate_pem")}
-        required
-      >
-        <Textarea
-          value={form.certificatePem}
-          onChange={(event) => set("certificatePem", event.target.value)}
-          placeholder="-----BEGIN CERTIFICATE-----"
-          rows={6}
-          mono
-          spellCheck={false}
-          autoComplete="off"
-        />
-      </FormField>
-
-      <FormField
-        label="Private key"
-        description="PEM, unencrypted. Sealed for the job that installs it, then discarded; it is never shown again."
-        error={errorFor("key_pem")}
-        required
-      >
-        <Textarea
-          value={form.keyPem}
-          onChange={(event) => set("keyPem", event.target.value)}
-          placeholder="-----BEGIN PRIVATE KEY-----"
-          rows={5}
-          mono
-          spellCheck={false}
-          autoComplete="off"
-          data-1p-ignore
-        />
-      </FormField>
+      </FormSection>
     </FormDialog>
   );
 }

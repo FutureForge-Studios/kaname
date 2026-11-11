@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check } from "lucide-react";
+import { AlertTriangle, Check, X } from "lucide-react";
 import { cn, variant } from "../lib/cn.js";
 import type { Tone } from "./Badge.js";
 
@@ -20,7 +20,7 @@ import type { Tone } from "./Badge.js";
  * the page anatomy they add up to are in docs/redesign-guide.md.
  * ------------------------------------------------------------------ */
 
-type IconComponent = React.ComponentType<{ size?: number | string; className?: string }>;
+export type IconComponent = React.ComponentType<{ size?: number | string; className?: string }>;
 
 /** "1" -> "01", "12" -> "12", "A" -> "A". The mono section number. */
 export function formatIndex(index: number | string): string {
@@ -337,12 +337,22 @@ export const NumberedSection = React.forwardRef<HTMLElement, NumberedSectionProp
 
 /* ------------------------------- CheckList ----------------------------- */
 
-export type CheckItemState = "done" | "current" | "todo";
+export type CheckItemState = "done" | "current" | "todo" | "warning" | "failed";
 
 const CHECK_MARKS: Record<CheckItemState, string> = {
   done: "bg-[var(--kn-accent-soft-strong)] text-[var(--kn-accent-400)] border-transparent",
   current: "bg-transparent text-[var(--kn-accent-400)] border-[var(--kn-accent-500)]",
   todo: "bg-transparent text-transparent border-[var(--kn-border-strong)]",
+  warning: "bg-[var(--kn-warn-soft)] text-[var(--kn-warn)] border-transparent",
+  failed: "bg-[var(--kn-danger-soft)] text-[var(--kn-danger)] border-transparent",
+};
+
+const CHECK_STATE_LABEL: Record<CheckItemState, string> = {
+  done: " (done)",
+  current: " (in progress)",
+  todo: " (to do)",
+  warning: " (needs attention)",
+  failed: " (failed)",
 };
 
 export interface CheckListProps extends React.HTMLAttributes<HTMLUListElement> {
@@ -380,7 +390,9 @@ export interface CheckItemProps extends Omit<React.LiHTMLAttributes<HTMLLIElemen
   /**
    * `done` (default) shows the filled circle with a check; `current`
    * an outlined purple circle with a dot; `todo` an empty hairline
-   * circle. The state is also announced to assistive tech.
+   * circle; `warning` a soft yellow circle with a triangle; `failed` a
+   * soft red circle with a cross. The state is also announced to
+   * assistive tech.
    */
   state?: CheckItemState;
   /** Replaces the check glyph (lucide, 12px). */
@@ -393,7 +405,7 @@ export const CheckItem = React.forwardRef<HTMLLIElement, CheckItemProps>(functio
   { title, description, state = "done", icon: Icon, action, className, children, ...props },
   ref,
 ) {
-  const Glyph = Icon ?? Check;
+  const Glyph = Icon ?? (state === "failed" ? X : state === "warning" ? AlertTriangle : Check);
   return (
     <li ref={ref} className={cn("flex items-start gap-3.5 py-3.5", className)} {...props}>
       <span
@@ -418,7 +430,7 @@ export const CheckItem = React.forwardRef<HTMLLIElement, CheckItemProps>(functio
         >
           {title}
           <span className="sr-only">
-            {state === "done" ? " (done)" : state === "current" ? " (in progress)" : " (to do)"}
+            {CHECK_STATE_LABEL[state] ?? CHECK_STATE_LABEL.done}
           </span>
         </p>
         {description && <p className="m-0 mt-0.5 text-sm text-[var(--kn-text-2)]">{description}</p>}

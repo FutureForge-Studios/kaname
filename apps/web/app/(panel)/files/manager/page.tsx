@@ -728,7 +728,6 @@ export default function FileManagerPage() {
             />
             <span aria-hidden className="h-4 w-px shrink-0 bg-[var(--kn-border)]" />
             <PathBreadcrumb path={path} onNavigate={setPath} className="min-w-0 flex-1" />
-            <CopyButton value={path} label="Copy this path" size="xs" />
           </div>
         </div>
 

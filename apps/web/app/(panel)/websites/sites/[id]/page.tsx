@@ -514,9 +514,7 @@ function OverviewTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
       >
         {site.ssl ? (
           <StatusLine tone={lineTone(certificateStatusTone(site.ssl.status))}>
-            <span className="text-[var(--kn-text)]">
-              {certificateStatusLabel(site.ssl.status)}
-            </span>
+            <span className="text-[var(--kn-text)]">{certificateStatusLabel(site.ssl.status)}</span>
             {" · "}
             <Expiry days={site.ssl.days_remaining} at={site.ssl.expires_at} /> left · covering{" "}
             <MonoText>{site.primary_domain ?? site.name}</MonoText>
@@ -569,8 +567,7 @@ function RequestPath({ site }: { site: Site }) {
       ) : (
         <span className="text-[var(--kn-text-3)]">No domain attached</span>
       ),
-      detail:
-        extra > 0 ? `+${formatCount(extra)} more name${extra === 1 ? "" : "s"}` : undefined,
+      detail: extra > 0 ? `+${formatCount(extra)} more name${extra === 1 ? "" : "s"}` : undefined,
     },
     {
       label: "Host",

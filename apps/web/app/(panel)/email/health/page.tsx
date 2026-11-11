@@ -125,7 +125,7 @@ export default function MailHealthPage() {
         actions={selected && <ServerActions server={selected} />}
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-5 px-6 py-5 *:shrink-0">
         <div className="flex flex-wrap items-center gap-3">
           <MailServerPicker
             value={selected?.id ?? null}
@@ -151,7 +151,11 @@ export default function MailHealthPage() {
         <JobActivityBar types={HEALTH_JOB_TYPES} className="shrink-0" />
 
         {query.isError ? (
-          <PageError error={query.error} onRetry={() => void query.refetch()} context="Mail health" />
+          <PageError
+            error={query.error}
+            onRetry={() => void query.refetch()}
+            context="Mail health"
+          />
         ) : query.isLoading ? (
           <div className="flex flex-col gap-4" aria-busy>
             <Skeleton className="h-24 rounded-[var(--kn-r-md)]" label="Loading mail servers" />
@@ -192,7 +196,11 @@ export default function MailHealthPage() {
               }
               secondaryAction={
                 !noHost && can("email.servers:write") ? (
-                  <Button variant="secondary" size="sm" onClick={() => router.push("/email?adopt=1")}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => router.push("/email?adopt=1")}
+                  >
                     Adopt one installed by hand
                   </Button>
                 ) : undefined
@@ -334,7 +342,9 @@ function CertificateCard({ server }: { server: MailServer }) {
       }
     >
       {!cert ? (
-        <p className="text-sm text-[var(--kn-text-3)]">The host has not reported a certificate yet.</p>
+        <p className="text-sm text-[var(--kn-text-3)]">
+          The host has not reported a certificate yet.
+        </p>
       ) : (
         <PropertyList labelWidth="md" dense>
           <PropertyRow label="State">
@@ -367,8 +377,13 @@ function CertificateCard({ server }: { server: MailServer }) {
               </span>
             ) : null}
           </PropertyRow>
-          <PropertyRow label="Expires">{cert.expires_at ? formatDateTime(cert.expires_at) : null}</PropertyRow>
-          <PropertyRow label="Authority" hint="Who issued it. 'staging' means the rehearsal CA, which nothing trusts.">
+          <PropertyRow label="Expires">
+            {cert.expires_at ? formatDateTime(cert.expires_at) : null}
+          </PropertyRow>
+          <PropertyRow
+            label="Authority"
+            hint="Who issued it. 'staging' means the rehearsal CA, which nothing trusts."
+          >
             {cert.authority ?? cert.issuer}
           </PropertyRow>
           <PropertyRow label="Renews" hint="Renewal starts 30 days before expiry.">
@@ -427,9 +442,17 @@ function PreflightCard({ server }: { server: MailServer }) {
       actions={
         preflight.data && (
           <span className="flex items-center gap-2 text-xs">
-            {counts.fail > 0 && <span className="text-[var(--kn-danger)]">{pluralize(counts.fail, "failing", "failing")}</span>}
-            {counts.warn > 0 && <span className="text-[var(--kn-warn)]">{pluralize(counts.warn, "warning")}</span>}
-            <span className="text-[var(--kn-text-3)]">{pluralize(counts.pass, "passing", "passing")}</span>
+            {counts.fail > 0 && (
+              <span className="text-[var(--kn-danger)]">
+                {pluralize(counts.fail, "failing", "failing")}
+              </span>
+            )}
+            {counts.warn > 0 && (
+              <span className="text-[var(--kn-warn)]">{pluralize(counts.warn, "warning")}</span>
+            )}
+            <span className="text-[var(--kn-text-3)]">
+              {pluralize(counts.pass, "passing", "passing")}
+            </span>
           </span>
         )
       }
@@ -458,13 +481,21 @@ function PreflightCard({ server }: { server: MailServer }) {
           </div>
 
           {preflight.isError && (
-            <PageError error={preflight.error} onRetry={() => void preflight.refetch()} context="Preflight" />
+            <PageError
+              error={preflight.error}
+              onRetry={() => void preflight.refetch()}
+              context="Preflight"
+            />
           )}
           {preflight.isFetching && !preflight.data && (
             <Skeleton className="h-24 rounded-[var(--kn-r-sm)]" label="Running preflight" />
           )}
           {preflight.data && (
-            <ChecksList checks={checks} grouped={false} emptyLabel="Preflight reported no checks." />
+            <ChecksList
+              checks={checks}
+              grouped={false}
+              emptyLabel="Preflight reported no checks."
+            />
           )}
           {!asked && !preflight.isFetching && (
             <p className="text-sm text-[var(--kn-text-3)]">

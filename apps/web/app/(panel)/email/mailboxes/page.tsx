@@ -22,7 +22,7 @@ import { FormDialog, fieldErrors } from "../../_components/FormDialog";
 import { JobActivityBar } from "../../_components/JobActivity";
 import { FilterSelect } from "../../websites/_components/filters";
 import { CredentialDialog, type Credential } from "../_components/CredentialDialog";
-import { useMailPrerequisite } from "../_components/prerequisites";
+import { MailChainChecklist, useMailPrerequisite } from "../_components/prerequisites";
 import {
   useCreateMailbox,
   useDeleteMailbox,
@@ -91,7 +91,11 @@ export default function MailboxesPage() {
         minWidth: 140,
         hideBelow: "md",
         cell: (mailbox) =>
-          mailbox.display_name ? <span className="truncate">{mailbox.display_name}</span> : <Blank />,
+          mailbox.display_name ? (
+            <span className="truncate">{mailbox.display_name}</span>
+          ) : (
+            <Blank />
+          ),
       },
       {
         id: "domain_name",
@@ -111,7 +115,9 @@ export default function MailboxesPage() {
         header: "Server",
         minWidth: 160,
         hideBelow: "md",
-        cell: (mailbox) => <HostCell serverId={mailbox.server_id} serverName={mailbox.server_name} />,
+        cell: (mailbox) => (
+          <HostCell serverId={mailbox.server_id} serverName={mailbox.server_name} />
+        ),
       },
       {
         id: "quota_bytes",
@@ -179,7 +185,8 @@ export default function MailboxesPage() {
         icon: Trash2,
         destructive: true,
         separatorBefore: true,
-        disabled: mailbox.status === "removing" || !can("email.mailboxes:delete", mailbox.server_id),
+        disabled:
+          mailbox.status === "removing" || !can("email.mailboxes:delete", mailbox.server_id),
         onSelect: () => setDeleting(mailbox),
       },
     ],
@@ -201,7 +208,9 @@ export default function MailboxesPage() {
   return (
     <>
       <ResourcePage<Mailbox>
+        eyebrow="Email"
         title="Mailboxes"
+        lede="Accounts people sign in to. Passwords are generated on the host and shown once, never stored by Kaname."
         subtitle="Accounts on your Yunori Mail Servers"
         primaryAction={createButton}
         state={state}
@@ -238,6 +247,7 @@ export default function MailboxesPage() {
             allowAll
           />
         </div>
+        <MailChainChecklist needs="mailbox" prerequisite={prerequisite} />
         <JobActivityBar types={MAILBOX_JOB_TYPES} />
       </ResourcePage>
 
@@ -265,7 +275,11 @@ export default function MailboxesPage() {
             {
               onSuccess: (result) => {
                 setResetting(null);
-                setCredential({ address: result.address, password: result.password, reason: "reset" });
+                setCredential({
+                  address: result.address,
+                  password: result.password,
+                  reason: "reset",
+                });
               },
             },
           );
@@ -307,7 +321,12 @@ interface CreateMailboxDialogProps {
   onCreated: (address: string, password: string) => void;
 }
 
-function CreateMailboxDialog({ open, onOpenChange, defaultDomainId, onCreated }: CreateMailboxDialogProps) {
+function CreateMailboxDialog({
+  open,
+  onOpenChange,
+  defaultDomainId,
+  onCreated,
+}: CreateMailboxDialogProps) {
   const create = useCreateMailbox();
   const domains = useMailDomains();
 
@@ -374,26 +393,40 @@ function CreateMailboxDialog({ open, onOpenChange, defaultDomainId, onCreated }:
         hint={<MonoText muted>{preview}</MonoText>}
         error={
           fields["local_part"] ??
-          (localPart.length > 0 && !localValid ? "Use letters, digits, dots, dashes or underscores." : undefined)
+          (localPart.length > 0 && !localValid
+            ? "Use letters, digits, dots, dashes or underscores."
+            : undefined)
         }
       >
         <Input
           mono
           value={localPart}
           placeholder="alice"
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) => setLocalPart(event.target.value)}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+            setLocalPart(event.target.value)
+          }
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          trailing={domain ? <span className="kn-mono text-[var(--kn-text-3)]">@{domain.domain_name}</span> : undefined}
+          trailing={
+            domain ? (
+              <span className="kn-mono text-[var(--kn-text-3)]">@{domain.domain_name}</span>
+            ) : undefined
+          }
         />
       </FormField>
 
-      <FormField label="Display name" description="Shown to recipients as the sender's name." error={fields["display_name"]}>
+      <FormField
+        label="Display name"
+        description="Shown to recipients as the sender's name."
+        error={fields["display_name"]}
+      >
         <Input
           value={displayName}
           placeholder="Alice Example"
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) => setDisplayName(event.target.value)}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+            setDisplayName(event.target.value)
+          }
           autoComplete="off"
         />
       </FormField>
@@ -402,7 +435,10 @@ function CreateMailboxDialog({ open, onOpenChange, defaultDomainId, onCreated }:
         label="Quota"
         description="In megabytes. 0 means unlimited."
         hint="MB"
-        error={fields["quota_mb"] ?? (!quotaValid ? "Enter a whole number of megabytes, or 0." : undefined)}
+        error={
+          fields["quota_mb"] ??
+          (!quotaValid ? "Enter a whole number of megabytes, or 0." : undefined)
+        }
       >
         <Input
           mono

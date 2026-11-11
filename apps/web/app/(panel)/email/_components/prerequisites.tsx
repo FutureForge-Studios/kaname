@@ -2,6 +2,7 @@
 
 import { Globe, Mail, MailCheck, Plus } from "lucide-react";
 import { LinkButton, type ResourcePrerequisite } from "@/components/ResourcePage";
+import { Card, CheckItem, CheckList } from "@kaname/ui";
 import { useCan } from "@/lib/queries";
 import { useMailDomains, useMailServers, useMailboxes } from "./queries";
 
@@ -80,4 +81,66 @@ export function useMailPrerequisite(needs: MailLevel): ResourcePrerequisite | nu
   }
 
   return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * The chain, drawn.
+ * ------------------------------------------------------------------ */
+
+const CHAIN: { level: MailLevel | "alias"; title: string; description: string }[] = [
+  {
+    level: "server",
+    title: "A Yunori Mail Server",
+    description: "Deployed on one of your hosts, or adopted from a hand install.",
+  },
+  {
+    level: "domain",
+    title: "A mail domain",
+    description: "A domain the server accepts mail for, with its DNS records published.",
+  },
+  {
+    level: "mailbox",
+    title: "A mailbox",
+    description: "An account people sign in to, on that domain.",
+  },
+  {
+    level: "alias",
+    title: "An alias",
+    description: "A second address that delivers into a mailbox.",
+  },
+];
+
+const ORDER = ["server", "domain", "mailbox", "alias"] as const;
+
+/**
+ * Where this list sits in the mail chain while something before it is
+ * missing: what exists (done), the link to make next (current), and
+ * what waits on it (todo). Renders nothing once the chain is complete.
+ */
+export function MailChainChecklist({
+  needs,
+  prerequisite,
+}: {
+  /** The level this page lists. */
+  needs: "domain" | "mailbox" | "alias";
+  prerequisite: ResourcePrerequisite | null;
+}) {
+  if (!prerequisite) return null;
+  const missing = prerequisite.icon === MailCheck ? 0 : prerequisite.icon === Globe ? 1 : 2;
+  const upTo = ORDER.indexOf(needs);
+  return (
+    <Card padding="none" className="px-4">
+      <CheckList divided="between" aria-label="What email needs first">
+        {CHAIN.slice(0, upTo + 1).map((step, index) => (
+          <CheckItem
+            key={step.level}
+            className="py-2.5"
+            state={index < missing ? "done" : index === missing ? "current" : "todo"}
+            title={step.title}
+            description={step.description}
+          />
+        ))}
+      </CheckList>
+    </Card>
+  );
 }

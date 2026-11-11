@@ -3,11 +3,11 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { NAVIGATION, type NavLeaf, type NavSection } from "@kaname/contract";
-import { IconButton, Kbd, Tooltip, cn } from "@kaname/ui";
+import { LifeBuoy, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import type { NavLeaf, NavSection, ResellerBranding } from "@kaname/contract";
+import { IconButton, Kbd, MonoLabel, Tooltip, cn } from "@kaname/ui";
 import { iconFor } from "@/lib/icons";
-import { useCan } from "@/lib/queries";
+import { AUDIENCE_LABELS, useModes, useNavigation } from "@/lib/modes";
 import { Wordmark } from "./Logo";
 
 /* ------------------------------------------------------------------ *
@@ -22,6 +22,11 @@ import { Wordmark } from "./Logo";
  * ffstudios treatment: flat ink with a hairline edge, groups opened by
  * a numbered mono uppercase label ("01 INFRASTRUCTURE"), and the active
  * leaf marked by a purple bar on the rail rather than a filled row.
+ *
+ * What is listed also depends on the view mode and audience (KD-039):
+ * lib/modes.tsx decides, so the palette and the sidebar agree. A
+ * reseller's clients see the reseller's name and mark up here, and its
+ * support contact at the foot.
  * ------------------------------------------------------------------ */
 
 export type SidebarVariant = "fixed" | "drawer";
@@ -32,11 +37,6 @@ export interface SidebarProps {
   onCollapsedChange?: (collapsed: boolean) => void;
   /** Closes the mobile drawer when a destination is chosen. */
   onNavigate?: () => void;
-}
-
-interface VisibleSection {
-  section: NavSection;
-  leaves: NavLeaf[];
 }
 
 /** A path is active for the deepest matching leaf, so detail routes light up their list. */
@@ -52,22 +52,10 @@ export function Sidebar({
   onNavigate,
 }: SidebarProps) {
   const pathname = usePathname() ?? "/";
-  const can = useCan();
+  const { branding, audience, preview } = useModes();
   const drawer = variant === "drawer";
   const narrow = collapsed && !drawer;
-
-  const sections = React.useMemo<VisibleSection[]>(() => {
-    const out: VisibleSection[] = [];
-    for (const section of NAVIGATION) {
-      if (!section.children) {
-        if (can(section.permission)) out.push({ section, leaves: [] });
-        continue;
-      }
-      const leaves = section.children.filter((leaf) => can(leaf.permission));
-      if (leaves.length > 0) out.push({ section, leaves });
-    }
-    return out;
-  }, [can]);
+  const sections = useNavigation();
 
   return (
     <div
@@ -85,10 +73,14 @@ export function Sidebar({
         >
           <Link
             href="/"
-            aria-label="Kaname — Command Center"
-            className="rounded-[var(--kn-r-sm)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+            aria-label={branding ? `${branding.display_name} — Home` : "Kaname — Command Center"}
+            className="min-w-0 rounded-[var(--kn-r-sm)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
           >
-            <Wordmark markOnly={narrow} />
+            {branding ? (
+              <BrandMark branding={branding} markOnly={narrow} />
+            ) : (
+              <Wordmark markOnly={narrow} />
+            )}
           </Link>
           {!narrow && onCollapsedChange && (
             <IconButton
@@ -122,6 +114,18 @@ export function Sidebar({
           />
         ))}
       </nav>
+
+      {!narrow && (branding?.support_email || branding?.support_url) && (
+        <SupportFooter branding={branding} />
+      )}
+
+      {!narrow && preview && (
+        <div className="shrink-0 border-t border-[var(--kn-border)] px-4 py-2.5">
+          <MonoLabel size="xs" tone="accent">
+            Preview · {AUDIENCE_LABELS[audience]} navigation
+          </MonoLabel>
+        </div>
+      )}
 
       {!drawer && narrow && onCollapsedChange && (
         <div className="flex h-9 shrink-0 items-center justify-center border-t border-[var(--kn-border)]">
@@ -272,5 +276,62 @@ function SidebarLink({
     <Tooltip content={shortcut ? `${label} — g then ${shortcut}` : label} placement="right">
       {link}
     </Tooltip>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Reseller branding
+ * ------------------------------------------------------------------ */
+
+function initialsOf(branding: ResellerBranding): string {
+  if (branding.logo_text) return branding.logo_text.slice(0, 4);
+  const words = branding.display_name.split(/\s+/).filter(Boolean);
+  return (words.length > 1 ? `${words[0]![0]}${words[1]![0]}` : branding.display_name.slice(0, 2))
+    .toUpperCase();
+}
+
+/** The reseller's mark: its initials in the hairline square, then its name. */
+export function BrandMark({
+  branding,
+  markOnly = false,
+}: {
+  branding: ResellerBranding;
+  markOnly?: boolean;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-2.5">
+      <span
+        aria-hidden
+        className="kn-mono inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-[var(--kn-r-sm)] border border-[var(--kn-accent-500)] bg-[var(--kn-accent-soft)] px-1 text-[11px] font-medium text-[var(--kn-accent-400)]"
+      >
+        {initialsOf(branding)}
+      </span>
+      {!markOnly && (
+        <span className="min-w-0 truncate text-[15px] font-medium tracking-[-0.02em] text-[var(--kn-text)]">
+          {branding.display_name}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function SupportFooter({ branding }: { branding: ResellerBranding }) {
+  const href = branding.support_url ?? (branding.support_email ? `mailto:${branding.support_email}` : null);
+  if (!href) return null;
+  return (
+    <div className="shrink-0 border-t border-[var(--kn-border)] px-4 py-3">
+      <MonoLabel size="xs" className="block">
+        Support
+      </MonoLabel>
+      <a
+        href={href}
+        target={branding.support_url ? "_blank" : undefined}
+        rel={branding.support_url ? "noreferrer" : undefined}
+        className="mt-1 flex items-center gap-1.5 truncate text-[var(--kn-text-2)] outline-none hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-[var(--kn-ring)]"
+      >
+        <LifeBuoy size={13} aria-hidden className="shrink-0 text-[var(--kn-text-3)]" />
+        <span className="truncate">{branding.support_email ?? branding.support_url}</span>
+      </a>
+    </div>
   );
 }

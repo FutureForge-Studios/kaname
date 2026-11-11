@@ -140,9 +140,11 @@ function StepRail({ current, outcomes }: { current: SetupStep; outcomes?: SetupS
         })}
       </ol>
 
-      <p className="m-0 hidden text-sm text-[var(--kn-text-3)] lg:block">
-        Close the tab whenever you like. Setup picks up where you left it.
-      </p>
+      {index < total - 1 && (
+        <p className="m-0 hidden text-sm text-[var(--kn-text-3)] lg:block">
+          Close the tab whenever you like. Setup picks up where you left it.
+        </p>
+      )}
     </nav>
   );
 }

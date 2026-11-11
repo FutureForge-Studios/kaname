@@ -279,7 +279,11 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                   description={`Kaname renews inside the 30-day window without being asked. Turning this off means the ${certificate.subject} certificate lapses unless someone renews it by hand.`}
                 />
 
-                <CardInset grid padding="sm" className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <CardInset
+                  grid
+                  padding="sm"
+                  className="flex flex-wrap items-center gap-x-4 gap-y-2"
+                >
                   <div className="flex min-w-0 flex-col gap-1">
                     <MonoLabel size="xs" tone="muted">
                       Valid for

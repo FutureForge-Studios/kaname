@@ -3,6 +3,8 @@
 import * as React from "react";
 import {
   Check,
+  Eye,
+  EyeOff,
   Keyboard,
   LogOut,
   Menu,
@@ -10,9 +12,11 @@ import {
   Moon,
   Search,
   Settings,
+  SlidersHorizontal,
   Sun,
   UserRound,
 } from "lucide-react";
+import type { ViewMode } from "@kaname/contract";
 import {
   Avatar,
   DropdownMenu,
@@ -21,10 +25,12 @@ import {
   MenuItem,
   MenuLabel,
   MenuSeparator,
+  SegmentedControl,
   SubMenu,
   cn,
 } from "@kaname/ui";
 import { api } from "@/lib/api";
+import { useModes } from "@/lib/modes";
 import { useSession } from "@/lib/queries";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { useCommandPalette } from "./CommandPalette";
@@ -37,7 +43,16 @@ import { JobActivityButton } from "./JobDrawer";
  * are, the way to get anywhere (the palette), what is running (jobs),
  * and who you are. Page-specific actions belong to the PageHeader
  * underneath it, so the two never compete for the same corner.
+ *
+ * The one exception is the Simplified / Advanced switch (KD-039): it
+ * changes what every page offers, so it sits with the other global
+ * controls. Below 768px it moves into the account menu.
  * ------------------------------------------------------------------ */
+
+const VIEW_MODE_OPTIONS = [
+  { value: "simplified", label: "Simplified" },
+  { value: "advanced", label: "Advanced" },
+] as const satisfies readonly { value: ViewMode; label: string }[];
 
 export type ThemeChoice = "dark" | "light" | "system";
 
@@ -91,6 +106,7 @@ export interface TopbarProps {
 export function Topbar({ onOpenNav, className }: TopbarProps) {
   const palette = useCommandPalette();
   const { session, can } = useSession();
+  const modes = useModes();
   const [theme, setTheme] = React.useState<ThemeChoice>("system");
 
   React.useEffect(() => setTheme(readTheme()), []);
@@ -145,6 +161,18 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
         className="sm:hidden"
       />
 
+      {user && (
+        <SegmentedControl
+          label="View mode"
+          size="xs"
+          options={VIEW_MODE_OPTIONS}
+          value={modes.viewMode}
+          onValueChange={modes.setViewMode}
+          className="hidden md:inline-flex"
+          data-testid="view-mode-switch"
+        />
+      )}
+
       <JobActivityButton />
 
       <DropdownMenu
@@ -186,6 +214,38 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
             </MenuItem>
           ))}
         </SubMenu>
+
+        {user && (
+          <SubMenu
+            label={`View — ${modes.viewMode === "simplified" ? "Simplified" : "Advanced"}`}
+            icon={SlidersHorizontal}
+          >
+            {VIEW_MODE_OPTIONS.map((option) => (
+              <MenuItem
+                key={option.value}
+                role="menuitemradio"
+                aria-checked={modes.viewMode === option.value}
+                icon={modes.viewMode === option.value ? Check : undefined}
+                onSelect={() => modes.setViewMode(option.value)}
+              >
+                {option.label}
+              </MenuItem>
+            ))}
+          </SubMenu>
+        )}
+
+        {modes.preview ? (
+          <MenuItem icon={EyeOff} onSelect={modes.exitPreview}>
+            Exit {modes.preview} preview
+          </MenuItem>
+        ) : (
+          modes.canPreview && (
+            <SubMenu label="View as…" icon={Eye}>
+              <MenuItem onSelect={() => modes.startPreview("client")}>Client</MenuItem>
+              <MenuItem onSelect={() => modes.startPreview("reseller")}>Reseller</MenuItem>
+            </SubMenu>
+          )
+        )}
 
         <MenuItem
           icon={Keyboard}

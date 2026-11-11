@@ -41,7 +41,11 @@ export function recordPurpose(record: MailDnsRecord): string | null {
   if (name.startsWith("_mta-sts.") || name.startsWith("mta-sts.")) return "MTA-STS";
   if (name.startsWith("_smtp._tls.")) return "TLS-RPT";
   if (value.startsWith("v=spf1")) return "SPF";
-  if (name.startsWith("autoconfig.") || name.startsWith("autodiscover.") || name.startsWith("_autodiscover.")) {
+  if (
+    name.startsWith("autoconfig.") ||
+    name.startsWith("autodiscover.") ||
+    name.startsWith("_autodiscover.")
+  ) {
     return "Autoconfig";
   }
   if (record.type === "MX") return "MX";
@@ -72,7 +76,12 @@ export function DnsDrawer({ domain, onClose }: DnsDrawerProps) {
   const missing = records.filter((record) => record.required && record.status === "fail").length;
 
   return (
-    <Drawer open={domain !== null} onOpenChange={(open) => !open && onClose()} side="right" size="lg">
+    <Drawer
+      open={domain !== null}
+      onOpenChange={(open) => !open && onClose()}
+      side="right"
+      size="lg"
+    >
       {domain && (
         <>
           <DrawerHeader
@@ -110,7 +119,11 @@ export function DnsDrawer({ domain, onClose }: DnsDrawerProps) {
 
           <DrawerBody>
             {report.isError ? (
-              <PageError error={report.error} onRetry={() => void report.refetch()} context="DNS records" />
+              <PageError
+                error={report.error}
+                onRetry={() => void report.refetch()}
+                context="DNS records"
+              />
             ) : report.isLoading ? (
               <div className="flex flex-col gap-2" aria-busy>
                 <Skeleton className="h-16 rounded-[var(--kn-r-sm)]" label="Loading DNS records" />
@@ -122,7 +135,10 @@ export function DnsDrawer({ domain, onClose }: DnsDrawerProps) {
                 The host has not reported any records for this domain yet. Run a check.
               </p>
             ) : (
-              <ul className="m-0 flex list-none flex-col divide-y divide-[var(--kn-border)] p-0" aria-label="DNS records">
+              <ul
+                className="m-0 flex list-none flex-col divide-y divide-[var(--kn-border)] p-0"
+                aria-label="DNS records"
+              >
                 {records.map((record) => (
                   <DnsRecordRow key={record.id} record={record} />
                 ))}
@@ -224,7 +240,9 @@ function DnsRecordRow({ record }: { record: MailDnsRecord }) {
         </div>
       )}
       {record.status === "fail" && record.actual.length === 0 && (
-        <p className="kn-mono m-0 text-2xs text-[var(--kn-danger)]">found: nothing — public resolvers return no record.</p>
+        <p className="kn-mono m-0 text-2xs text-[var(--kn-danger)]">
+          found: nothing — public resolvers return no record.
+        </p>
       )}
     </li>
   );

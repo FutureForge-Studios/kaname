@@ -14,7 +14,6 @@ import {
   Zap,
 } from "lucide-react";
 import {
-  NAV_LEAVES,
   type Permission,
   type SearchAction,
   type SearchResponse,
@@ -23,6 +22,7 @@ import {
 import { Dialog, Kbd, Spinner, cn } from "@kaname/ui";
 import { api, type ApiError } from "@/lib/api";
 import { iconFor, type IconComponent } from "@/lib/icons";
+import { flattenNavigation, useNavigation } from "@/lib/modes";
 import { queryKeys, useCan, useJobDrawer } from "@/lib/queries";
 import { PageError } from "./PageError";
 
@@ -167,6 +167,9 @@ function CommandPalette({ open, onOpenChange, seed }: CommandPaletteProps) {
   const router = useRouter();
   const can = useCan();
   const drawer = useJobDrawer();
+  // The same destinations the sidebar lists for this mode (KD-039).
+  const navigation = useNavigation();
+  const navLeaves = React.useMemo(() => flattenNavigation(navigation), [navigation]);
 
   const [value, setValue] = React.useState("");
   const [debounced, setDebounced] = React.useState("");
@@ -233,7 +236,7 @@ function CommandPalette({ open, onOpenChange, seed }: CommandPaletteProps) {
     }
 
     /* Destinations resolve locally; no round trip, no loading state. */
-    const destinations = NAV_LEAVES.filter((leaf) => can(leaf.permission))
+    const destinations = navLeaves
       .map((leaf) => ({
         leaf,
         rank: Math.max(score(leaf.label, query), score(`${leaf.section} ${leaf.label}`, query)),
@@ -311,7 +314,7 @@ function CommandPalette({ open, onOpenChange, seed }: CommandPaletteProps) {
     }
 
     return out;
-  }, [can, close, debounced, drawer, go, recents, router, search.data]);
+  }, [can, close, debounced, drawer, go, navLeaves, recents, router, search.data]);
 
   React.useEffect(() => {
     setActive((current) => (current >= items.length ? 0 : current));
