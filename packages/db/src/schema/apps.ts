@@ -1,4 +1,5 @@
-import { boolean, index, jsonb, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type {
   AppInstallStatus,
   AppInstallStepId,
@@ -63,6 +64,18 @@ export interface AppInstallResources {
   site_created?: boolean;
   certificate_attempted?: boolean;
   certificate_issued?: boolean;
+  /* Image recipes (KD-040). The containers, network and data directory
+   * are all labelled with the install id on the host, so one flag per
+   * kind is enough: removal finds them by label, not by remembered id. */
+  images_pulled?: boolean;
+  network_attempted?: boolean;
+  network_created?: boolean;
+  db_container_attempted?: boolean;
+  db_container_created?: boolean;
+  app_container_attempted?: boolean;
+  app_container_created?: boolean;
+  /** Under the managed apps root; removed with the containers. */
+  data_dir?: string;
 }
 
 export interface AppInstallInputs {
@@ -95,6 +108,11 @@ export const appInstalls = pgTable(
     certificateId: uuid("certificate_id").references(() => certificates.id, {
       onDelete: "set null",
     }),
+    /**
+     * Image recipes: the 127.0.0.1 port the app container is published on.
+     * Unique per server, so two installs can never be handed the same one.
+     */
+    appPort: integer("app_port"),
 
     steps: jsonb("steps").$type<AppInstallStepState[]>().notNull().default([]),
     resources: jsonb("resources").$type<AppInstallResources>().notNull().default({}),
@@ -109,5 +127,8 @@ export const appInstalls = pgTable(
     index("app_installs_server_idx").on(t.serverId),
     index("app_installs_domain_idx").on(t.domain),
     index("app_installs_created_by_idx").on(t.createdBy),
+    uniqueIndex("app_installs_server_port_idx")
+      .on(t.serverId, t.appPort)
+      .where(sql`${t.appPort} is not null`),
   ],
 );
