@@ -87,6 +87,9 @@ export const JOB_TYPES = [
   // deployments
   "deployment.run",
   "deployment.rollback",
+  // apps (the one-click installer)
+  "app.install",
+  "app.uninstall",
   // mail (Yunori Mail Server)
   "mail.server.deploy",
   "mail.server.update",
@@ -465,6 +468,29 @@ export const JOB_SPECS: Record<JobType, JobTypeSpec> = {
     idempotent: false,
     maxAttempts: 1,
     timeoutMs: 10 * M,
+    destructive: true,
+  },
+
+  /*
+   * One job for the whole bundle. Idempotent because it is resumable by
+   * construction: every step records what it created before it moves on
+   * (app_installs.steps / resources), so a run that was cut off — the
+   * agent dropped, the control plane restarted — picks up where it
+   * stopped instead of creating a second database.
+   */
+  "app.install": {
+    label: "Install app",
+    permission: "apps.installs:write",
+    idempotent: true,
+    maxAttempts: 1,
+    timeoutMs: 30 * M,
+  },
+  "app.uninstall": {
+    label: "Uninstall app",
+    permission: "apps.installs:delete",
+    idempotent: true,
+    maxAttempts: 1,
+    timeoutMs: 15 * M,
     destructive: true,
   },
 

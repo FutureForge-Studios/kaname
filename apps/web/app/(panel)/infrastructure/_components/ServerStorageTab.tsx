@@ -9,6 +9,7 @@ import {
   DataTable,
   EmptyState,
   MetricTile,
+  NumberedSection,
   Progress,
   RelativeTime,
   SectionCard,
@@ -189,71 +190,86 @@ export function ServerStorageTab({ server }: { server: Server }) {
   if (!breakdown) return null;
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <HostSync
-        syncedAt={breakdown.sampled_at}
-        server={server}
-        noun="storage figures"
-        canSync={allowed}
-        pending={sample.isPending}
-        onSync={takeSample}
-      />
-
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <MetricTile
-          size="sm"
-          icon={HardDrive}
-          label="Used"
-          value={formatPercent(breakdown.used_percent)}
-          tone={usageTone(breakdown.used_percent)}
+    <div className="flex min-w-0 flex-col gap-8">
+      <NumberedSection
+        index={1}
+        title="Usage"
+        caption="Totals across every mount, from the last walk."
+      >
+        <HostSync
+          syncedAt={breakdown.sampled_at}
+          server={server}
+          noun="storage figures"
+          canSync={allowed}
+          pending={sample.isPending}
+          onSync={takeSample}
         />
-        <MetricTile size="sm" label="Consumed" value={<ByteSize bytes={breakdown.used} />} />
-        <MetricTile size="sm" label="Available" value={<ByteSize bytes={breakdown.available} />} />
-        <MetricTile size="sm" label="Capacity" value={<ByteSize bytes={breakdown.total} />} />
-      </div>
 
-      <SectionCard title="Mounts" padded={false}>
-        <DataTable<DiskUsage>
-          columns={mountColumns}
-          rows={breakdown.mounts}
-          getRowId={(mount) => mount.mount}
-          label={`Mounts on ${server.name}`}
-          density="compact"
-          columnVisibility={false}
-          empty={<EmptyState icon={HardDrive} title="No mounts reported" size="sm" />}
-          className="rounded-none border-0"
-        />
-      </SectionCard>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <MetricTile
+            size="sm"
+            icon={HardDrive}
+            label="Used"
+            value={formatPercent(breakdown.used_percent)}
+            tone={usageTone(breakdown.used_percent)}
+          />
+          <MetricTile size="sm" label="Consumed" value={<ByteSize bytes={breakdown.used} />} />
+          <MetricTile
+            size="sm"
+            label="Available"
+            value={<ByteSize bytes={breakdown.available} />}
+          />
+          <MetricTile size="sm" label="Capacity" value={<ByteSize bytes={breakdown.total} />} />
+        </div>
+      </NumberedSection>
 
-      <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
-        <SectionCard
-          title="Where it went"
-          description="Shares of what is consumed, not of the whole device."
-        >
-          {breakdown.categories.length === 0 ? (
-            <p className="text-[var(--kn-text-3)]">The sample carried no category breakdown.</p>
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {breakdown.categories.map((category) => (
-                <CategoryRow key={`${category.kind}-${category.path}`} category={category} />
-              ))}
-            </ul>
-          )}
-        </SectionCard>
-
-        <SectionCard title="Largest entries" padded={false}>
-          <DataTable<StorageLargestEntry>
-            columns={largestColumns}
-            rows={breakdown.largest}
-            getRowId={(entry) => entry.path}
-            label={`Largest entries on ${server.name}`}
+      <NumberedSection index={2} title="Mounts" caption="Each filesystem the host reports.">
+        <SectionCard padded={false}>
+          <DataTable<DiskUsage>
+            columns={mountColumns}
+            rows={breakdown.mounts}
+            getRowId={(mount) => mount.mount}
+            label={`Mounts on ${server.name}`}
             density="compact"
             columnVisibility={false}
-            empty={<EmptyState icon={HardDrive} title="Nothing recorded" size="sm" />}
+            empty={<EmptyState icon={HardDrive} title="No mounts reported" size="sm" />}
             className="rounded-none border-0"
           />
         </SectionCard>
-      </div>
+      </NumberedSection>
+
+      <NumberedSection index={3} title="Breakdown" caption="Where the consumed space went.">
+        <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
+          <SectionCard
+            headingLevel={3}
+            title="Where it went"
+            description="Shares of what is consumed, not of the whole device."
+          >
+            {breakdown.categories.length === 0 ? (
+              <p className="text-[var(--kn-text-3)]">The sample carried no category breakdown.</p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {breakdown.categories.map((category) => (
+                  <CategoryRow key={`${category.kind}-${category.path}`} category={category} />
+                ))}
+              </ul>
+            )}
+          </SectionCard>
+
+          <SectionCard title="Largest entries" headingLevel={3} padded={false}>
+            <DataTable<StorageLargestEntry>
+              columns={largestColumns}
+              rows={breakdown.largest}
+              getRowId={(entry) => entry.path}
+              label={`Largest entries on ${server.name}`}
+              density="compact"
+              columnVisibility={false}
+              empty={<EmptyState icon={HardDrive} title="Nothing recorded" size="sm" />}
+              className="rounded-none border-0"
+            />
+          </SectionCard>
+        </div>
+      </NumberedSection>
     </div>
   );
 }

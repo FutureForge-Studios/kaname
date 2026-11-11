@@ -1056,6 +1056,8 @@ export async function serializeUser(db: Database, row: UserRow): Promise<User> {
       row.lockedUntil && row.lockedUntil.getTime() > Date.now()
         ? row.lockedUntil.toISOString()
         : null,
+    audience: row.audience,
+    reseller_id: row.parentId,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };

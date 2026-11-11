@@ -30,6 +30,10 @@ import { useJob, useJobDrawer } from "@/lib/queries";
 const MAX_ROWS = 5;
 const TERMINAL = new Set<Job["status"]>(TERMINAL_JOB_STATUSES);
 
+/** Mono uppercase text link: the quiet action at the end of a row. */
+const ROW_LINK =
+  "kn-label-sm rounded-[var(--kn-r-xs)] text-[var(--kn-text-2)] outline-none transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)] hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]";
+
 export interface JobActivityBarProps {
   /** Job-type prefixes this surface owns, e.g. `["fs."]`. */
   types: readonly string[];
@@ -54,6 +58,7 @@ export function JobActivityBar({ types, title = "Queued work", className }: JobA
     <SectionCard
       title={title}
       icon={ListChecks}
+      caption="Started from this page."
       padded={false}
       className={className}
       actions={
@@ -77,7 +82,7 @@ function JobActivityRow({ initial }: { initial: Job }) {
   const job = query.data ?? initial;
 
   return (
-    <li className="flex items-start gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0">
+    <li className="flex items-start gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2.5 last:border-b-0">
       <JobStatusPill
         status={job.status}
         size="xs"
@@ -115,21 +120,18 @@ function JobActivityRow({ initial }: { initial: Job }) {
             {job.server_name}
           </MonoText>
         )}
-        <RelativeTime value={job.created_at} className="text-xs text-[var(--kn-text-3)]" />
+        <RelativeTime value={job.created_at} className="kn-mono text-xs text-[var(--kn-text-3)]" />
         <button
           type="button"
           onClick={() => {
             drawer.focusJob(job.id);
             drawer.setOpen(true);
           }}
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
+          className={ROW_LINK}
         >
           Log
         </button>
-        <Link
-          href={`/jobs/${job.id}`}
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-        >
+        <Link href={`/jobs/${job.id}`} className={ROW_LINK}>
           Details
         </Link>
       </div>

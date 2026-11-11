@@ -11,8 +11,10 @@ import { cn, variant } from "../lib/cn.js";
  * colour-codes state imports it from here instead of declaring its own,
  * so "warn" means the same thing in a badge, a metric and a job pill.
  *
- * StatusBadge is the only pill-shaped element in the product. Everything
- * else stays on the 6/8/10px radius scale.
+ * All three are ffstudios chips: a hairline in the tone's own colour
+ * around a faint tint. Badge and Tag are 4px-cornered chips, StatusBadge
+ * is the pill with a dot. Text keeps its case — identifiers are greppable
+ * — so reach for <MonoLabel> when an uppercase annotation is wanted.
  * ------------------------------------------------------------------ */
 
 export type Tone = "neutral" | "ok" | "warn" | "danger" | "info" | "accent";
@@ -20,13 +22,15 @@ export type BadgeSize = "xs" | "sm";
 
 type IconComponent = React.ComponentType<{ size?: number | string; className?: string }>;
 
+const CHIP_LINE = "border border-[color-mix(in_srgb,currentColor_24%,transparent)]";
+
 const CHIP_TONES: Record<Tone, string> = {
-  neutral: "bg-[var(--kn-neutral-soft)] text-[var(--kn-text-2)]",
-  ok: "bg-[var(--kn-ok-soft)] text-[var(--kn-ok)]",
-  warn: "bg-[var(--kn-warn-soft)] text-[var(--kn-warn)]",
-  danger: "bg-[var(--kn-danger-soft)] text-[var(--kn-danger)]",
-  info: "bg-[var(--kn-info-soft)] text-[var(--kn-info)]",
-  accent: "bg-[var(--kn-accent-soft)] text-[var(--kn-accent-400)]",
+  neutral: cn(CHIP_LINE, "bg-[var(--kn-neutral-soft)] text-[var(--kn-text-2)]"),
+  ok: cn(CHIP_LINE, "bg-[var(--kn-ok-soft)] text-[var(--kn-ok)]"),
+  warn: cn(CHIP_LINE, "bg-[var(--kn-warn-soft)] text-[var(--kn-warn)]"),
+  danger: cn(CHIP_LINE, "bg-[var(--kn-danger-soft)] text-[var(--kn-danger)]"),
+  info: cn(CHIP_LINE, "bg-[var(--kn-info-soft)] text-[var(--kn-info)]"),
+  accent: cn(CHIP_LINE, "bg-[var(--kn-accent-soft)] text-[var(--kn-accent-400)]"),
 };
 
 const DOT_FILL_TONES: Record<Tone, string> = {
@@ -114,7 +118,7 @@ export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(function Badg
     <span
       ref={ref}
       className={cn(
-        "inline-flex max-w-full select-none items-center whitespace-nowrap rounded-[var(--kn-r-sm)] font-medium",
+        "inline-flex max-w-full select-none items-center whitespace-nowrap rounded-[var(--kn-r-xs)] font-medium",
         variant(CHIP_TONES, tone, "neutral"),
         variant(BADGE_SIZES, size, "sm"),
         mono && "kn-mono",
@@ -203,7 +207,7 @@ export const Tag = React.forwardRef<HTMLSpanElement, TagProps>(function Tag(
     <span
       ref={ref}
       className={cn(
-        "inline-flex max-w-full items-center whitespace-nowrap rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)] text-[var(--kn-text)]",
+        "inline-flex max-w-full items-center whitespace-nowrap rounded-[var(--kn-r-xs)] border border-[var(--kn-border-strong)] bg-transparent text-[var(--kn-text-2)]",
         variant(TAG_SIZES, size, "sm"),
         onRemove ? "pr-0.5" : size === "xs" ? "pr-1" : "pr-1.5",
         mono && "kn-mono",

@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { GrantScope, Permission } from "@kaname/contract";
 import { pk, timestamps, ts } from "./common";
 
@@ -57,9 +58,31 @@ export const users = pgTable(
       .default(sql`'{}'::timestamptz[]`),
     lockedUntil: ts("locked_until"),
     preferences: jsonb("preferences").$type<Record<string, unknown>>().notNull().default({}),
+    /**
+     * How much of the panel this person wants to see (KD-039). A display
+     * preference only: it hides expert pages, it never grants or removes
+     * a permission.
+     */
+    viewMode: text("view_mode", { enum: ["simplified", "advanced"] })
+      .notNull()
+      .default("advanced"),
+    /**
+     * Who the account is (KD-039). `operator` is everyone the panel had
+     * before: authority comes from roles. `reseller` and `client` are
+     * scoped accounts: their roles are ignored and they reach only the
+     * resources recorded for them in `resource_owners`.
+     */
+    audience: text("audience", { enum: ["operator", "reseller", "client"] })
+      .notNull()
+      .default("operator"),
+    /** A client's reseller. Null for operators, resellers, and orphaned clients. */
+    parentId: uuid("parent_id").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
     ...timestamps,
   },
-  (t) => [uniqueIndex("users_email_key").on(sql`lower(${t.email})`)],
+  (t) => [
+    uniqueIndex("users_email_key").on(sql`lower(${t.email})`),
+    index("users_parent_idx").on(t.parentId),
+  ],
 );
 
 export const roles = pgTable(

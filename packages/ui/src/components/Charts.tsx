@@ -44,7 +44,7 @@ export const CHART_COLORS = [
   "var(--kn-chart-6)",
 ] as const;
 
-const DEFAULT_MARGIN: ChartMargin = { top: 8, right: 8, bottom: 20, left: 44 };
+const DEFAULT_MARGIN: ChartMargin = { top: 8, right: 8, bottom: 20, left: 54 };
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -286,7 +286,7 @@ export function useChartDimensions<E extends HTMLElement = HTMLDivElement>(
 
 function ChartEmpty({ label }: { label: string }) {
   return (
-    <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--kn-text-3)]">
+    <div className="kn-label-sm absolute inset-0 flex items-center justify-center text-[var(--kn-text-3)]">
       {label}
     </div>
   );
@@ -389,10 +389,10 @@ function ChartLegend({
   return (
     <ul className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 pt-2">
       {items.map((item) => (
-        <li key={item.id} className="flex items-center gap-1.5 text-xs text-[var(--kn-text-2)]">
+        <li key={item.id} className="kn-mono flex items-center gap-1.5 text-2xs text-[var(--kn-text-2)]">
           <span
             aria-hidden
-            className="h-1.5 w-3 shrink-0 rounded-[var(--kn-r-xs)]"
+            className="h-1.5 w-1.5 shrink-0"
             style={{ background: item.color }}
           />
           {item.label}
@@ -693,7 +693,7 @@ function TimeSeriesChart({
                   />
                 ))}
 
-              <g className="tabular-nums" fontSize={10} fill="var(--kn-text-3)">
+              <g className="tabular-nums" fontSize={9.5} fontFamily="var(--kn-font-mono)" fill="var(--kn-text-3)">
                 {yScale.ticks.map((tick) => (
                   <text
                     key={tick}
@@ -971,7 +971,7 @@ export function BarChart({
                   ),
                 )}
 
-              <g className="tabular-nums" fontSize={10} fill="var(--kn-text-3)">
+              <g className="tabular-nums" fontSize={9.5} fontFamily="var(--kn-font-mono)" fill="var(--kn-text-3)">
                 {scale.ticks.map((tick) =>
                   horizontal ? (
                     <text

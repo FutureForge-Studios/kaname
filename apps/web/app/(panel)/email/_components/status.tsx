@@ -25,11 +25,15 @@ import type {
   MailServiceState,
 } from "@kaname/contract";
 import {
+  CheckItem,
+  CheckList,
   Combobox,
   Dot,
   Skeleton,
   StatusBadge,
   cn,
+  formatIndex,
+  type CheckItemState,
   type ComboboxOption,
   type Tone,
 } from "@kaname/ui";
@@ -147,7 +151,9 @@ export function countChecks(checks: readonly MailCheck[]): CheckCounts {
  * rather than restated from the host — so the sentence and the rows
  * below it can never disagree.
  */
-export function verdictSentence(server: Pick<MailServer, "checks" | "install_complete" | "status" | "last_synced_at">): string {
+export function verdictSentence(
+  server: Pick<MailServer, "checks" | "install_complete" | "status" | "last_synced_at">,
+): string {
   if (server.status === "deploying" || server.status === "installing") {
     return "Yunori Mail Server is being installed. The steps below say where it is.";
   }
@@ -215,17 +221,17 @@ export function ChecksList({
 
   return (
     <div className={cn("flex flex-col", className)}>
-      <ul className="divide-y divide-[var(--kn-border-subtle)]">
+      <CheckList divided="between">
         {visible.map((check) => (
           <CheckRow key={check.id} check={check} />
         ))}
-      </ul>
+      </CheckList>
       {collapsePassing && passing.length > 0 && (
         <button
           type="button"
           onClick={() => setShowPassing((current) => !current)}
           aria-expanded={showPassing}
-          className="mt-2 self-start rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]"
+          className="kn-label-sm mt-3 self-start rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]"
         >
           {showPassing
             ? `Hide ${pluralize(passing.length, "passing check")}`
@@ -236,32 +242,47 @@ export function ChecksList({
   );
 }
 
+/**
+ * A check reads as a CheckItem: resolved (pass), failed or warning in
+ * their status colours, or noted (info, unknown). The verdict badge
+ * beside it repeats the word, so colour is never the only signal.
+ */
+const CHECK_STATE: Record<MailCheckStatus, CheckItemState> = {
+  pass: "done",
+  fail: "failed",
+  warn: "warning",
+  info: "todo",
+  unknown: "todo",
+};
+
 export function CheckRow({ check }: { check: MailCheck }) {
   return (
-    <li id={`check-${check.id}`} className="flex items-start gap-3 py-2">
-      <MailCheckBadge status={check.status} />
-      <div className="min-w-0 flex-1">
-        <p className="font-medium text-[var(--kn-text)]">{check.label}</p>
-        <p className="mt-0.5 text-sm text-[var(--kn-text-2)]">{check.detail}</p>
-        {check.remedy && (
-          <p className="mt-1 text-sm text-[var(--kn-text)]">
-            <span className="text-[var(--kn-text-3)]">Fix: </span>
-            {check.remedy}
-          </p>
-        )}
-        {check.help_url && (
-          <a
-            href={check.help_url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-1 inline-flex items-center gap-1 rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]"
-          >
-            Learn more
-            <ExternalLink size={10} aria-hidden />
-          </a>
-        )}
-      </div>
-    </li>
+    <CheckItem
+      id={`check-${check.id}`}
+      state={CHECK_STATE[check.status]}
+      className="py-2.5"
+      title={check.label}
+      description={check.detail}
+      action={<MailCheckBadge status={check.status} />}
+    >
+      {check.remedy && (
+        <p className="m-0 mt-1.5 text-sm text-[var(--kn-text)]">
+          <span className="kn-label-sm mr-1.5 text-[var(--kn-text-3)]">Fix</span>
+          {check.remedy}
+        </p>
+      )}
+      {check.help_url && (
+        <a
+          href={check.help_url}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1 inline-flex items-center gap-1 rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]"
+        >
+          Learn more
+          <ExternalLink size={10} aria-hidden />
+        </a>
+      )}
+    </CheckItem>
   );
 }
 
@@ -280,15 +301,6 @@ const STEP_META: Record<MailInstallStepStatus, StepMeta> = {
   failed: { label: "Failed", tone: "danger", icon: X },
   waiting: { label: "Waiting for you", tone: "warn", icon: Clock },
   skipped: { label: "Skipped", tone: "neutral", icon: Minus },
-};
-
-const STEP_ICON_CLASS: Record<MailInstallStepStatus, string> = {
-  pending: "text-[var(--kn-text-3)]",
-  running: "text-[var(--kn-accent-400)] animate-[var(--animate-spin-slow)]",
-  done: "text-[var(--kn-ok)]",
-  failed: "text-[var(--kn-danger)]",
-  waiting: "text-[var(--kn-warn)]",
-  skipped: "text-[var(--kn-text-3)]",
 };
 
 /** The first step that needs the operator; the installer blocks on it. */
@@ -317,51 +329,77 @@ export function InstallSteps({ steps, className }: InstallStepsProps) {
   }
 
   return (
-    <ol className={cn("flex flex-col gap-1", className)} aria-label="Install steps">
+    <CheckList divided="between" className={className} aria-label="Install steps">
       {steps.map((step, index) => {
         const meta = STEP_META[step.status];
-        const Icon = meta.icon;
         const waiting = step.status === "waiting";
         const failed = step.status === "failed";
+        const settled = step.status === "done" || step.status === "skipped";
         return (
-          <li
+          <CheckItem
             key={`${index}-${step.title}`}
-            className={cn(
-              "flex items-start gap-3 rounded-[var(--kn-r-sm)] px-2 py-1.5",
-              waiting && "border border-[var(--kn-warn)] bg-[var(--kn-warn-soft)]",
-              failed && "border border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]",
-            )}
-          >
-            <span className="kn-num mt-0.5 w-5 shrink-0 text-right text-xs text-[var(--kn-text-3)]">
-              {index + 1}
-            </span>
-            <Icon size={14} className={cn("mt-0.5 shrink-0", STEP_ICON_CLASS[step.status])} aria-hidden />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+            state={STEP_STATE[step.status]}
+            icon={waiting ? Clock : step.status === "skipped" ? Minus : undefined}
+            className="py-2"
+            title={
+              <span className="inline-flex min-w-0 items-baseline gap-2.5">
+                <span aria-hidden className="kn-num text-xs text-[var(--kn-text-3)]">
+                  {formatIndex(index + 1)}
+                </span>
                 <span
                   className={cn(
-                    step.status === "done" || step.status === "skipped"
-                      ? "text-[var(--kn-text-2)]"
-                      : "font-medium text-[var(--kn-text)]",
+                    settled ? "font-normal text-[var(--kn-text-2)]" : "text-[var(--kn-text)]",
                   )}
                 >
                   {step.title}
                 </span>
-                <span className={cn("text-xs", checkToneClass(meta.tone))}>{meta.label}</span>
-              </div>
-              {step.detail && (waiting || failed) && (
-                <p className="mt-1 text-sm text-[var(--kn-text)]">{step.detail}</p>
-              )}
-              {step.detail && !waiting && !failed && step.status === "running" && (
-                <p className="mt-0.5 text-xs text-[var(--kn-text-2)]">{step.detail}</p>
-              )}
-            </div>
-          </li>
+              </span>
+            }
+            action={
+              waiting || failed || step.status === "running" ? (
+                <StatusBadge
+                  tone={meta.tone}
+                  size="xs"
+                  icon={meta.icon}
+                  pulse={step.status === "running"}
+                >
+                  {meta.label}
+                </StatusBadge>
+              ) : (
+                <span className={cn("kn-label-sm", checkToneClass(meta.tone))}>{meta.label}</span>
+              )
+            }
+          >
+            {step.detail && (waiting || failed) && (
+              <p
+                className={cn(
+                  "m-0 mt-2 rounded-[var(--kn-r-md)] border px-3 py-2 text-sm text-[var(--kn-text)]",
+                  waiting
+                    ? "border-[color-mix(in_srgb,var(--kn-warn)_40%,transparent)] bg-[var(--kn-warn-soft)]"
+                    : "border-[color-mix(in_srgb,var(--kn-danger)_40%,transparent)] bg-[var(--kn-danger-soft)]",
+                )}
+              >
+                {step.detail}
+              </p>
+            )}
+            {step.detail && step.status === "running" && (
+              <p className="m-0 mt-0.5 text-xs text-[var(--kn-text-2)]">{step.detail}</p>
+            )}
+          </CheckItem>
         );
       })}
-    </ol>
+    </CheckList>
   );
 }
+
+const STEP_STATE: Record<MailInstallStepStatus, CheckItemState> = {
+  done: "done",
+  skipped: "done",
+  running: "current",
+  waiting: "warning",
+  failed: "failed",
+  pending: "todo",
+};
 
 function checkToneClass(tone: Tone): string {
   switch (tone) {
@@ -397,10 +435,15 @@ export function ServiceStates({
   className?: string;
 }) {
   if (services.length === 0) {
-    return <span className={cn("text-sm text-[var(--kn-text-3)]", className)}>No services reported</span>;
+    return (
+      <span className={cn("text-sm text-[var(--kn-text-3)]", className)}>No services reported</span>
+    );
   }
   return (
-    <ul className={cn("flex flex-wrap items-center gap-x-4 gap-y-1", className)} aria-label="Services">
+    <ul
+      className={cn("flex flex-wrap items-center gap-x-4 gap-y-1", className)}
+      aria-label="Services"
+    >
       {services.map((service) => (
         <li key={service.name} className="flex items-center gap-1.5 text-sm">
           <Dot tone={service.active ? "ok" : "danger"} hollow={!service.active} />
@@ -509,15 +552,21 @@ const CERT_STATE_META: Record<string, { label: string; tone: Tone; title: string
   test: {
     label: "Staging",
     tone: "warn",
-    title: "Issued by the staging authority after a failure; browsers and mail apps do not trust it.",
+    title:
+      "Issued by the staging authority after a failure; browsers and mail apps do not trust it.",
   },
   self_signed: {
     label: "Self-signed",
     tone: "warn",
-    title: "The temporary certificate the console starts with. Clients will warn until a real one arrives.",
+    title:
+      "The temporary certificate the console starts with. Clients will warn until a real one arrives.",
   },
   expired: { label: "Expired", tone: "danger", title: "Mail apps will refuse to connect." },
-  missing: { label: "Missing", tone: "danger", title: "No certificate at all; TLS cannot be offered." },
+  missing: {
+    label: "Missing",
+    tone: "danger",
+    title: "No certificate at all; TLS cannot be offered.",
+  },
   unknown: { label: "Unknown", tone: "neutral", title: "The host did not say." },
 };
 
@@ -671,11 +720,15 @@ export function MailServerPicker({
     return entries;
   }, [allowAll, servers]);
 
-  const resolved = servers.find((server) => server.id === value || server.server_id === value)?.id ?? "";
+  const resolved =
+    servers.find((server) => server.id === value || server.server_id === value)?.id ?? "";
 
   if (query.isLoading) {
     return (
-      <Skeleton className={cn("h-7 w-56 rounded-[var(--kn-r-sm)]", className)} label="Loading mail servers" />
+      <Skeleton
+        className={cn("h-7 w-56 rounded-[var(--kn-r-sm)]", className)}
+        label="Loading mail servers"
+      />
     );
   }
 

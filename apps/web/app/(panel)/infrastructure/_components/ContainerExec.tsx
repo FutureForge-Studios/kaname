@@ -4,11 +4,12 @@ import * as React from "react";
 import dynamic from "next/dynamic";
 import { Plug, PlugZap, SquareTerminal, Unplug } from "lucide-react";
 import type { TerminalSessionTicket } from "@kaname/contract";
-import { Badge, Button, EmptyState, MonoText, SectionCard, Skeleton, cn } from "@kaname/ui";
+import { Badge, Button, EmptyState, NumberedSection, Skeleton, cn } from "@kaname/ui";
 import type { TerminalStatus } from "@/components/TerminalPane";
 import { RecordingNotice } from "@/components/RecordingNotice";
 import { api } from "@/lib/api";
 import { useCan } from "@/lib/queries";
+import { TerminalWell } from "./TerminalWell";
 
 /* ------------------------------------------------------------------ *
  * A container's Exec tab: an interactive shell inside the container.
@@ -27,9 +28,7 @@ const TerminalPane = dynamic(
   () => import("@/components/TerminalPane").then((module) => module.TerminalPane),
   {
     ssr: false,
-    loading: () => (
-      <Skeleton className="h-full w-full rounded-[var(--kn-r-md)]" label="Loading the terminal" />
-    ),
+    loading: () => <Skeleton className="h-full w-full rounded-none" label="Loading the terminal" />,
   },
 );
 
@@ -117,95 +116,99 @@ export function ContainerExec({ container, connected }: ContainerExecProps) {
   };
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={1}
       title="Exec"
-      description="A shell inside the container. It is a shell on the host's kernel, so it is ticketed, audited and recorded exactly like the host terminal (KD-013)."
+      caption="A shell inside the container, ticketed, audited and recorded like the host terminal."
       actions={
         wanted && (
-          <div className="flex items-center gap-2">
-            <Badge tone={STATUS_TONES[status]} size="sm">
-              {STATUS_LABELS[status]}
-            </Badge>
-            <MonoText muted className="hidden text-xs sm:inline">
-              {geometry.cols}×{geometry.rows}
-            </MonoText>
-          </div>
+          <Badge tone={STATUS_TONES[status]} size="sm">
+            {STATUS_LABELS[status]}
+          </Badge>
         )
       }
     >
-      <div className="flex min-w-0 flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          {wanted ? (
-            <>
-              <Button variant="secondary" size="sm" icon={Unplug} onClick={disconnect}>
-                Disconnect
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                icon={PlugZap}
-                loading={status === "connecting"}
-                disabled={!ready}
-                onClick={connect}
-              >
-                Reconnect
-              </Button>
-            </>
-          ) : (
-            <Button variant="primary" size="sm" icon={Plug} disabled={!ready} onClick={connect}>
-              Open shell in {container.name}
+      <div className="flex flex-wrap items-center gap-2">
+        {wanted ? (
+          <>
+            <Button variant="secondary" size="sm" icon={Unplug} onClick={disconnect}>
+              Disconnect
             </Button>
-          )}
-        </div>
-
-        {session && (
-          <RecordingNotice
-            recorded={session.recorded}
-            serverName={`${container.name} on ${session.server_name}`}
-          />
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={PlugZap}
+              loading={status === "connecting"}
+              disabled={!ready}
+              onClick={connect}
+            >
+              Reconnect
+            </Button>
+          </>
+        ) : (
+          <Button variant="primary" size="sm" icon={Plug} disabled={!ready} onClick={connect}>
+            Open shell in {container.name}
+          </Button>
         )}
+        <span className="text-sm text-[var(--kn-text-3)]">
+          It is a shell on the host&apos;s kernel, so it goes through the terminal&apos;s path
+          (KD-013).
+        </span>
+      </div>
 
-        {wanted && (status === "closed" || status === "error") && detail && (
-          <div
-            role="status"
-            className={cn(
-              "flex flex-wrap items-center gap-3 rounded-[var(--kn-r-sm)] border p-3",
-              status === "error"
-                ? "border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]"
-                : "border-[var(--kn-border)] bg-[var(--kn-surface)]",
-            )}
-          >
-            <span className="text-[var(--kn-text)]">The session ended: {detail}.</span>
+      {session && (
+        <RecordingNotice
+          recorded={session.recorded}
+          serverName={`${container.name} on ${session.server_name}`}
+        />
+      )}
+
+      {wanted && (status === "closed" || status === "error") && detail && (
+        <div
+          role="status"
+          className={cn(
+            "flex flex-wrap items-center gap-3 rounded-[var(--kn-r-lg)] border px-3 py-2",
+            status === "error"
+              ? "border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]"
+              : "border-[var(--kn-border)] bg-[var(--kn-surface)]",
+          )}
+        >
+          <span className="text-[var(--kn-text)]">The session ended: {detail}.</span>
+        </div>
+      )}
+
+      <TerminalWell
+        title={`exec · ${container.name} on ${container.server_name}`}
+        status={wanted ? status : null}
+        geometry={geometry}
+        className="h-[420px] lg:h-[520px]"
+      >
+        {wanted ? (
+          <TerminalPane
+            key={generation}
+            connect={mint}
+            onSession={(next) => setSession(next as TerminalSessionTicket)}
+            onStatusChange={(next, why) => {
+              setStatus(next);
+              setDetail(why ?? null);
+            }}
+            onGeometry={setGeometry}
+            framed={false}
+            className="h-full"
+          />
+        ) : (
+          <div className="kn-grid flex h-full items-center justify-center [--kn-grid-size:24px]">
+            <EmptyState
+              icon={SquareTerminal}
+              title={ready ? "Not connected" : "Exec is unavailable"}
+              description={
+                blocked ??
+                "A session opens with a single-use ticket that expires in 30 seconds, is bound to your address, and is written to the audit trail on open and on close."
+              }
+            />
           </div>
         )}
-
-        <div className="h-[420px] min-h-0 w-full lg:h-[520px]">
-          {wanted ? (
-            <TerminalPane
-              key={generation}
-              connect={mint}
-              onSession={(next) => setSession(next as TerminalSessionTicket)}
-              onStatusChange={(next, why) => {
-                setStatus(next);
-                setDetail(why ?? null);
-              }}
-              onGeometry={setGeometry}
-              className="h-full"
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)]">
-              <EmptyState
-                icon={SquareTerminal}
-                title={ready ? "Not connected" : "Exec is unavailable"}
-                description={
-                  blocked ??
-                  "A session opens with a single-use ticket that expires in 30 seconds, is bound to your address, and is written to the audit trail on open and on close."
-                }
-              />
-            </div>
-          )}
-        </div>
-      </div>
-    </SectionCard>
+      </TerminalWell>
+    </NumberedSection>
   );
 }

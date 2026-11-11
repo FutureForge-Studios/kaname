@@ -2,15 +2,18 @@
 
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Radio, RefreshCw, Regex, ScrollText, Square } from "lucide-react";
+import { Radio, RefreshCw, Regex, Square } from "lucide-react";
 import type { LogLevel, LogRecordRow, LogSourceRow, TimeRange } from "@kaname/contract";
 import {
   Badge,
   Button,
+  Card,
   Combobox,
   IconButton,
   Input,
+  LeaderLabel,
   LogViewer,
+  MonoText,
   PageHeader,
   Select,
   TimeRangePicker,
@@ -239,6 +242,7 @@ export default function LogsPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Operations"
         title="Logs"
         subtitle={
           source
@@ -265,7 +269,7 @@ export default function LogsPage() {
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 px-6 py-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-6">
         <div className="flex flex-wrap items-center gap-2">
           <ServerPicker selection={selection} allowAll allLabel="All reachable hosts" />
 
@@ -284,12 +288,12 @@ export default function LogsPage() {
             placeholder={selection.serverId ? "Every source on this host" : "Pick a host first"}
             emptyMessage="No source matches that name."
             aria-label="Log source"
-            className="w-64"
+            className="w-full sm:w-64"
           />
 
           <Select
             size="sm"
-            boxClassName="w-44"
+            boxClassName="w-full sm:w-44"
             aria-label="Minimum level"
             value={level ?? ""}
             onChange={(event) => update({ level: event.target.value || null })}
@@ -304,7 +308,7 @@ export default function LogsPage() {
             placeholder={useRegex ? "nginx\\[\\d+\\]" : "Search on the host"}
             aria-label="Search log lines on the host"
             spellCheck={false}
-            boxClassName="w-64"
+            boxClassName="w-full sm:w-64"
             trailing={
               <IconButton
                 icon={Regex}
@@ -329,9 +333,6 @@ export default function LogsPage() {
           />
 
           <div className="ml-auto flex items-center gap-2">
-            <span className="kn-num text-xs text-[var(--kn-text-3)]">
-              {formatCount(lines.length)} lines
-            </span>
             <Button
               variant={live ? "danger-subtle" : "primary"}
               size="sm"
@@ -376,27 +377,38 @@ export default function LogsPage() {
           />
         )}
 
-        <LogViewer
-          lines={lines}
-          height="100%"
-          label={source ? `${source} log output` : "Log output"}
-          emptyLabel={
-            search.isLoading
-              ? "Loading…"
-              : live
-                ? "Waiting for the first line from this source"
-                : "No log line in this range matches these filters"
-          }
-          toolbarExtra={
-            <span className="flex items-center gap-2">
-              <ScrollText size={12} className="text-[var(--kn-text-3)]" aria-hidden />
-              <span className="text-xs text-[var(--kn-text-3)]">
-                {live ? "live tail" : "search"}
-              </span>
+        {/* The well: a hairline frame that names what is in it, and the
+            viewer recessed inside. */}
+        <Card padding="none" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <div className="flex min-h-9 shrink-0 items-center gap-3 border-b border-[var(--kn-border)] px-4 py-2">
+            <LeaderLabel tone={live ? "ok" : "subtle"} className="min-w-0 flex-1">
+              {live ? "Live tail" : "Search results"}
+            </LeaderLabel>
+            {source && (
+              <MonoText muted truncate className="hidden min-w-0 max-w-[40%] text-xs sm:inline">
+                {source}
+              </MonoText>
+            )}
+            <span className="kn-mono shrink-0 text-xs text-[var(--kn-text-3)]">
+              {formatCount(lines.length)} lines
             </span>
-          }
-          className="min-h-0 flex-1"
-        />
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col bg-[var(--kn-bg-inset)] p-1.5">
+            <LogViewer
+              lines={lines}
+              height="100%"
+              label={source ? `${source} log output` : "Log output"}
+              emptyLabel={
+                search.isLoading
+                  ? "Loading…"
+                  : live
+                    ? "Waiting for the first line from this source"
+                    : "No log line in this range matches these filters"
+              }
+              className="min-h-0 flex-1 rounded-[var(--kn-r-md)]"
+            />
+          </div>
+        </Card>
       </div>
     </div>
   );

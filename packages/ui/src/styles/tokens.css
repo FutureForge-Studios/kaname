@@ -1,118 +1,134 @@
 /* ------------------------------------------------------------------ *
- * Kaname design tokens — the FF Studios design, Apple UI layer.
+ * Kaname design tokens — the FutureForge Studios (ffstudios.io) language.
  *
- * Palette, type lanes and the one-accent rule come from the FutureForge
- * Studios system (ffstudios DESIGN-SYSTEM.md): ink canvas, three text
- * tiers, brand purple #7A4FF4 as the only accent. On top of it sits an
- * Apple-style UI layer that deliberately overrides that system's "radius
- * 0, no shadows" rule: continuous rounded corners, translucent materials
- * on the chrome, soft layered depth on floating surfaces, a spring-like
- * ease and a focus halo. See docs/design-system.md and KD-036.
+ * Ink canvas, paper text, one brand purple, hairlines instead of fills,
+ * pills for actions, mono uppercase tracked labels for anything that
+ * annotates, a faint blueprint grid with frame rails behind the content.
+ * Flat: no vibrancy, no blur, no shadow on a dark surface that is part
+ * of the page. Only floating overlays (menus, dialogs, toasts) keep a
+ * restrained drop. See docs/design-system.md, docs/redesign-guide.md
+ * and KD-038 (supersedes KD-036's Apple UI layer).
  *
- * Dark is the default and the design target; light is built from the
- * ffstudios paper palette with the same token names. The `--kn-*` names
- * never change, so components never hardcode a hex value and never use
- * an arbitrary spacing value off the 4px grid.
+ * Dark is the default and the design target; light is the ffstudios
+ * paper palette on the same token names. The `--kn-*` names never
+ * change, so components never hardcode a hex value and never use an
+ * arbitrary spacing value off the 4px grid.
  * ------------------------------------------------------------------ */
 
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* --- surfaces (ink) ------------------------------------------- */
-  --kn-bg: #0a0a0c; /* canvas */
-  --kn-bg-inset: #060608; /* the recess: terminal, code wells */
-  --kn-surface: #131316; /* cards, tables, one step of lift */
-  --kn-surface-2: #1a1a1f; /* raised: hover, menus, selected */
+  /* --- surfaces (ff ink) ---------------------------------------- */
+  --kn-bg: #0a0a0c; /* ink: canvas */
+  --kn-bg-inset: #060608; /* ink-deep: terminal, code wells, inset panels */
+  --kn-surface: #131316; /* ink-2: cards, tables */
+  --kn-surface-2: #1a1a1f; /* ink-3: hover, menus, selected */
   --kn-surface-3: #24242b; /* pressed, active row */
-  --kn-overlay: rgb(0 0 0 / 60%);
+  --kn-overlay: rgb(6 6 8 / 72%);
 
   /* --- lines: white at fixed alphas ----------------------------- */
-  --kn-border: rgb(255 255 255 / 8%);
+  --kn-border: rgb(255 255 255 / 8%); /* the hairline */
   --kn-border-strong: rgb(255 255 255 / 16%);
   --kn-border-subtle: rgb(255 255 255 / 5%);
+  --kn-line-control: rgb(255 255 255 / 40%); /* ff line-control: ghost pill outline */
+  --kn-rail: rgb(255 255 255 / 8%); /* frame rails + crosshair marks */
+  --kn-grid-line: rgb(255 255 255 / 2.6%); /* blueprint grid */
+  --kn-grid-size: 64px;
+  --kn-field-bg: rgb(255 255 255 / 3%); /* inputs: a recessed hairline box */
+  --kn-field-border: rgb(255 255 255 / 14%);
 
-  /* --- text ----------------------------------------------------- */
-  --kn-text: #f4f4f5; /* 18.0:1 on bg */
-  --kn-text-2: #b4b4bc; /* 9.6:1 */
-  --kn-text-3: #8a8a93; /* 5.8:1 */
+  /* --- text: paper at 100 / 72 / 56 % --------------------------- */
+  --kn-text: #f5f4f0; /* paper, 18.1:1 on ink */
+  --kn-text-2: #b3b2af; /* fg-muted, 9.4:1 */
+  --kn-text-3: #8e8d8b; /* fg-subtle, 6.0:1 */
   --kn-text-inverse: #0a0a0c;
 
-  /* --- accent: FF purple. 500 never carries text (4.0:1). ------- */
-  --kn-accent-300: #c9b8fb;
-  --kn-accent-400: #a98df8; /* ff accent-fg: links, active icons, the hot datum (7.4:1) */
-  --kn-accent-500: #7a4ff4; /* ff accent: brand, borders, lit cells */
-  --kn-accent-600: #6a3ee8; /* ff accent-hover: primary fill (white on it 6.1:1) */
+  /* --- accent: FF purple. 500 never carries small text on ink. --- */
+  --kn-accent-300: #c9b6ff; /* gradient start, active nav text */
+  --kn-accent-400: #a98df8; /* primary-soft: links, active icons (7.4:1) */
+  --kn-accent-500: #7a4ff4; /* primary: fills, the purple square, indicators */
+  --kn-accent-600: #6a3ee8; /* primary-hover / primary-ink */
   --kn-accent-700: #5a30d4; /* pressed */
-  --kn-accent-fg: #ffffff; /* ff on-accent */
-  --kn-accent-soft: rgb(122 79 244 / 16%);
-  --kn-accent-soft-strong: rgb(122 79 244 / 30%);
+  --kn-accent-900: #3b2391; /* primary-deep: glow floor */
+  --kn-accent-fg: #ffffff;
+  --kn-accent-soft: rgb(122 79 244 / 14%);
+  --kn-accent-soft-strong: rgb(122 79 244 / 28%);
+  --kn-gradient-brand: linear-gradient(95deg, #c9b6ff 0%, #a98df8 30%, #7a4ff4 100%);
+  --kn-glow: radial-gradient(closest-side, rgb(122 79 244 / 32%), rgb(59 35 145 / 12%) 55%, transparent);
 
-  /* --- semantic: ff secondary hues ------------------------------ */
-  --kn-ok: #4fe3cb; /* teal, 12.4:1 */
-  --kn-ok-soft: rgb(79 227 203 / 14%);
-  --kn-warn: #fbb13c; /* yellow, 10.8:1 */
-  --kn-warn-soft: rgb(251 177 60 / 14%);
-  --kn-danger: #f45b69; /* red, 6.2:1 */
-  --kn-danger-soft: rgb(244 91 105 / 14%);
+  /* --- semantic: ff accent hues --------------------------------- */
+  --kn-ok: #4fe3cb; /* teal */
+  --kn-ok-soft: rgb(79 227 203 / 12%);
+  --kn-warn: #fbb13c; /* yellow */
+  --kn-warn-soft: rgb(251 177 60 / 12%);
+  --kn-danger: #f45b69; /* red */
+  --kn-danger-soft: rgb(244 91 105 / 12%);
   --kn-info: #7cb7ff; /* derived: the ff palette has no blue */
-  --kn-info-soft: rgb(124 183 255 / 14%);
-  --kn-neutral-soft: rgb(180 180 188 / 12%);
+  --kn-info-soft: rgb(124 183 255 / 12%);
+  --kn-neutral-soft: rgb(245 244 240 / 7%);
 
   /* --- chart ramp (accent-led) ---------------------------------- */
   --kn-chart-1: #a98df8;
-  --kn-chart-2: #7cb7ff;
-  --kn-chart-3: #4fe3cb;
+  --kn-chart-2: #4fe3cb;
+  --kn-chart-3: #7cb7ff;
   --kn-chart-4: #fbb13c;
   --kn-chart-5: #f45b69;
-  --kn-chart-6: #8a8a93;
+  --kn-chart-6: #8e8d8b;
   --kn-chart-grid: rgb(255 255 255 / 6%);
 
-  /* --- radius: continuous corners (pill only for badges, segments) */
-  --kn-r-xs: 6px;
-  --kn-r-sm: 8px;
-  --kn-r-md: 10px;
+  /* --- radius: chips 6, fields 8, cards 14, feature cards 18, ---- *
+   * --- and the pill for every action ----------------------------- */
+  --kn-r-xs: 4px;
+  --kn-r-sm: 6px;
+  --kn-r-md: 8px;
   --kn-r-lg: 14px;
-  --kn-r-xl: 16px; /* dialogs, drawers */
+  --kn-r-xl: 18px;
   --kn-r-pill: 9999px;
 
-  /* --- depth: a tight ambient line plus a wide, faint drop ------- */
-  --kn-shadow-sm: 0 1px 1px rgb(0 0 0 / 24%), 0 4px 14px -6px rgb(0 0 0 / 40%);
-  --kn-shadow-md: 0 1px 2px rgb(0 0 0 / 30%), 0 12px 32px -10px rgb(0 0 0 / 55%);
-  --kn-shadow-lg: 0 1px 3px rgb(0 0 0 / 32%), 0 28px 64px -16px rgb(0 0 0 / 65%);
+  /* --- depth: none on the page; a restrained drop on overlays ---- */
+  --kn-shadow-sm: 0 0 #0000;
+  --kn-shadow-md: 0 16px 40px -16px rgb(0 0 0 / 70%);
+  --kn-shadow-lg: 0 32px 72px -24px rgb(0 0 0 / 80%);
 
-  /* --- materials: translucent chrome (sidebar, top bar) --------- */
-  --kn-material: rgb(19 19 22 / 72%);
-  --kn-material-filter: saturate(180%) blur(20px);
+  /* --- chrome: solid ink. Kept so .kn-material keeps resolving. -- */
+  --kn-material: var(--kn-bg);
+  --kn-material-filter: none;
 
-  /* --- focus: an Apple-style halo in ff accent-fg --------------- */
-  --kn-ring: rgb(169 141 248 / 60%); /* 3.3:1 on bg */
-  --kn-ring-width: 3px;
+  /* --- focus: a 2px primary-soft ring, 2px off the edge ---------- */
+  --kn-ring: #a98df8;
+  --kn-ring-width: 2px;
   --kn-ring-offset-width: 2px;
   --kn-ring-offset: var(--kn-bg);
 
-  /* --- motion: spring-like ease, opacity/transform only --------- */
-  --kn-ease: cubic-bezier(0.32, 0.72, 0, 1);
-  --kn-dur-fast: 140ms;
+  /* --- motion: ff ease-out-expo; std for colour changes ---------- */
+  --kn-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --kn-ease-std: cubic-bezier(0.4, 0, 0.2, 1);
+  --kn-dur-fast: 150ms;
   --kn-dur: 240ms;
-  --kn-dur-slow: 360ms;
+  --kn-dur-slow: 400ms;
 
   /* --- type ----------------------------------------------------- */
   --kn-font-sans:
-    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter Variable", "Inter", system-ui,
-    sans-serif;
+    var(--font-geist-sans, "Geist"), "Geist", "Inter Variable", "Inter", system-ui, -apple-system,
+    "Segoe UI", sans-serif;
   --kn-font-mono:
-    "SF Mono", ui-monospace, "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
-  --kn-font-display:
-    var(--font-geist-pixel-square, "Geist Pixel Square"), "SF Pro Display", "Inter Variable",
-    -apple-system, system-ui, sans-serif;
+    "JetBrains Mono", var(--font-geist-mono, ui-monospace), ui-monospace, "SFMono-Regular", Menlo,
+    Consolas, monospace;
+  --kn-font-display: var(--kn-font-sans);
+  --kn-font-pixel:
+    var(--font-geist-pixel-square, "Geist Pixel Square"), var(--kn-font-mono);
+  --kn-tracking-label: 0.14em; /* mono uppercase labels */
+  --kn-tracking-display: -0.035em; /* headlines */
+  --kn-tracking-title: -0.015em; /* card + section titles */
 
   /* --- layout metrics ------------------------------------------- */
-  --kn-sidebar-w: 232px;
+  --kn-sidebar-w: 240px;
   --kn-sidebar-collapsed-w: 56px;
-  --kn-topbar-h: 48px;
+  --kn-topbar-h: 52px;
   --kn-row-h: 36px;
   --kn-row-h-compact: 30px;
+  --kn-gutter: 24px; /* page side padding; rails sit at half of it */
 }
 
 [data-theme="light"] {
@@ -123,56 +139,61 @@
   --kn-bg-inset: #eceae4; /* paper-2 */
   --kn-surface: #ffffff;
   --kn-surface-2: #f0eee9;
-  --kn-surface-3: #e8e5de;
-  --kn-overlay: rgb(10 10 12 / 32%);
+  --kn-surface-3: #e6e3dc;
+  --kn-overlay: rgb(10 10 12 / 36%);
 
-  --kn-border: #dedbd3; /* ff line */
-  --kn-border-strong: #c8c4ba;
-  --kn-border-subtle: #e8e5de;
+  --kn-border: rgb(9 9 11 / 11%);
+  --kn-border-strong: rgb(9 9 11 / 22%);
+  --kn-border-subtle: rgb(9 9 11 / 6%);
+  --kn-line-control: rgb(9 9 11 / 42%);
+  --kn-rail: rgb(9 9 11 / 8%);
+  --kn-grid-line: rgb(9 9 11 / 3%);
+  --kn-field-bg: #ffffff;
+  --kn-field-border: rgb(9 9 11 / 18%);
 
-  --kn-text: #0a0a0c; /* ink, 18.0:1 on paper */
+  --kn-text: #0a0a0c; /* ink, 18.1:1 on paper */
   --kn-text-2: #52525b; /* 7.0:1 */
-  --kn-text-3: #6e6e78; /* 4.6:1 */
+  --kn-text-3: #6b6b74; /* 4.8:1 */
   --kn-text-inverse: #f5f4f0;
 
-  /* On paper the readable purple is ff primary-ink #6A3EE8, so 400 (the
-     text accent) takes it; 500 stays the brand purple for fills. */
-  --kn-accent-300: #8b66f6;
+  /* On paper the readable purple is ff primary-ink #6A3EE8. */
+  --kn-accent-300: #5a30d4;
   --kn-accent-400: #6a3ee8; /* 5.5:1 on paper */
   --kn-accent-500: #7a4ff4;
   --kn-accent-600: #6a3ee8;
   --kn-accent-700: #5a30d4;
   --kn-accent-soft: rgb(122 79 244 / 10%);
   --kn-accent-soft-strong: rgb(122 79 244 / 20%);
+  --kn-gradient-brand: linear-gradient(95deg, #8b66f6 0%, #7a4ff4 40%, #5a30d4 100%);
+  --kn-glow: radial-gradient(closest-side, rgb(122 79 244 / 16%), rgb(122 79 244 / 5%) 55%, transparent);
 
-  /* The secondary hues, darkened to pass 4.5:1 on paper and white. */
+  /* The accent hues, darkened to pass 4.5:1 on paper and white. */
   --kn-ok: #0b7564;
-  --kn-ok-soft: rgb(11 117 100 / 12%);
+  --kn-ok-soft: rgb(11 117 100 / 10%);
   --kn-warn: #8f5300;
-  --kn-warn-soft: rgb(143 83 0 / 12%);
+  --kn-warn-soft: rgb(143 83 0 / 10%);
   --kn-danger: #c42b3c;
-  --kn-danger-soft: rgb(196 43 60 / 12%);
+  --kn-danger-soft: rgb(196 43 60 / 10%);
   --kn-info: #22639e;
-  --kn-info-soft: rgb(34 99 158 / 12%);
-  --kn-neutral-soft: rgb(82 82 91 / 10%);
+  --kn-info-soft: rgb(34 99 158 / 10%);
+  --kn-neutral-soft: rgb(9 9 11 / 6%);
 
   --kn-chart-1: #7a4ff4;
-  --kn-chart-2: #22639e;
-  --kn-chart-3: #0b7564;
+  --kn-chart-2: #0b7564;
+  --kn-chart-3: #22639e;
   --kn-chart-4: #8f5300;
   --kn-chart-5: #c42b3c;
-  --kn-chart-6: #6e6e78;
-  --kn-chart-grid: #e8e5de;
+  --kn-chart-6: #6b6b74;
+  --kn-chart-grid: rgb(9 9 11 / 7%);
 
-  --kn-shadow-sm: 0 1px 1px rgb(10 10 12 / 5%), 0 4px 14px -6px rgb(10 10 12 / 10%);
-  --kn-shadow-md: 0 1px 2px rgb(10 10 12 / 6%), 0 12px 32px -10px rgb(10 10 12 / 16%);
-  --kn-shadow-lg: 0 1px 3px rgb(10 10 12 / 8%), 0 28px 64px -16px rgb(10 10 12 / 24%);
+  /* ff .card: one tight line plus a wide, very soft drop. */
+  --kn-shadow-sm: 0 1px 2px rgb(9 9 11 / 4%), 0 14px 32px -24px rgb(9 9 11 / 16%);
+  --kn-shadow-md: 0 1px 2px rgb(9 9 11 / 5%), 0 18px 40px -20px rgb(9 9 11 / 22%);
+  --kn-shadow-lg: 0 1px 3px rgb(9 9 11 / 6%), 0 32px 72px -24px rgb(9 9 11 / 30%);
 
-  --kn-material: rgb(255 255 255 / 72%);
+  --kn-material: var(--kn-bg);
 
-  /* accent-fg (#A98DF8) is 2.4:1 on paper; the halo uses primary-ink,
-     at 75% because 60% falls under 3:1. */
-  --kn-ring: rgb(106 62 232 / 75%); /* 3.4:1 on paper */
+  --kn-ring: #6a3ee8; /* 5.5:1 on paper */
   --kn-ring-offset: var(--kn-bg);
 }
 
@@ -196,7 +217,8 @@ body {
   font-family: var(--kn-font-sans);
   font-size: 13px;
   line-height: 1.5;
-  font-feature-settings: "cv05" 1; /* Inter fallback: tailed l, so l/I/1 differ in hostnames */
+  font-feature-settings: "ss01" 0, "cv05" 1; /* Inter fallback: tailed l */
+  letter-spacing: -0.003em;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -217,38 +239,159 @@ samp,
   font-variant-ligatures: none;
 }
 
-/*
- * Display type: Geist Pixel Square for page titles only. The face is drawn
- * on a 0.076em cell, so it is only set where the cell is a whole pixel
- * (the ffstudios pixel rule): 2px cell = 26.32px. No tracking, no bold.
- */
-.kn-display {
-  font-family: var(--kn-font-display);
-  font-size: 26.32px;
-  line-height: 32px;
-  font-weight: 500;
-  letter-spacing: 0;
-}
-
-/*
- * Materials: the sidebar and top bar are translucent vibrancy panels with
- * a hairline. Opaque where transparency is unwanted or unsupported.
- */
-.kn-material {
-  background-color: var(--kn-material);
-  -webkit-backdrop-filter: var(--kn-material-filter);
-  backdrop-filter: var(--kn-material-filter);
-}
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .kn-material {
-    background-color: var(--kn-surface);
+@layer components {
+  /*
+   * Display type: the ffstudios headline. Geist Sans (standing in for the
+   * site's Satoshi, which is not licensed here), medium weight, tight
+   * tracking, tight leading. `.kn-display` is the in-panel page title;
+   * `.kn-headline` is the hero size for onboarding, login and empty
+   * canvases; `.kn-title` is a card or section title.
+   */
+  .kn-display {
+    font-family: var(--kn-font-display);
+    font-size: 28px;
+    line-height: 32px;
+    font-weight: 500;
+    letter-spacing: var(--kn-tracking-display);
   }
-}
-@media (prefers-reduced-transparency: reduce) {
+
+  .kn-headline {
+    font-family: var(--kn-font-display);
+    font-size: clamp(36px, 5vw, 64px);
+    line-height: 1.02;
+    font-weight: 500;
+    letter-spacing: -0.045em;
+    text-wrap: balance;
+  }
+
+  .kn-title {
+    font-weight: 500;
+    letter-spacing: var(--kn-tracking-title);
+  }
+
+  .kn-lede {
+    font-size: 15px;
+    line-height: 24px;
+    color: var(--kn-text-2);
+    text-wrap: pretty;
+  }
+
+  /*
+   * The mono label: JetBrains Mono, uppercase, wide-tracked. Nav items,
+   * eyebrows, table headers, axis labels, annotations. Never body copy.
+   */
+  .kn-label {
+    font-family: var(--kn-font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    font-weight: 500;
+    letter-spacing: var(--kn-tracking-label);
+    text-transform: uppercase;
+    font-variant-ligatures: none;
+  }
+
+  .kn-label-sm {
+    font-family: var(--kn-font-mono);
+    font-size: 10px;
+    line-height: 14px;
+    font-weight: 500;
+    letter-spacing: var(--kn-tracking-label);
+    text-transform: uppercase;
+    font-variant-ligatures: none;
+  }
+
+  /* Geist Pixel: numerals and brand moments only, never body. */
+  .kn-pixel {
+    font-family: var(--kn-font-pixel);
+    letter-spacing: 0;
+  }
+
+  /* The second line of a hero headline. Purple-soft to purple. */
+  .kn-gradient-text {
+    background-image: var(--kn-gradient-brand);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+  @media (forced-colors: active) {
+    .kn-gradient-text {
+      background-image: none;
+      color: CanvasText;
+      -webkit-text-fill-color: CanvasText;
+    }
+  }
+
+  /*
+   * The blueprint: a faint square grid. `.kn-grid` paints it on any box;
+   * `.kn-canvas` is the page canvas (grid + the two vertical frame rails
+   * at half a gutter in from each edge). Both are background-only, so they
+   * never intercept a click and never affect layout.
+   */
+  .kn-grid {
+    background-image:
+      linear-gradient(90deg, var(--kn-grid-line) 1px, transparent 1px),
+      linear-gradient(var(--kn-grid-line) 1px, transparent 1px);
+    background-size: var(--kn-grid-size) var(--kn-grid-size);
+  }
+
+  .kn-canvas {
+    --kn-rail-inset: calc(var(--kn-gutter) / 2);
+    background-color: var(--kn-bg);
+    background-image:
+      linear-gradient(var(--kn-rail), var(--kn-rail)),
+      linear-gradient(var(--kn-rail), var(--kn-rail)),
+      linear-gradient(90deg, var(--kn-grid-line) 1px, transparent 1px),
+      linear-gradient(var(--kn-grid-line) 1px, transparent 1px);
+    background-size:
+      1px 100%,
+      1px 100%,
+      var(--kn-grid-size) var(--kn-grid-size),
+      var(--kn-grid-size) var(--kn-grid-size);
+    background-position:
+      left var(--kn-rail-inset) top,
+      right var(--kn-rail-inset) top,
+      left var(--kn-rail-inset) top,
+      left var(--kn-rail-inset) top;
+    background-repeat: no-repeat, no-repeat, repeat, repeat;
+  }
+
+  /*
+   * Crosshair registration marks: the small "+" where a section hairline
+   * meets the frame rails. Put `.kn-crosshairs` on any full-bleed element
+   * with a bottom hairline inside a `.kn-canvas`; the marks sit on its
+   * bottom edge at the rail positions.
+   */
+  .kn-crosshairs {
+    position: relative;
+  }
+  .kn-crosshairs::before,
+  .kn-crosshairs::after {
+    content: "";
+    position: absolute;
+    bottom: -6px;
+    width: 11px;
+    height: 11px;
+    pointer-events: none;
+    z-index: 1;
+    background:
+      linear-gradient(var(--kn-line-control), var(--kn-line-control)) center / 1px 100% no-repeat,
+      linear-gradient(var(--kn-line-control), var(--kn-line-control)) center / 100% 1px no-repeat;
+  }
+  .kn-crosshairs::before {
+    left: calc(var(--kn-gutter) / 2 - 5px);
+  }
+  .kn-crosshairs::after {
+    right: calc(var(--kn-gutter) / 2 - 5px);
+  }
+
+  /*
+   * Chrome (sidebar, top bar): flat ink with a hairline — the ffstudios
+   * header. The class name is kept from the previous system; there is no
+   * translucency or blur any more.
+   */
   .kn-material {
-    background-color: var(--kn-surface);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
+    background-color: var(--kn-material);
   }
 }
 
@@ -257,8 +400,8 @@ samp,
 }
 
 /*
- * One focus treatment for the entire product: a 3px halo, 2px off the
- * edge. The outline follows the element's own corner radius.
+ * One focus treatment for the entire product: a 2px primary ring, 2px
+ * off the edge. The outline follows the element's own corner radius.
  */
 /*
  * In the base layer so a component can opt out with a utility: the field

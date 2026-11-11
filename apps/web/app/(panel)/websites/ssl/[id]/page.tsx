@@ -3,8 +3,8 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Ban, Globe, MoreHorizontal, Network, RefreshCw, ShieldCheck } from "lucide-react";
-import type { RemediationAction } from "@kaname/contract";
+import { Ban, Globe, MoreHorizontal, Network, RefreshCw } from "lucide-react";
+import type { Certificate, RemediationAction } from "@kaname/contract";
 import {
   Badge,
   Button,
@@ -18,23 +18,39 @@ import {
   MonoText,
   PropertyList,
   PropertyRow,
+  CardInset,
+  MonoLabel,
   RelativeTime,
   ResourceHeader,
   SectionCard,
+  StatusLine,
   Switch,
   Tag,
 } from "@kaname/ui";
 import { formatDateTime } from "@/lib/format";
 import { useCan } from "@/lib/queries";
 import { JobPanel } from "../../_components/JobPanel";
-import { DetailBody, DetailFailed, DetailLoading } from "../../_components/detail";
+import {
+  DetailBody,
+  DetailEyebrow,
+  DetailFailed,
+  DetailIdentity,
+  DetailLoading,
+} from "../../_components/detail";
 import {
   useCertificate,
   useRenewCertificates,
   useRevokeCertificate,
   useSetAutoRenew,
 } from "../../_components/queries";
-import { CertificateStatusBadge, Expiry, useServerById } from "../../_components/status";
+import {
+  CertificateStatusBadge,
+  Expiry,
+  certificateStatusLabel,
+  certificateStatusTone,
+  lineTone,
+  useServerById,
+} from "../../_components/status";
 
 /* ------------------------------------------------------------------ *
  * Certificate detail.
@@ -109,8 +125,13 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
     <>
       <div className="flex min-h-0 flex-1 flex-col">
         <ResourceHeader
+          breadcrumb={<DetailEyebrow kind="Certificate" />}
           name={certificate.subject}
-          identity={`${certificate.issuer} · ${certificate.key_type.toUpperCase()} · ${certificate.challenge}`}
+          identity={
+            <DetailIdentity status={<CertificateStatusLine certificate={certificate} />}>
+              {`${certificate.issuer} · ${certificate.key_type.toUpperCase()} · ${certificate.challenge}`}
+            </DetailIdentity>
+          }
           connection={server?.connection}
           lastSeenAt={server?.last_seen_at}
           health={server?.health}
@@ -237,8 +258,13 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
               </SectionCard>
             }
           >
-            <SectionCard title="Renewal" icon={RefreshCw} headingLevel={3}>
-              <div className="flex flex-col gap-3">
+            <SectionCard
+              index={1}
+              title="Renewal"
+              caption="Inside 30 days of expiry."
+              headingLevel={3}
+            >
+              <div className="flex flex-col gap-4">
                 <Switch
                   checked={certificate.auto_renew}
                   disabled={!writable || revoked}
@@ -253,8 +279,21 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                   description={`Kaname renews inside the 30-day window without being asked. Turning this off means the ${certificate.subject} certificate lapses unless someone renews it by hand.`}
                 />
 
-                <div className="flex flex-wrap items-center gap-3 border-t border-[var(--kn-border-subtle)] pt-3">
-                  <Expiry days={certificate.days_remaining} at={certificate.expires_at} />
+                <CardInset
+                  grid
+                  padding="sm"
+                  className="flex flex-wrap items-center gap-x-4 gap-y-2"
+                >
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <MonoLabel size="xs" tone="muted">
+                      Valid for
+                    </MonoLabel>
+                    <Expiry
+                      days={certificate.days_remaining}
+                      at={certificate.expires_at}
+                      className="kn-title text-xl"
+                    />
+                  </div>
                   <span className="text-[var(--kn-text-2)]">
                     {certificate.expires_at
                       ? `until ${formatDateTime(certificate.expires_at)}`
@@ -271,15 +310,15 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
                   >
                     Renew now
                   </Button>
-                </div>
+                </CardInset>
               </div>
             </SectionCard>
 
             <SectionCard
+              index={2}
               title="Covered names"
-              icon={ShieldCheck}
+              caption="Every name a browser will accept it for."
               headingLevel={3}
-              description="Every name a browser will accept this certificate for."
             >
               <div className="flex flex-wrap gap-1">
                 <Tag size="sm" mono>
@@ -324,5 +363,42 @@ export default function CertificateDetailPage({ params }: { params: Promise<{ id
         }
       />
     </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
+/**
+ * One sentence under the subject: the state, how long is left and who
+ * renews it. Worded per state so an active certificate never says
+ * anything that reads as in-progress.
+ */
+function CertificateStatusLine({ certificate }: { certificate: Certificate }) {
+  const tone = lineTone(certificateStatusTone(certificate.status));
+  const days = certificate.days_remaining;
+  const renews = certificate.auto_renew ? "renews automatically" : "renewal is manual";
+
+  let sentence: string;
+  switch (certificate.status) {
+    case "revoked":
+      sentence = "Revoked · this name needs a new certificate";
+      break;
+    case "expired":
+      sentence = `Expired on ${certificate.server_name} · ${renews}`;
+      break;
+    case "failed":
+      sentence = `The last issuance attempt failed · ${renews}`;
+      break;
+    default:
+      sentence =
+        days == null
+          ? `${certificateStatusLabel(certificate.status)} · ${renews}`
+          : `${certificateStatusLabel(certificate.status)} · ${days} day${days === 1 ? "" : "s"} left · ${renews}`;
+  }
+
+  return (
+    <StatusLine tone={tone} pulse={certificate.status === "pending"}>
+      {sentence} · installed on {certificate.server_name}
+    </StatusLine>
   );
 }

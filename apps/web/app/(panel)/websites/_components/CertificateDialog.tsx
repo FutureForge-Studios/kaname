@@ -4,7 +4,7 @@ import * as React from "react";
 import type { CertKeyType, Domain, IssueCertificateInput } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, Tag, type ComboboxOption } from "@kaname/ui";
 import { useCan, useServers, useSession } from "@/lib/queries";
-import { FormDialog, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
 import { useDomains, useIssueCertificate } from "./queries";
 
 /* ------------------------------------------------------------------ *
@@ -185,135 +185,143 @@ export function CertificateDialog({
       onSubmit={submit}
       size="lg"
     >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField label="Domain" error={errorFor("domain_id")} required>
-          {domain ? (
-            <Input value={domain.name} readOnly mono />
-          ) : (
+      <FormSection index={1} title="Placement">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField label="Domain" error={errorFor("domain_id")} required>
+            {domain ? (
+              <Input value={domain.name} readOnly mono />
+            ) : (
+              <Combobox
+                options={domainOptions}
+                value={form.domainId}
+                onValueChange={(next) => {
+                  const row = domainRows.find((candidate) => candidate.id === next);
+                  setForm((previous) => ({
+                    ...previous,
+                    domainId: next ?? "",
+                    serverId: row?.server_id ?? previous.serverId,
+                    sans: row ? `www.${row.name}` : previous.sans,
+                  }));
+                }}
+                placeholder="Select a domain"
+                emptyMessage="No domain matches that name."
+                loading={domains.isLoading}
+                mono
+              />
+            )}
+          </FormField>
+
+          <FormField
+            label="Server"
+            description="Where certbot runs and where the certificate is installed."
+            error={errorFor("server_id")}
+            required
+          >
             <Combobox
-              options={domainOptions}
-              value={form.domainId}
-              onValueChange={(next) => {
-                const row = domainRows.find((candidate) => candidate.id === next);
-                setForm((previous) => ({
-                  ...previous,
-                  domainId: next ?? "",
-                  serverId: row?.server_id ?? previous.serverId,
-                  sans: row ? `www.${row.name}` : previous.sans,
-                }));
-              }}
-              placeholder="Select a domain"
-              emptyMessage="No domain matches that name."
-              loading={domains.isLoading}
+              options={serverOptions}
+              value={form.serverId}
+              onValueChange={(next) => set("serverId", next ?? "")}
+              placeholder={
+                serverOptions.length === 0 ? "No host you can write to" : "Select a server"
+              }
+              emptyMessage="No server matches that name."
+              loading={servers.isLoading}
+              disabled={serverOptions.length === 0}
               mono
             />
-          )}
+          </FormField>
+        </div>
+      </FormSection>
+
+      <FormSection index={2} title="Covered names">
+        <FormField
+          label="Additional names"
+          description="Comma or space separated. The domain itself is always the subject."
+          error={errorFor("sans")}
+          hint={sans.length > 0 ? `${sans.length} SAN${sans.length === 1 ? "" : "s"}` : undefined}
+        >
+          <Input
+            value={form.sans}
+            onChange={(event) => set("sans", event.target.value)}
+            placeholder="www.example.com"
+            mono
+            autoComplete="off"
+            spellCheck={false}
+          />
         </FormField>
 
+        {sans.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {sans.map((san) => (
+              <Tag key={san} size="xs" mono>
+                {san}
+              </Tag>
+            ))}
+          </div>
+        )}
+      </FormSection>
+
+      <FormSection index={3} title="Order">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <FormField
+            label="Challenge"
+            description={
+              form.challenge === "http-01"
+                ? "The name must resolve to this host over plain HTTP."
+                : "Kaname publishes and removes the validation record itself."
+            }
+            error={errorFor("challenge")}
+          >
+            <Select
+              value={form.challenge}
+              onChange={(event) => set("challenge", event.target.value as Challenge)}
+              options={[
+                { value: "http-01", label: "http-01 (webroot)" },
+                { value: "dns-01", label: "dns-01 (DNS record)", disabled: manualZone },
+              ]}
+            />
+          </FormField>
+
+          <FormField label="Key type" description="ECDSA unless a client needs RSA.">
+            <Select
+              value={form.keyType}
+              onChange={(event) => set("keyType", event.target.value as CertKeyType)}
+              options={KEY_TYPES}
+            />
+          </FormField>
+        </div>
+
         <FormField
-          label="Server"
-          description="Where certbot runs and where the certificate is installed."
-          error={errorFor("server_id")}
+          label="Contact email"
+          description="Where the authority sends expiry and revocation notices."
+          error={errorFor("contact_email")}
           required
         >
-          <Combobox
-            options={serverOptions}
-            value={form.serverId}
-            onValueChange={(next) => set("serverId", next ?? "")}
-            placeholder={
-              serverOptions.length === 0 ? "No host you can write to" : "Select a server"
-            }
-            emptyMessage="No server matches that name."
-            loading={servers.isLoading}
-            disabled={serverOptions.length === 0}
-            mono
+          <Input
+            type="email"
+            value={form.contactEmail}
+            onChange={(event) => set("contactEmail", event.target.value)}
+            placeholder="ops@example.com"
+            autoComplete="off"
           />
         </FormField>
-      </div>
+      </FormSection>
 
-      <FormField
-        label="Additional names"
-        description="Comma or space separated. The domain itself is always the subject."
-        error={errorFor("sans")}
-        hint={sans.length > 0 ? `${sans.length} SAN${sans.length === 1 ? "" : "s"}` : undefined}
-      >
-        <Input
-          value={form.sans}
-          onChange={(event) => set("sans", event.target.value)}
-          placeholder="www.example.com"
-          mono
-          autoComplete="off"
-          spellCheck={false}
+      <FormSection index={4} title="Renewal">
+        <Switch
+          checked={form.autoRenew}
+          onChange={(event) => set("autoRenew", event.target.checked)}
+          label="Renew automatically"
+          description="Kaname renews inside the 30-day window without being asked."
         />
-      </FormField>
 
-      {sans.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {sans.map((san) => (
-            <Tag key={san} size="xs" mono>
-              {san}
-            </Tag>
-          ))}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <FormField
-          label="Challenge"
-          description={
-            form.challenge === "http-01"
-              ? "The name must resolve to this host over plain HTTP."
-              : "Kaname publishes and removes the validation record itself."
-          }
-          error={errorFor("challenge")}
-        >
-          <Select
-            value={form.challenge}
-            onChange={(event) => set("challenge", event.target.value as Challenge)}
-            options={[
-              { value: "http-01", label: "http-01 (webroot)" },
-              { value: "dns-01", label: "dns-01 (DNS record)", disabled: manualZone },
-            ]}
-          />
-        </FormField>
-
-        <FormField label="Key type" description="ECDSA unless a client needs RSA.">
-          <Select
-            value={form.keyType}
-            onChange={(event) => set("keyType", event.target.value as CertKeyType)}
-            options={KEY_TYPES}
-          />
-        </FormField>
-      </div>
-
-      <FormField
-        label="Contact email"
-        description="Where the authority sends expiry and revocation notices."
-        error={errorFor("contact_email")}
-        required
-      >
-        <Input
-          type="email"
-          value={form.contactEmail}
-          onChange={(event) => set("contactEmail", event.target.value)}
-          placeholder="ops@example.com"
-          autoComplete="off"
+        <Switch
+          checked={form.staging}
+          onChange={(event) => set("staging", event.target.checked)}
+          label="Rehearse against the staging directory"
+          description="Proves the challenge works without spending the five-per-week issuance limit. The result is not trusted by browsers."
         />
-      </FormField>
-
-      <Switch
-        checked={form.autoRenew}
-        onChange={(event) => set("autoRenew", event.target.checked)}
-        label="Renew automatically"
-        description="Kaname renews inside the 30-day window without being asked."
-      />
-
-      <Switch
-        checked={form.staging}
-        onChange={(event) => set("staging", event.target.checked)}
-        label="Rehearse against the staging directory"
-        description="Proves the challenge works without spending the five-per-week issuance limit. The result is not trusted by browsers."
-      />
+      </FormSection>
     </FormDialog>
   );
 }

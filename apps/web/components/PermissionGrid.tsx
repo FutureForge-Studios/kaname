@@ -297,30 +297,21 @@ export function PermissionGrid({
         )}
       </div>
 
-      <div className="min-w-0 overflow-x-auto rounded-[var(--kn-r-md)] border border-[var(--kn-border)]">
+      <div className="min-w-0 overflow-x-auto rounded-[var(--kn-r-lg)] border border-[var(--kn-border)]">
         <div className="min-w-[640px]">
           <div
             className={cn(
-              "grid items-center gap-x-3 border-b border-[var(--kn-border)] bg-[var(--kn-surface-2)] px-3 py-1.5",
+              "kn-label-sm grid items-center gap-x-3 border-b border-[var(--kn-border)] px-3 py-2 text-[var(--kn-text-3)]",
               columns,
             )}
           >
-            <span className="text-2xs font-medium uppercase tracking-wide text-[var(--kn-text-3)]">
-              Resource
-            </span>
+            <span>Resource</span>
             {ACTIONS.map((action) => (
-              <span
-                key={action}
-                className="text-center text-2xs font-medium uppercase tracking-wide text-[var(--kn-text-3)]"
-              >
+              <span key={action} className="text-center">
                 {ACTION_LABELS[action]}
               </span>
             ))}
-            {perPermissionScope && (
-              <span className="text-2xs font-medium uppercase tracking-wide text-[var(--kn-text-3)]">
-                Scope
-              </span>
-            )}
+            {perPermissionScope && <span>Scope</span>}
           </div>
 
           {tree.length === 0 && (
@@ -339,9 +330,14 @@ export function PermissionGrid({
             return (
               <section key={module.module}>
                 <div className="flex items-center justify-between gap-3 border-b border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] px-3 py-1.5">
-                  <h3 className="font-medium text-[var(--kn-text)]">{module.label}</h3>
+                  <h3 className="kn-label-sm m-0 text-[var(--kn-text-2)]">{module.label}</h3>
                   <div className="flex items-center gap-2">
-                    <span className="kn-num text-xs text-[var(--kn-text-3)]">
+                    <span
+                      className={cn(
+                        "kn-mono text-xs",
+                        held > 0 ? "text-[var(--kn-accent-400)]" : "text-[var(--kn-text-3)]",
+                      )}
+                    >
                       {held}/{total}
                     </span>
                     {!readOnly && (
@@ -425,18 +421,26 @@ function ResourceRow({
   return (
     <div
       className={cn(
-        "grid items-center gap-x-3 border-b border-[var(--kn-border-subtle)] px-3 py-1.5 last:border-b-0",
-        "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)] hover:bg-[var(--kn-surface-2)]",
+        "relative grid items-center gap-x-3 border-b border-[var(--kn-border-subtle)] px-3 py-1.5 last:border-b-0",
+        "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)] hover:bg-[var(--kn-surface-2)]",
+        held.length > 0 && "bg-[var(--kn-accent-soft)] hover:bg-[var(--kn-accent-soft-strong)]",
         columns,
       )}
     >
+      {/* Granted rows carry a purple edge so a long grid can be scanned
+          for what the role holds without reading every checkbox. */}
+      {held.length > 0 && (
+        <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-[var(--kn-accent-500)]" />
+      )}
       <div className="flex min-w-0 items-center gap-2">
         <button
           type="button"
           disabled={readOnly}
           onClick={() => onToggleResource(resource, held.length < resource.actions.length)}
           className={cn(
-            "min-w-0 truncate text-left text-[var(--kn-text)] outline-none",
+            "min-w-0 truncate rounded-[var(--kn-r-xs)] text-left outline-none",
+            "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
+            held.length > 0 ? "text-[var(--kn-text)]" : "text-[var(--kn-text-2)]",
             !readOnly && "hover:text-[var(--kn-accent-400)]",
             readOnly && "cursor-default",
           )}
@@ -480,7 +484,7 @@ function ResourceRow({
 
       {perPermissionScope &&
         (held.length === 0 ? (
-          <span className="text-xs text-[var(--kn-text-3)]">—</span>
+          <span className="kn-mono text-xs text-[var(--kn-text-3)]">—</span>
         ) : readOnly ? (
           <ScopeText scope={scope} servers={servers} mixed={mixed} />
         ) : (

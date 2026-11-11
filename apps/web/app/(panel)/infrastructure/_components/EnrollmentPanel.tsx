@@ -6,7 +6,11 @@ import type { EnrollmentInstructions, Server } from "@kaname/contract";
 import {
   AgentConnectionIndicator,
   Button,
+  CardInset,
+  CheckItem,
+  CheckList,
   CopyableCode,
+  MonoLabel,
   MonoText,
   RelativeTime,
   Spinner,
@@ -56,43 +60,72 @@ export function EnrollmentPanel({ server, onEnrolled }: EnrollmentPanelProps) {
     notify.current?.(current);
   }, [current]);
 
+  const minted = instructions !== null;
+
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       {enroll.error && <PageError error={enroll.error} context="Enrollment token" />}
 
-      {!enrolled && (
-        <div className="flex flex-col gap-2">
-          {instructions ? (
-            <>
-              <CopyableCode value={instructions.command} label="Copy install command" block />
-              <p className="text-[var(--kn-text-2)]">
-                Run it as root on the host. The token is single-use and expires{" "}
-                <RelativeTime value={instructions.expires_at} />; the agent generates its keypair on
-                the box, so the private key never leaves it.
-              </p>
-            </>
-          ) : (
-            <div className="flex items-center gap-2 text-[var(--kn-text-2)]">
-              <Spinner size={14} label="Minting an enrollment token" />
-              Minting a single-use token…
-            </div>
+      <CheckList divided="between">
+        <CheckItem
+          state={enrolled || minted ? "done" : "current"}
+          title="Mint a single-use token"
+          description={
+            enrolled ? (
+              "Spent by the enrollment that just happened."
+            ) : minted ? (
+              <>
+                Bound to this server, expires <RelativeTime value={instructions.expires_at} />.
+              </>
+            ) : (
+              <span className="inline-flex items-center gap-2">
+                <Spinner size={12} label="Minting an enrollment token" />
+                Minting a single-use token…
+              </span>
+            )
+          }
+          action={
+            !enrolled && (
+              <Button
+                variant="ghost"
+                size="xs"
+                icon={RefreshCw}
+                loading={enroll.isPending}
+                onClick={() => enroll.mutate({ serverId: server.id })}
+              >
+                New token
+              </Button>
+            )
+          }
+        />
+
+        <CheckItem
+          state={enrolled ? "done" : minted ? "current" : "todo"}
+          title="Run the command on the host as root"
+          description="The agent generates its keypair on the box, so the private key never leaves it."
+        >
+          {!enrolled && instructions && (
+            <CardInset padding="none" className="mt-2.5 overflow-hidden">
+              <div className="flex items-center justify-between gap-3 border-b border-[var(--kn-border-subtle)] px-3 py-1.5">
+                <MonoLabel size="xs">Install command</MonoLabel>
+                <MonoLabel size="xs" tone="subtle">
+                  sh · root
+                </MonoLabel>
+              </div>
+              <CopyableCode
+                value={instructions.command}
+                block
+                className="rounded-none border-0 bg-transparent px-1 py-1"
+              />
+            </CardInset>
           )}
-        </div>
-      )}
+        </CheckItem>
 
-      <div className="flex flex-wrap items-center gap-3 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-3 py-2.5">
-        {enrolled ? (
-          <CheckCircle2 size={14} className="shrink-0 text-[var(--kn-ok)]" aria-hidden />
-        ) : (
-          <Spinner size={14} label="Waiting for the agent to connect" />
-        )}
-
-        <div className="min-w-0 flex-1">
-          <p className="text-[var(--kn-text)]">
-            {enrolled ? "Agent connected" : "Waiting for the agent to connect"}
-          </p>
-          <p className="min-w-0 truncate text-[var(--kn-text-2)]">
-            {enrolled ? (
+        <CheckItem
+          state={enrolled ? "done" : minted ? "current" : "todo"}
+          title={enrolled ? "Agent connected" : "Waiting for the agent to connect"}
+          description={
+            enrolled ? (
               <>
                 <MonoText muted>{current.os ?? "unknown os"}</MonoText>
                 {current.arch && <MonoText muted> · {current.arch}</MonoText>}
@@ -102,24 +135,23 @@ export function EnrollmentPanel({ server, onEnrolled }: EnrollmentPanelProps) {
               </>
             ) : (
               "This resolves on its own the moment the agent dials in."
-            )}
-          </p>
-        </div>
-
-        <AgentConnectionIndicator connection={current.connection} since={current.last_seen_at} />
-
-        {!enrolled && (
-          <Button
-            variant="ghost"
-            size="xs"
-            icon={RefreshCw}
-            loading={enroll.isPending}
-            onClick={() => enroll.mutate({ serverId: server.id })}
-          >
-            New token
-          </Button>
-        )}
-      </div>
+            )
+          }
+          action={
+            <span className="flex items-center gap-2">
+              {enrolled ? (
+                <CheckCircle2 size={14} className="shrink-0 text-[var(--kn-ok)]" aria-hidden />
+              ) : (
+                <Spinner size={14} label="Waiting for the agent to connect" />
+              )}
+              <AgentConnectionIndicator
+                connection={current.connection}
+                since={current.last_seen_at}
+              />
+            </span>
+          }
+        />
+      </CheckList>
     </div>
   );
 }

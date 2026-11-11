@@ -7,6 +7,7 @@ import {
   DialogBody,
   DialogFooter,
   DialogHeader,
+  LeaderLabel,
   type DialogSize,
 } from "@kaname/ui";
 import { isApiError, type ApiError } from "@/lib/api";
@@ -87,7 +88,7 @@ export function FormDialog({
       >
         <DialogHeader title={title} description={description} />
         <DialogBody>
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-5">
             {error != null && <PageError error={error} />}
             {children}
           </div>
@@ -113,6 +114,31 @@ export function FormDialog({
         </DialogFooter>
       </form>
     </Dialog>
+  );
+}
+
+/**
+ * One numbered group of fields — "01 PLACEMENT ———". Every dialog in the
+ * module reads top to bottom as the same short sequence: where it goes,
+ * what it is called, how it behaves. The label is a caption, not the
+ * fields' accessible name; each control keeps its own FormField label.
+ */
+export function FormSection({
+  index,
+  title,
+  children,
+}: {
+  index: number;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      <LeaderLabel index={index} aria-hidden>
+        {title}
+      </LeaderLabel>
+      {children}
+    </div>
   );
 }
 

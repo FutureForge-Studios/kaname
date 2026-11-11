@@ -3,7 +3,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowUpCircle,
   CircleAlert,
   CircleCheck,
   Download,
@@ -22,6 +21,8 @@ import {
 import {
   Badge,
   Button,
+  CheckItem,
+  CheckList,
   ConfirmDialog,
   DataTable,
   Drawer,
@@ -30,7 +31,9 @@ import {
   EmptyState,
   IconButton,
   LogViewer,
+  MonoLabel,
   MonoText,
+  PageBody,
   PageHeader,
   PropertyList,
   PropertyRow,
@@ -114,7 +117,9 @@ export default function UpdatesPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Administration"
         title="Updates"
+        lede="New versions of the control plane and its agents: what is running, what is available, and every update run with its output."
         subtitle={
           overview.data ? `Control plane ${overview.data.control_plane.current_version}` : undefined
         }
@@ -139,7 +144,7 @@ export default function UpdatesPage() {
         }
       />
 
-      <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+      <PageBody>
         {overview.isError && !restarting && (
           <PageError
             error={overview.error}
@@ -150,8 +155,8 @@ export default function UpdatesPage() {
 
         {overview.isLoading && (
           <>
-            <Skeleton className="h-44 rounded-[var(--kn-r-md)]" label="Loading updates" />
-            <Skeleton className="h-56 rounded-[var(--kn-r-md)]" />
+            <Skeleton className="h-44 rounded-[var(--kn-r-lg)]" label="Loading updates" />
+            <Skeleton className="h-56 rounded-[var(--kn-r-lg)]" />
           </>
         )}
 
@@ -168,7 +173,7 @@ export default function UpdatesPage() {
             />
           </>
         )}
-      </div>
+      </PageBody>
 
       <RunDrawer runId={openRunId} onClose={() => setOpenRunId(null)} />
     </div>
@@ -204,9 +209,9 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
 
   return (
     <SectionCard
+      index={1}
       title="Control plane"
       description={`This installation. Update cadence: ${UPDATE_TIER_LABELS[overview.settings.tier].label.toLowerCase()}.`}
-      icon={ArrowUpCircle}
       actions={
         cp.update_available &&
         !readOnly && (
@@ -226,56 +231,59 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
         )
       }
     >
-      <PropertyList>
-        <PropertyRow label="Running">
-          <MonoText>{cp.current_version}</MonoText>
-        </PropertyRow>
-        <PropertyRow label="Latest">
-          {cp.latest_version ? (
-            <span className="flex items-center gap-2">
-              <MonoText>{cp.latest_version}</MonoText>
-              {cp.pending?.security && (
-                <Badge tone="warn" size="sm">
-                  security
-                </Badge>
-              )}
-              {cp.requires_confirmation && (
-                <Badge tone="danger" size="sm">
-                  {cp.pending?.breaking ? "breaking" : "destructive migration"}
-                </Badge>
-              )}
-            </span>
-          ) : (
-            <span className="text-[var(--kn-text-3)]">up to date</span>
-          )}
-        </PropertyRow>
-        {cp.pending?.summary && <PropertyRow label="Summary">{cp.pending.summary}</PropertyRow>}
-        {cp.pending?.notes_url && (
-          <PropertyRow label="Release notes">
-            <a
-              className="inline-flex items-center gap-1 text-[var(--kn-accent-400)] hover:underline"
-              href={cp.pending.notes_url}
-              target="_blank"
-              rel="noreferrer noopener"
-            >
-              {cp.pending.notes_url}
-              <ExternalLink size={12} aria-hidden />
-            </a>
+      <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]">
+        <PropertyList>
+          <PropertyRow label="Running">
+            <MonoText>{cp.current_version}</MonoText>
           </PropertyRow>
-        )}
-        <PropertyRow label="Last checked">
-          {overview.settings.last_checked_at ? (
-            <RelativeTime value={overview.settings.last_checked_at} />
-          ) : (
-            <span className="text-[var(--kn-text-3)]">never</span>
-          )}
-        </PropertyRow>
-        {overview.settings.next_check_at && overview.settings.tier !== "off" && (
-          <PropertyRow label="Next check">
-            <RelativeTime value={overview.settings.next_check_at} />
+          <PropertyRow label="Latest">
+            {cp.latest_version ? (
+              <span className="flex items-center gap-2">
+                <MonoText>{cp.latest_version}</MonoText>
+                {cp.pending?.security && (
+                  <Badge tone="warn" size="sm">
+                    security
+                  </Badge>
+                )}
+                {cp.requires_confirmation && (
+                  <Badge tone="danger" size="sm">
+                    {cp.pending?.breaking ? "breaking" : "destructive migration"}
+                  </Badge>
+                )}
+              </span>
+            ) : (
+              <span className="text-[var(--kn-text-3)]">up to date</span>
+            )}
           </PropertyRow>
-        )}
-      </PropertyList>
+          {cp.pending?.summary && <PropertyRow label="Summary">{cp.pending.summary}</PropertyRow>}
+          {cp.pending?.notes_url && (
+            <PropertyRow label="Release notes">
+              <a
+                className="inline-flex items-center gap-1 text-[var(--kn-accent-400)] hover:underline"
+                href={cp.pending.notes_url}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                {cp.pending.notes_url}
+                <ExternalLink size={12} aria-hidden />
+              </a>
+            </PropertyRow>
+          )}
+          <PropertyRow label="Last checked">
+            {overview.settings.last_checked_at ? (
+              <RelativeTime value={overview.settings.last_checked_at} />
+            ) : (
+              <span className="text-[var(--kn-text-3)]">never</span>
+            )}
+          </PropertyRow>
+          {overview.settings.next_check_at && overview.settings.tier !== "off" && (
+            <PropertyRow label="Next check">
+              <RelativeTime value={overview.settings.next_check_at} />
+            </PropertyRow>
+          )}
+        </PropertyList>
+        <VersionPath overview={overview} />
+      </div>
 
       {overview.settings.last_check_error && (
         <Notice tone="warn" icon={CircleAlert}>
@@ -387,6 +395,74 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
 }
 
 /**
+ * The version timeline: where this install is, the release waiting for
+ * it, and when Kaname looks again. Read-only — the apply stays the one
+ * pill in the card's header.
+ */
+function VersionPath({ overview }: { overview: UpdateOverview }) {
+  const cp = overview.control_plane;
+  const { settings } = overview;
+  const running = cp.run?.status === "running";
+
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <MonoLabel as="p" size="xs" tone="subtle">
+        Version path
+      </MonoLabel>
+      <CheckList divided="between">
+        <CheckItem
+          title={<MonoText>{cp.current_version}</MonoText>}
+          description="Installed and answering on this origin."
+          action={
+            <Badge tone="ok" size="xs">
+              running
+            </Badge>
+          }
+        />
+        {cp.update_available && cp.latest_version ? (
+          <CheckItem
+            state={cp.blocked_reason && !running ? "warning" : "current"}
+            title={<MonoText>{cp.latest_version}</MonoText>}
+            description={
+              running
+                ? "Being applied now."
+                : cp.blocked_reason
+                  ? "Available, but blocked — see below."
+                  : cp.requires_confirmation
+                    ? "Available. Applying it asks you to confirm first."
+                    : "Available to apply from here."
+            }
+            action={
+              <Badge tone={cp.pending?.security ? "warn" : "info"} size="xs">
+                {running ? "applying" : "next"}
+              </Badge>
+            }
+          />
+        ) : (
+          <CheckItem
+            title="No newer release"
+            description="The manifest lists nothing past the running version."
+          />
+        )}
+        <CheckItem
+          state="todo"
+          title="Next check"
+          description={
+            settings.tier === "off" ? (
+              "Automatic checks are off. Use Check for updates."
+            ) : settings.next_check_at ? (
+              <RelativeTime value={settings.next_check_at} />
+            ) : (
+              "Not scheduled."
+            )
+          }
+        />
+      </CheckList>
+    </div>
+  );
+}
+
+/**
  * What the operator sees between "Update to X" and the new build
  * answering. The host's pull and restart lines arrive in the run as
  * they are written, and the 502 the proxy answers while the control
@@ -397,7 +473,7 @@ function UpdateInProgress({ run }: { run: UpdateRun }) {
   const lines = React.useMemo(() => toLogLines(run.log), [run.log]);
 
   return (
-    <div className="mt-3 flex flex-col gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)] px-3 py-2 text-sm">
+    <div className="mt-3 flex flex-col gap-2 rounded-[var(--kn-r-md)] border border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] px-3 py-2 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <Spinner size={14} label="Updating" />
         <span className="text-[var(--kn-text)]">
@@ -493,8 +569,8 @@ function Notice({
   return (
     <div
       className={cn(
-        "mt-3 flex items-start gap-2 rounded-[var(--kn-r-sm)] border px-3 py-2 text-sm",
-        tone === "info" && "border-[var(--kn-border)] bg-[var(--kn-surface-2)]",
+        "mt-3 flex items-start gap-2 rounded-[var(--kn-r-md)] border px-3 py-2 text-sm",
+        tone === "info" && "border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)]",
         tone === "warn" && "border-[var(--kn-warn)] bg-[var(--kn-warn-soft)]",
         tone === "danger" && "border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]",
       )}
@@ -590,9 +666,9 @@ function AgentTable({ overview, readOnly }: { overview: UpdateOverview; readOnly
 
   return (
     <SectionCard
+      index={2}
       title="Agents"
       description="One row per host. A rollout that fails on one server shows up as that server."
-      icon={ArrowUpCircle}
     >
       <DataTable
         label="Agent versions"
@@ -725,9 +801,9 @@ function HistoryTable({
 
   return (
     <SectionCard
+      index={3}
       title="History"
       description="Every update run, with the output it produced."
-      icon={ArrowUpCircle}
     >
       {error ? (
         <PageError error={error} onRetry={onRetry} context="Update history" />

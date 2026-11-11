@@ -50,6 +50,10 @@ const SITE_STATUS_META: Record<Site["status"], { label: string; tone: Tone }> = 
   error: { label: "Error", tone: "danger" },
 };
 
+export function siteStatusTone(status: Site["status"]): Tone {
+  return SITE_STATUS_META[status].tone;
+}
+
 export function SiteStatusBadge({ status }: { status: Site["status"] }) {
   const meta = SITE_STATUS_META[status];
   return (
@@ -90,6 +94,10 @@ const DOMAIN_STATUS_META: Record<Domain["status"], { label: string; tone: Tone }
   parked: { label: "Parked", tone: "neutral" },
   error: { label: "Error", tone: "danger" },
 };
+
+export function domainStatusTone(status: Domain["status"]): Tone {
+  return DOMAIN_STATUS_META[status].tone;
+}
 
 export function DomainStatusBadge({ status }: { status: Domain["status"] }) {
   const meta = DOMAIN_STATUS_META[status];
@@ -214,6 +222,14 @@ const CERT_STATUS_META: Record<CertStatus, { label: string; tone: Tone }> = {
   failed: { label: "Failed", tone: "danger" },
 };
 
+export function certificateStatusTone(status: CertStatus): Tone {
+  return CERT_STATUS_META[status].tone;
+}
+
+export function certificateStatusLabel(status: CertStatus): string {
+  return CERT_STATUS_META[status].label;
+}
+
 export function CertificateStatusBadge({ status }: { status: CertStatus }) {
   const meta = CERT_STATUS_META[status];
   return (
@@ -320,6 +336,14 @@ export const DEPLOYMENT_IN_FLIGHT: readonly DeploymentStatus[] = [
   "deploying",
 ];
 
+export function deploymentStatusTone(status: DeploymentStatus): Tone {
+  return DEPLOYMENT_STATUS_META[status].tone;
+}
+
+export function deploymentStatusLabel(status: DeploymentStatus): string {
+  return DEPLOYMENT_STATUS_META[status].label;
+}
+
 export function DeploymentStatusBadge({ status }: { status: DeploymentStatus }) {
   const meta = DEPLOYMENT_STATUS_META[status];
   return (
@@ -418,4 +442,14 @@ export function HostAxes({ server, fallbackName, className }: HostAxesProps) {
       />
     </span>
   );
+}
+
+/* ---------------------------- status lines --------------------------- */
+
+/**
+ * A StatusLine's dot is a status colour. Purple is brand and selection,
+ * so the "in motion" states that badge as accent read as info here.
+ */
+export function lineTone(tone: Tone): Tone {
+  return tone === "accent" ? "info" : tone;
 }

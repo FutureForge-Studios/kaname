@@ -3,7 +3,7 @@
 import * as React from "react";
 import { CloudDownload, History } from "lucide-react";
 import type { Server } from "@kaname/contract";
-import { Button, RelativeTime, cn } from "@kaname/ui";
+import { Button, MonoLabel, RelativeTime, cn } from "@kaname/ui";
 
 /* ------------------------------------------------------------------ *
  * HostSync — the visible half of KD-012.
@@ -58,19 +58,29 @@ export function HostSync({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--kn-r-md)] border px-3 py-2",
+        "flex min-h-10 flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--kn-r-lg)] border py-1.5 pl-3 pr-1.5",
         stale
           ? "border-[var(--kn-warn-soft)] bg-[var(--kn-warn-soft)]"
           : "border-[var(--kn-border)] bg-[var(--kn-surface)]",
         className,
       )}
     >
-      <History
-        size={14}
-        className={cn("shrink-0", stale ? "text-[var(--kn-warn)]" : "text-[var(--kn-text-3)]")}
-        aria-hidden
-      />
-      <p className={cn("min-w-0", stale ? "text-[var(--kn-warn)]" : "text-[var(--kn-text-2)]")}>
+      <span className="flex shrink-0 items-center gap-1.5">
+        <History
+          size={13}
+          className={cn("shrink-0", stale ? "text-[var(--kn-warn)]" : "text-[var(--kn-text-3)]")}
+          aria-hidden
+        />
+        <MonoLabel size="xs" tone={stale ? "warn" : "subtle"}>
+          {stale ? "Stale cache" : "Cache"}
+        </MonoLabel>
+      </span>
+      <p
+        className={cn(
+          "min-w-0 text-sm",
+          stale ? "text-[var(--kn-warn)]" : "text-[var(--kn-text-2)]",
+        )}
+      >
         {syncedAt ? (
           <>
             {server ? "The host reported these" : "The oldest of these"} {noun} were read{" "}

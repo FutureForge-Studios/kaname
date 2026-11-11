@@ -1,6 +1,11 @@
 "use client";
 
-import { useMutation, useQuery, type UseMutationResult, type UseQueryResult } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  type UseMutationResult,
+  type UseQueryResult,
+} from "@tanstack/react-query";
 import type {
   AdoptMailServerInput,
   CreateMailAliasInput,
@@ -74,7 +79,8 @@ export function useMailServer(id: string | null | undefined): UseQueryResult<Mai
 
 export function useDeployMailServer() {
   return useMutationWithJob<DeployMailServerInput & { server_name: string }>({
-    mutationFn: ({ server_name: _name, ...input }) => api.post<{ job: Job }>("/mail-servers", input),
+    mutationFn: ({ server_name: _name, ...input }) =>
+      api.post<{ job: Job }>("/mail-servers", input),
     invalidates: SERVER_FAMILIES,
     describe: (input) => `Deploy Yunori Mail Server on ${input.server_name}`,
     // The FormDialog shows the refusal above its fields.
@@ -147,7 +153,8 @@ export function useMailPreflight(
 ): UseQueryResult<{ checks: MailCheck[] }, ApiError> {
   return useQuery<{ checks: MailCheck[] }, ApiError>({
     queryKey: queryKeys.sub("mail-servers", id ?? "none", "preflight"),
-    queryFn: ({ signal }) => api.get<{ checks: MailCheck[] }>(`/mail-servers/${id}/preflight`, { signal }),
+    queryFn: ({ signal }) =>
+      api.get<{ checks: MailCheck[] }>(`/mail-servers/${id}/preflight`, { signal }),
     enabled: Boolean(id) && enabled,
     staleTime: Infinity,
     retry: false,
@@ -196,7 +203,8 @@ export function useMailDomains(
 
 export function useAddMailDomain() {
   return useMutationWithJob<CreateMailDomainInput & { domain_name: string }>({
-    mutationFn: ({ domain_name: _name, ...input }) => api.post<{ job: Job }>("/mail-domains", input),
+    mutationFn: ({ domain_name: _name, ...input }) =>
+      api.post<{ job: Job }>("/mail-domains", input),
     invalidates: DOMAIN_FAMILIES,
     describe: (input) => `Add mail domain ${input.domain_name}`,
     // The FormDialog shows the refusal above its fields.
@@ -227,7 +235,8 @@ export function useMailDnsReport(
 ): UseQueryResult<MailDnsReport, ApiError> {
   return useQuery<MailDnsReport, ApiError>({
     queryKey: queryKeys.sub("mail-domains", mailDomainId ?? "none", "dns"),
-    queryFn: ({ signal }) => api.get<MailDnsReport>(`/mail-domains/${mailDomainId}/dns`, { signal }),
+    queryFn: ({ signal }) =>
+      api.get<MailDnsReport>(`/mail-domains/${mailDomainId}/dns`, { signal }),
     enabled: Boolean(mailDomainId),
     staleTime: LIST_STALE_TIME,
   });

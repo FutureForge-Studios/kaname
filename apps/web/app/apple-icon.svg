@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180">
   <!-- Home-screen icons are composited on an unknown wallpaper, so this one
-       carries its own canvas. Both values are the literal --kn-bg and
-       --kn-accent-400 (dark) tokens; a CSS variable cannot reach an icon file. -->
+       carries its own canvas. The values are the literal --kn-bg,
+       --kn-accent-500 and --kn-accent-400 (dark) tokens; a CSS variable
+       cannot reach an icon file. Geometry: components/Logo.tsx. -->
   <rect width="180" height="180" rx="40" fill="#0a0a0c" />
-  <g transform="translate(30 30) scale(5)">
-    <g fill="none" stroke="#a98df8" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round">
-      <path d="M5.6 5h12.8l-2.6 14H8.2z" />
-    </g>
-    <circle cx="12" cy="12" r="1.9" fill="#a98df8" />
+  <g transform="translate(33 30) scale(5)">
+    <path d="M6.2 3h4.6L7.8 21H3.2z" fill="#7a4ff4" />
+    <path d="M16.1 3h5.3l-7.5 9.2h-4.6z" fill="#a98df8" />
+    <path d="M9.9 13.4h4.7L19.2 21h-5.1z" fill="#7a4ff4" />
   </g>
 </svg>

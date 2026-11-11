@@ -3,10 +3,10 @@
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
 import type { User } from "@kaname/contract";
-import { Button, FormField, InlineError, Input } from "@kaname/ui";
+import { Button, Card, Eyebrow, FormField, InlineError, Input, StatusLine } from "@kaname/ui";
 import { ApiError, api, isApiError } from "@/lib/api";
 import { useSession } from "@/lib/queries";
-import { Wordmark } from "@/components/Logo";
+import { Hero, HeroSplit, StandaloneFrame } from "@/app/setup/_components/frame";
 
 /* ------------------------------------------------------------------ *
  * Accept an invitation.
@@ -67,22 +67,33 @@ export default function InvitePage() {
   const general = error && !error.fields["password"] ? error : null;
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-[var(--kn-bg)] px-4 py-10">
-      <div className="w-full max-w-sm">
-        <div className="mb-8 flex flex-col items-center gap-2 text-center">
-          <Wordmark size={28} />
-          <p className="text-[var(--kn-text-3)]">You have been invited to this panel.</p>
-        </div>
-
-        <div className="rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)] p-5">
-          <form onSubmit={submit} noValidate className="flex flex-col gap-4">
-            <h1 className="text-lg font-medium tracking-tight text-[var(--kn-text)]">
-              Choose your password
-            </h1>
-            <p className="text-[var(--kn-text-2)]">
-              Nobody else has seen it — not even whoever invited you. Four unrelated words beat
-              anything with a number on the end.
-            </p>
+    <StandaloneFrame caption="Invitation">
+      <HeroSplit
+        center
+        hero={
+          <Hero
+            as="p"
+            eyebrow="Kaname"
+            title="You have been invited"
+            accent="to this panel."
+            lede="Choose a password and you are in. The link works once, and what you can see and change was decided by whoever invited you."
+          >
+            <StatusLine tone="neutral" className="mt-6">
+              Accepting an invitation is written to the audit trail.
+            </StatusLine>
+          </Hero>
+        }
+      >
+        <Card radius="xl" padding="lg" className="mx-auto w-full max-w-md">
+          <form onSubmit={submit} noValidate className="flex flex-col gap-5">
+            <div className="flex flex-col items-start gap-3">
+              <Eyebrow>Account</Eyebrow>
+              <h1 className="kn-display m-0 text-[var(--kn-text)]">Choose your password</h1>
+              <p className="m-0 text-[var(--kn-text-2)]">
+                Nobody else has seen it — not even whoever invited you. Four unrelated words beat
+                anything with a number on the end.
+              </p>
+            </div>
 
             <FormField label="Password" error={passwordError} required>
               <Input
@@ -112,22 +123,22 @@ export default function InvitePage() {
             </FormField>
 
             {general && (
-              <div className="rounded-[var(--kn-r-sm)] border border-[var(--kn-danger)] bg-[var(--kn-danger-soft)] px-3 py-2">
+              <div className="rounded-[var(--kn-r-md)] border border-[var(--kn-danger)] bg-[var(--kn-danger-soft)] px-4 py-3">
                 <InlineError message={general.message} icon={false} className="text-base" />
                 {general.remediation?.summary && (
-                  <p className="mt-1 text-xs text-[var(--kn-text-2)]">
+                  <p className="m-0 mt-1 text-sm text-[var(--kn-text-2)]">
                     {general.remediation.summary}
                   </p>
                 )}
               </div>
             )}
 
-            <Button type="submit" variant="primary" size="md" loading={pending} fullWidth>
+            <Button type="submit" variant="primary" size="lg" arrow={!pending} loading={pending} fullWidth>
               Set password and sign in
             </Button>
           </form>
-        </div>
-      </div>
-    </main>
+        </Card>
+      </HeroSplit>
+    </StandaloneFrame>
   );
 }

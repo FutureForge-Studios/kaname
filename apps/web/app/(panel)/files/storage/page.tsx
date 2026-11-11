@@ -18,9 +18,15 @@ import {
   MonoText,
   PageHeader,
   Progress,
+  NumberedSection,
+  PageBody,
   RelativeTime,
   SearchInput,
   SectionCard,
+  StatusLine,
+  Card,
+  CardInset,
+  MonoLabel,
   Select,
   Skeleton,
   cn,
@@ -30,7 +36,7 @@ import {
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
-import { formatBytes, formatCount, formatPercent, percentOf } from "@/lib/format";
+import { formatBytes, formatCount, formatPercent, percentOf, pluralize } from "@/lib/format";
 import { FormDialog } from "../../_components/FormDialog";
 import { JobActivityBar } from "../../_components/JobActivity";
 import { usageTone } from "../../_components/cells";
@@ -77,8 +83,19 @@ export default function StoragePage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Files"
         title="Storage"
         subtitle={selection.server?.hostname}
+        lede="Where the disk goes, from the last sample the agent took. Sampling walks the filesystem, so it only runs when you ask."
+        status={
+          breakdown ? (
+            <StatusLine tone={statusTone(usageTone(breakdown.used_percent))}>
+              sampled <RelativeTime value={breakdown.sampled_at} /> ·{" "}
+              {formatPercent(breakdown.used_percent)} of {formatBytes(breakdown.total, "binary", 0)}{" "}
+              in use
+            </StatusLine>
+          ) : undefined
+        }
         actions={
           <>
             <DropdownMenu
@@ -107,17 +124,13 @@ export default function StoragePage() {
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
-        <div className="flex flex-wrap items-center gap-3">
-          <ServerPicker selection={selection} />
-          {breakdown && (
-            <span className="flex items-center gap-1 text-xs text-[var(--kn-text-3)]">
-              sampled <RelativeTime value={breakdown.sampled_at} />
-            </span>
-          )}
+      <PageBody className="*:shrink-0">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <ServerPicker selection={selection} />
+          </div>
+          <JobActivityBar types={STORAGE_JOB_TYPES} title="Sampling" />
         </div>
-
-        <JobActivityBar types={STORAGE_JOB_TYPES} title="Sampling" />
 
         {!serverId && !selection.isLoading && (
           <SectionCard>
@@ -153,14 +166,32 @@ export default function StoragePage() {
 
         {breakdown && (
           <>
-            <Rollup breakdown={breakdown} />
-            <InodePressure mounts={breakdown.mounts} />
-            <Mounts mounts={breakdown.mounts} />
+            <NumberedSection
+              index={1}
+              title="Space"
+              caption="Every mount added together, as of the last sample."
+            >
+              <Rollup breakdown={breakdown} />
+            </NumberedSection>
+            <NumberedSection
+              index={2}
+              title="Mounts"
+              caption="One row per filesystem. Inodes run out separately from bytes."
+            >
+              <InodePressure mounts={breakdown.mounts} />
+              <Mounts mounts={breakdown.mounts} />
+            </NumberedSection>
             <Categories breakdown={breakdown} />
-            <Largest entries={breakdown.largest} />
+            <NumberedSection
+              index={4}
+              title="Largest directories"
+              caption="The heaviest paths the walk measured, by size."
+            >
+              <Largest entries={breakdown.largest} />
+            </NumberedSection>
           </>
         )}
-      </div>
+      </PageBody>
 
       {advancedOpen && (
         <SampleDialog
@@ -182,37 +213,110 @@ export default function StoragePage() {
  * ------------------------------------------------------------------ */
 
 function Rollup({ breakdown }: { breakdown: StorageBreakdown }) {
+  const tone = usageTone(breakdown.used_percent);
+  const categories = [...breakdown.categories].sort((a, b) => b.bytes - a.bytes);
+  const categorised = categories.reduce((sum, category) => sum + category.bytes, 0);
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      <MetricTile
-        size="sm"
-        icon={HardDrive}
-        label="Capacity"
-        value={formatBytes(breakdown.total, "binary", 0)}
-      />
-      <MetricTile
-        size="sm"
-        icon={Layers}
-        label="Used"
-        value={formatPercent(breakdown.used_percent)}
-        unit={`of ${formatBytes(breakdown.total, "binary", 0)}`}
-        tone={usageTone(breakdown.used_percent)}
-      />
-      <MetricTile
-        size="sm"
-        icon={Boxes}
-        label="Available"
-        value={formatBytes(breakdown.available, "binary", 0)}
-      />
-      <MetricTile
-        size="sm"
-        icon={FolderOpen}
-        label="Mounts"
-        value={formatCount(breakdown.mounts.length)}
-      />
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <MetricTile
+          size="sm"
+          icon={HardDrive}
+          label="Capacity"
+          value={formatBytes(breakdown.total, "binary", 0)}
+        />
+        <MetricTile
+          size="sm"
+          icon={Layers}
+          label="Used"
+          value={formatPercent(breakdown.used_percent)}
+          unit={`of ${formatBytes(breakdown.total, "binary", 0)}`}
+          tone={usageTone(breakdown.used_percent)}
+        />
+        <MetricTile
+          size="sm"
+          icon={Boxes}
+          label="Available"
+          value={formatBytes(breakdown.available, "binary", 0)}
+        />
+        <MetricTile
+          size="sm"
+          icon={FolderOpen}
+          label="Mounts"
+          value={formatCount(breakdown.mounts.length)}
+        />
+      </div>
+      <Card padding="md" className="flex flex-col gap-4">
+        <CardInset grid padding="sm" className="flex flex-col gap-2">
+          <Progress
+            value={breakdown.used_percent}
+            tone={tone}
+            size="sm"
+            label="Disk used across every mount"
+          />
+          <div className="flex items-center justify-between gap-3">
+            <span className={cn("kn-num text-xs", toneClass(tone))}>
+              {formatBytes(breakdown.used, "binary", 0)} used ·{" "}
+              {formatPercent(breakdown.used_percent)}
+            </span>
+            <span className="kn-mono text-xs text-[var(--kn-text-3)]">
+              {formatBytes(breakdown.available, "binary", 0)} free ·{" "}
+              {pluralize(breakdown.mounts.length, "mount")}
+            </span>
+          </div>
+        </CardInset>
+        {categories.length > 0 && categorised > 0 && (
+          <div className="flex flex-col gap-2">
+            <MonoLabel size="xs">Of what is used</MonoLabel>
+            <div
+              className="flex h-2 w-full gap-px overflow-hidden rounded-[var(--kn-r-pill)] bg-[var(--kn-surface-3)]"
+              aria-hidden
+            >
+              {categories.map((category, index) => (
+                <span
+                  key={`${category.kind}-${category.path}`}
+                  className="h-full"
+                  style={{
+                    width: `${(category.bytes / categorised) * 100}%`,
+                    background: CATEGORY_RAMP[index % CATEGORY_RAMP.length],
+                  }}
+                />
+              ))}
+            </div>
+            <ul className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0 text-xs">
+              {categories.map((category, index) => (
+                <li
+                  key={`${category.kind}-${category.path}`}
+                  className="flex items-center gap-1.5 text-[var(--kn-text-2)]"
+                >
+                  <span
+                    aria-hidden
+                    className="h-2 w-2 rounded-[var(--kn-r-xs)]"
+                    style={{ background: CATEGORY_RAMP[index % CATEGORY_RAMP.length] }}
+                  />
+                  {category.label}
+                  <span className="kn-num text-[var(--kn-text-3)]">
+                    {formatPercent(category.percent)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }
+
+/** A share of a whole, not a status: the chart ramp, never the status hues. */
+const CATEGORY_RAMP = [
+  "var(--kn-chart-1)",
+  "var(--kn-chart-2)",
+  "var(--kn-chart-3)",
+  "var(--kn-chart-4)",
+  "var(--kn-chart-5)",
+  "var(--kn-chart-6)",
+];
 
 function StorageSkeleton() {
   return (
@@ -394,26 +498,28 @@ function Mounts({ mounts }: { mounts: readonly DiskUsage[] }) {
   );
 
   return (
-    <SectionCard title="Mounts" icon={HardDrive} padded={false}>
-      <DataTable<DiskUsage>
-        columns={columns}
-        rows={mounts}
-        getRowId={(mount) => mount.mount}
-        label="Mounted filesystems"
-        density="default"
-        columnVisibility={false}
-        empty={
-          <EmptyState
-            icon={HardDrive}
-            title="No mounts reported"
-            description="The sample carried no filesystem list."
-            size="sm"
-          />
-        }
-        className="rounded-none border-0"
-      />
-    </SectionCard>
+    <DataTable<DiskUsage>
+      columns={columns}
+      rows={mounts}
+      getRowId={(mount) => mount.mount}
+      label="Mounted filesystems"
+      density="default"
+      columnVisibility={false}
+      empty={
+        <EmptyState
+          icon={HardDrive}
+          title="No mounts reported"
+          description="The sample carried no filesystem list."
+          size="sm"
+        />
+      }
+    />
   );
+}
+
+/** Usage below the warning line is a healthy state, not a brand mark. */
+function statusTone(tone: Tone): Tone {
+  return tone === "warn" || tone === "danger" ? tone : "ok";
 }
 
 function toneClass(tone: Tone): string {
@@ -430,55 +536,61 @@ function Categories({ breakdown }: { breakdown: StorageBreakdown }) {
   const categories = [...breakdown.categories].sort((a, b) => b.bytes - a.bytes);
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={3}
       title="What the space is spent on"
-      icon={Layers}
-      description={`Shares of the ${formatBytes(breakdown.used, "binary", 0)} in use, not of the device.`}
+      caption={`Shares of the ${formatBytes(breakdown.used, "binary", 0)} in use, not of the device.`}
     >
-      {categories.length === 0 ? (
-        <EmptyState
-          icon={Layers}
-          title="No category breakdown"
-          description="The agent classified nothing on this host — take a fresh sample to build one."
-          size="sm"
-        />
-      ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <BarChart
-            title="Storage by category"
-            description="Bytes per category, largest first."
-            orientation="horizontal"
-            height={Math.max(140, categories.length * 28 + 32)}
-            categories={categories.map((category) => category.label)}
-            series={[
-              { id: "bytes", label: "Bytes", values: categories.map((category) => category.bytes) },
-            ]}
-            formatValue={(value) => formatBytes(value, "binary", 0)}
-            showLegend={false}
+      <Card padding="md">
+        {categories.length === 0 ? (
+          <EmptyState
+            icon={Layers}
+            title="No category breakdown"
+            description="The agent classified nothing on this host — take a fresh sample to build one."
+            size="sm"
           />
+        ) : (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <BarChart
+              title="Storage by category"
+              description="Bytes per category, largest first."
+              orientation="horizontal"
+              height={Math.max(140, categories.length * 28 + 32)}
+              categories={categories.map((category) => category.label)}
+              series={[
+                {
+                  id: "bytes",
+                  label: "Bytes",
+                  values: categories.map((category) => category.bytes),
+                },
+              ]}
+              formatValue={(value) => formatBytes(value, "binary", 0)}
+              showLegend={false}
+            />
 
-          <ul className="flex flex-col">
-            {categories.map((category) => (
-              <li
-                key={`${category.kind}-${category.path}`}
-                className="flex items-baseline gap-3 border-b border-[var(--kn-border-subtle)] py-1.5 last:border-b-0"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[var(--kn-text)]">{category.label}</span>
-                  <MonoText muted truncate className="block min-w-0 text-xs">
-                    {category.path}
-                  </MonoText>
-                </span>
-                <ByteSize bytes={category.bytes} className="shrink-0" />
-                <span className="kn-num w-12 shrink-0 text-right text-xs text-[var(--kn-text-3)]">
-                  {formatPercent(category.percent)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </SectionCard>
+            <ul className="flex flex-col">
+              {categories.map((category) => (
+                <li
+                  key={`${category.kind}-${category.path}`}
+                  className="flex items-baseline gap-3 border-b border-[var(--kn-border-subtle)] py-1.5 last:border-b-0"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[var(--kn-text)]">{category.label}</span>
+                    <MonoText muted truncate className="block min-w-0 text-xs">
+                      {category.path}
+                    </MonoText>
+                  </span>
+                  <ByteSize bytes={category.bytes} className="shrink-0" />
+                  <span className="kn-num w-12 shrink-0 text-right text-xs text-[var(--kn-text-3)]">
+                    {formatPercent(category.percent)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </Card>
+    </NumberedSection>
   );
 }
 
@@ -556,46 +668,43 @@ function Largest({ entries }: { entries: readonly StorageLargestEntry[] }) {
   );
 
   return (
-    <SectionCard title="Largest directories" icon={FolderOpen} padded={false}>
-      <DataTable<StorageLargestEntry>
-        columns={columns}
-        rows={rows}
-        getRowId={(entry) => entry.path}
-        label="Largest directories"
-        density="compact"
-        columnVisibility={false}
-        sort={sort}
-        onSortChange={setSort}
-        page={page}
-        perPage={LARGEST_PER_PAGE}
-        total={filtered.length}
-        onPageChange={setPage}
-        toolbar={
-          <SearchInput
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            onClear={() => setSearch("")}
-            placeholder="Filter paths"
-            aria-label="Filter largest directories"
-            size="sm"
-            className="w-56"
-          />
-        }
-        empty={
-          <EmptyState
-            icon={FolderOpen}
-            title={search ? "No matching paths" : "Nothing measured yet"}
-            description={
-              search
-                ? "No sampled directory contains that."
-                : "The last sample recorded no directory sizes. Take one at a greater depth."
-            }
-            size="sm"
-          />
-        }
-        className="rounded-none border-0"
-      />
-    </SectionCard>
+    <DataTable<StorageLargestEntry>
+      columns={columns}
+      rows={rows}
+      getRowId={(entry) => entry.path}
+      label="Largest directories"
+      density="compact"
+      columnVisibility={false}
+      sort={sort}
+      onSortChange={setSort}
+      page={page}
+      perPage={LARGEST_PER_PAGE}
+      total={filtered.length}
+      onPageChange={setPage}
+      toolbar={
+        <SearchInput
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          onClear={() => setSearch("")}
+          placeholder="Filter paths"
+          aria-label="Filter largest directories"
+          size="sm"
+          className="w-56"
+        />
+      }
+      empty={
+        <EmptyState
+          icon={FolderOpen}
+          title={search ? "No matching paths" : "Nothing measured yet"}
+          description={
+            search
+              ? "No sampled directory contains that."
+              : "The last sample recorded no directory sizes. Take one at a greater depth."
+          }
+          size="sm"
+        />
+      }
+    />
   );
 }
 

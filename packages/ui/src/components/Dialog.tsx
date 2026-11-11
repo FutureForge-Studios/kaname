@@ -211,7 +211,7 @@ export const Dialog = React.forwardRef<HTMLDivElement, DialogProps>(function Dia
           onKeyDown={handleKeyDown}
           className={cn(
             "flex max-h-full w-full flex-col overflow-hidden outline-none",
-            "rounded-[var(--kn-r-xl)] border border-[var(--kn-border)] bg-[var(--kn-surface)]",
+            "rounded-[var(--kn-r-xl)] border border-[var(--kn-border-strong)] bg-[var(--kn-surface)]",
             "text-base text-[var(--kn-text)] shadow-[var(--kn-shadow-lg)]",
             "animate-[var(--animate-scale-in)]",
             variant(SIZES, size, "md"),
@@ -248,13 +248,13 @@ export const DialogHeader = React.forwardRef<HTMLDivElement, DialogHeaderProps>(
       <div
         ref={ref}
         className={cn(
-          "flex items-start gap-3 border-b border-[var(--kn-border)] px-4 py-3",
+          "flex items-start gap-3 border-b border-[var(--kn-border)] px-5 py-4",
           className,
         )}
         {...props}
       >
         <div className="min-w-0 flex-1">
-          <h2 id={titleId} className="text-md font-medium text-[var(--kn-text)]">
+          <h2 id={titleId} className="kn-title text-lg text-[var(--kn-text)]">
             {title}
           </h2>
           {description !== undefined && description !== null && (
@@ -281,7 +281,7 @@ export const DialogBody = React.forwardRef<HTMLDivElement, DialogBodyProps>(func
   return (
     <div
       ref={ref}
-      className={cn("min-h-0 flex-1 overflow-y-auto px-4 py-3", className)}
+      className={cn("min-h-0 flex-1 overflow-y-auto px-5 py-4", className)}
       {...props}
     />
   );
@@ -295,7 +295,7 @@ export const DialogFooter = React.forwardRef<HTMLDivElement, DialogFooterProps>(
       <div
         ref={ref}
         className={cn(
-          "flex items-center justify-end gap-2 border-t border-[var(--kn-border)] px-4 py-3",
+          "flex items-center justify-end gap-2 border-t border-[var(--kn-border)] px-5 py-3",
           className,
         )}
         {...props}
@@ -384,7 +384,7 @@ export function ConfirmDialog({
                   spellCheck={false}
                   disabled={loading}
                   className={cn(
-                    "h-8 w-full rounded-[var(--kn-r-md)] border border-[var(--kn-border)] px-2",
+                    "h-8 w-full rounded-[var(--kn-r-md)] border border-[var(--kn-field-border)] px-2.5",
                     "bg-[var(--kn-bg-inset)] font-mono text-base text-[var(--kn-text)]",
                     "transition-[border-color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
                     "focus-visible:border-[var(--kn-accent-500)] disabled:opacity-50",

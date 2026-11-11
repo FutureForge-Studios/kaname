@@ -55,7 +55,8 @@ import { RELAY_PROVIDERS, RELAY_PROVIDER_LABELS } from "./status";
 
 export const LOCAL_PART = /^[A-Za-z0-9._%+-]+$/;
 export const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-export const HOSTNAME = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+export const HOSTNAME =
+  /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 
 /** Providers whose SMTP host follows from the region, so the field is hidden. */
 const REGION_PROVIDERS = new Set<MailRelayProvider>(["ses", "resend"]);
@@ -248,7 +249,8 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
 
   const submit = () => {
     if (!serverId || !domain) return;
-    const serverName = servers.data?.data.find((server) => server.id === serverId)?.name ?? "the host";
+    const serverName =
+      servers.data?.data.find((server) => server.id === serverId)?.name ?? "the host";
     deploy.mutate(
       {
         server_id: serverId,
@@ -374,7 +376,9 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
           mono
           value={adminEmail}
           placeholder="you@gmail.com"
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) => setAdminEmail(event.target.value)}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+            setAdminEmail(event.target.value)
+          }
           autoComplete="off"
           spellCheck={false}
         />
@@ -384,7 +388,9 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
         label="First mailbox"
         required
         description="Created at the end of the install. Its password is shown once, here, when the deploy finishes."
-        hint={domain ? <MonoText muted>{`${firstMailbox || "…"}@${domain.name}`}</MonoText> : undefined}
+        hint={
+          domain ? <MonoText muted>{`${firstMailbox || "…"}@${domain.name}`}</MonoText> : undefined
+        }
         error={
           fields["first_mailbox"] ??
           (firstMailbox.length > 0 && !mailboxValid
@@ -395,7 +401,9 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
         <Input
           mono
           value={firstMailbox}
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) => setFirstMailbox(event.target.value)}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+            setFirstMailbox(event.target.value)
+          }
           autoComplete="off"
           spellCheck={false}
         />
@@ -424,9 +432,7 @@ export function DeployDialog({ open, onOpenChange, onQueued }: DeployDialogProps
         </RadioGroup>
       </FormField>
 
-      {sending === "relay" && (
-        <RelayFields value={relay} onChange={setRelay} fields={fields} />
-      )}
+      {sending === "relay" && <RelayFields value={relay} onChange={setRelay} fields={fields} />}
     </FormDialog>
   );
 }
@@ -508,7 +514,9 @@ export function RelayFields({ value, onChange, fields }: RelayFieldsProps) {
             mono
             value={value.region}
             placeholder={value.provider === "ses" ? "eu-west-1" : "us-east-1"}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) => set("region", event.target.value)}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+              set("region", event.target.value)
+            }
             autoComplete="off"
             spellCheck={false}
           />
@@ -520,14 +528,18 @@ export function RelayFields({ value, onChange, fields }: RelayFieldsProps) {
           <FormField
             label="SMTP host"
             required={!showRegion}
-            description={showRegion ? "Leave empty to use the provider's host for the region." : undefined}
+            description={
+              showRegion ? "Leave empty to use the provider's host for the region." : undefined
+            }
             error={fields["relay.host"]}
           >
             <Input
               mono
               value={value.host}
               placeholder="smtp.example.com"
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) => set("host", event.target.value)}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                set("host", event.target.value)
+              }
               autoComplete="off"
               spellCheck={false}
             />
@@ -538,7 +550,9 @@ export function RelayFields({ value, onChange, fields }: RelayFieldsProps) {
             mono
             inputMode="numeric"
             value={value.port}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) => set("port", event.target.value)}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+              set("port", event.target.value)
+            }
             autoComplete="off"
           />
         </FormField>
@@ -557,7 +571,9 @@ export function RelayFields({ value, onChange, fields }: RelayFieldsProps) {
           <Input
             mono
             value={value.username}
-            onChange={(event: React.ChangeEvent<HTMLInputElement>) => set("username", event.target.value)}
+            onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+              set("username", event.target.value)
+            }
             autoComplete="off"
             spellCheck={false}
           />
@@ -565,7 +581,9 @@ export function RelayFields({ value, onChange, fields }: RelayFieldsProps) {
       )}
 
       <PasswordField
-        label={value.provider === "resend" || value.provider === "postmark" ? "API key" : "Password"}
+        label={
+          value.provider === "resend" || value.provider === "postmark" ? "API key" : "Password"
+        }
         value={value.password}
         onChange={(next) => set("password", next)}
         description="Travels to the host once and is never stored by Kaname. Paste the provider's SMTP password or token."
@@ -622,7 +640,8 @@ export function AdoptDialog({ open, onOpenChange }: AdoptDialogProps) {
       error={adopt.error}
       onSubmit={() => {
         if (!serverId) return;
-        const serverName = servers.data?.data.find((server) => server.id === serverId)?.name ?? "the host";
+        const serverName =
+          servers.data?.data.find((server) => server.id === serverId)?.name ?? "the host";
         adopt.mutate(
           {
             server_id: serverId,
@@ -649,7 +668,9 @@ export function AdoptDialog({ open, onOpenChange }: AdoptDialogProps) {
       <FormField
         label="Mail hostname"
         description="Optional. Left empty, Kaname reads it from the host."
-        error={fields["hostname"] ?? (!hostnameValid ? "Enter a fully qualified hostname." : undefined)}
+        error={
+          fields["hostname"] ?? (!hostnameValid ? "Enter a fully qualified hostname." : undefined)
+        }
       >
         <Input
           mono
@@ -670,7 +691,9 @@ export function AdoptDialog({ open, onOpenChange }: AdoptDialogProps) {
           type="email"
           mono
           value={adminEmail}
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) => setAdminEmail(event.target.value)}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+            setAdminEmail(event.target.value)
+          }
           autoComplete="off"
           spellCheck={false}
         />
@@ -710,7 +733,8 @@ export function FinishSetupPanel({ pending, onDismiss }: FinishSetupPanelProps) 
   const reveal = useRevealDeploySecrets();
 
   const succeeded = job.status === "succeeded";
-  const failed = job.status === "failed" || job.status === "cancelled" || job.status === "timed_out";
+  const failed =
+    job.status === "failed" || job.status === "cancelled" || job.status === "timed_out";
 
   return (
     <SectionCard
@@ -818,7 +842,8 @@ export function FinishSetupPanel({ pending, onDismiss }: FinishSetupPanelProps) 
               </div>
             ) : (
               <p className="text-sm text-[var(--kn-text-2)]">
-                The first mailbox was not created by this deploy. Create one from the Mailboxes page.
+                The first mailbox was not created by this deploy. Create one from the Mailboxes
+                page.
               </p>
             )}
           </div>

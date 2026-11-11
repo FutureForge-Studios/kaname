@@ -195,8 +195,7 @@ export function useSaveFile() {
       // A File (not a string) so the declared size is the UTF-8 byte
       // count the agent will receive, not the UTF-16 length.
       const file = new File([content], name, { type: "text/plain;charset=utf-8" });
-      return uploadFile({ serverId, directory, file, overwrite: true, onProgress: () => {} })
-        .done;
+      return uploadFile({ serverId, directory, file, overwrite: true, onProgress: () => {} }).done;
     },
     onSuccess: async () => {
       await Promise.all(
