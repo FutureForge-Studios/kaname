@@ -44,7 +44,7 @@ export function SimplifiedHome() {
       href: "/apps",
       icon: PackageCheck,
       title: "Install an app",
-      description: "WordPress, Ghost and more in one step: site, database and HTTPS together.",
+      description: "WordPress, DokuWiki and more in one step: site, database and HTTPS together.",
       show: true,
     },
     {

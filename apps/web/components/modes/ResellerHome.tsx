@@ -134,6 +134,7 @@ export function ResellerHome() {
               density="compact"
               columns={columns}
               rows={list.slice(0, 8)}
+              columnVisibility={false}
               getRowId={(client) => client.id}
               onRowClick={(client) => router.push(`/reseller/clients/${client.id}`)}
             />

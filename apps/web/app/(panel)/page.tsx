@@ -44,6 +44,7 @@ import {
   type Tone,
 } from "@kaname/ui";
 import { GettingStarted } from "@/components/GettingStarted";
+import { ModeHome } from "@/components/modes";
 import { PageError } from "@/components/PageError";
 import { ATTENTION_ICONS, type IconComponent } from "@/lib/icons";
 import {
@@ -85,7 +86,16 @@ const SEVERITY_TONE: Record<Severity, Tone> = {
   info: "info",
 };
 
-export default function CommandCenterPage() {
+/*
+ * The home route. Clients, resellers and operators in Simplified each get
+ * their own home from ModeHome; an operator in Advanced gets the Command
+ * Center below.
+ */
+export default function HomePage() {
+  return <ModeHome fallback={<CommandCenterPage />} />;
+}
+
+function CommandCenterPage() {
   const router = useRouter();
   const can = useCan();
   const dashboard = useDashboard();

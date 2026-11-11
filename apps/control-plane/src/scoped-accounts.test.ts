@@ -4,7 +4,16 @@ import pino from "pino";
 import { createDb, eq, type DbHandle } from "@kaname/db";
 import { migrateHandle } from "@kaname/db/migrate";
 import { seedDemo } from "@kaname/db/seed";
-import { dbDatabases, mailboxes, resourceOwners, roles, servers, sites } from "@kaname/db/schema";
+import {
+  appInstalls,
+  dbDatabases,
+  mailboxes,
+  resourceOwners,
+  roles,
+  servers,
+  sites,
+} from "@kaname/db/schema";
+import { recordOwnership } from "./services/app-ownership.js";
 import { loadConfig, resetConfigForTests, type Config } from "./config.js";
 import { createContext, type AppContext } from "./context.js";
 import { buildServer } from "./server.js";
@@ -590,6 +599,73 @@ describe("view mode preference", () => {
     await call(owner, "PUT", "/me/view-mode", { view_mode: "simplified" });
     expect((await call(owner, "GET", "/audit")).statusCode).toBe(200);
     await call(owner, "PUT", "/me/view-mode", { view_mode: "advanced" });
+  });
+});
+
+describe("app installs", () => {
+  let bobSiteId = "";
+  const installRow = (domain: string, createdBy: string | null, siteId: string | null = null) => ({
+    appId: "wordpress",
+    appName: "WordPress",
+    appVersion: "6.8",
+    serverId: forgeId,
+    domain,
+    status: "active" as const,
+    inputs: { admin_email: "ops@scoped.test", system_user: "www-data", php_version: null },
+    siteId,
+    createdBy,
+  });
+
+  it("records what a scoped account's install creates as theirs, and nothing for an operator", async () => {
+    const owned = await handle.db.select({ id: resourceOwners.resourceId }).from(resourceOwners);
+    const ownedIds = new Set(owned.map((o) => o.id));
+    const free = (await handle.db.select().from(sites).where(eq(sites.serverId, forgeId))).filter(
+      (s) => !ownedIds.has(s.id),
+    );
+    expect(free.length).toBeGreaterThanOrEqual(2);
+    bobSiteId = free[0]!.id;
+    const ownerUserId = data(await call(owner, "GET", "/me")).user_id as string;
+    const before = data(await call(bob, "GET", "/me")).usage.sites as number;
+    const record = { serverId: forgeId, installId: crypto.randomUUID() };
+
+    await recordOwnership(handle.db, { ...record, userId: bobId, kind: "site", resourceId: bobSiteId });
+    // Kinds the ownership table does not model, and an operator's install, record nothing.
+    await recordOwnership(handle.db, { ...record, userId: bobId, kind: "certificate", resourceId: crypto.randomUUID() });
+    await recordOwnership(handle.db, { ...record, userId: ownerUserId, kind: "site", resourceId: free[1]!.id });
+
+    expect(data(await call(bob, "GET", "/me")).usage.sites).toBe(before + 1);
+    expect((await call(bob, "GET", `/sites/${bobSiteId}`)).statusCode).toBe(200);
+    const rows = await handle.db.select().from(resourceOwners).where(eq(resourceOwners.resourceId, free[1]!.id));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("shows a scoped account only the installs it started or whose site it owns", async () => {
+    const ownerUserId = data(await call(owner, "GET", "/me")).user_id as string;
+    const [mine, ops, viaSite] = await handle.db
+      .insert(appInstalls)
+      .values([
+        installRow("bob-blog.scoped.test", bobId),
+        installRow("ops-blog.scoped.test", ownerUserId),
+        installRow("handed-over.scoped.test", ownerUserId, bobSiteId),
+      ])
+      .returning();
+
+    const ids = async (cookie: string) =>
+      (data<{ id: string }[]>(await call(cookie, "GET", "/apps/installs?per_page=100")) ?? []).map((r) => r.id);
+
+    const bobSees = await ids(bob);
+    expect(bobSees).toEqual(expect.arrayContaining([mine!.id, viaSite!.id]));
+    expect(bobSees).not.toContain(ops!.id);
+    // The reseller answers for its clients' installs; a sibling client does not see them.
+    expect(await ids(reseller)).toEqual(expect.arrayContaining([mine!.id, viaSite!.id]));
+    expect(await ids(alice)).not.toContain(mine!.id);
+    expect(await ids(owner)).toEqual(expect.arrayContaining([mine!.id, ops!.id, viaSite!.id]));
+
+    expect((await call(bob, "GET", `/apps/installs/${mine!.id}`)).statusCode).toBe(200);
+    expect((await call(bob, "GET", `/apps/installs/${ops!.id}`)).statusCode).toBe(404);
+    expect((await call(bob, "DELETE", `/apps/installs/${ops!.id}`)).statusCode).toBe(404);
+    expect((await call(alice, "GET", `/apps/installs/${mine!.id}`)).statusCode).toBe(404);
+    expect((await call(bob, "GET", "/apps/catalog")).statusCode).toBe(200);
   });
 });
 

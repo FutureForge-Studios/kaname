@@ -120,7 +120,10 @@ export default function ResellersPage() {
           resellers.data ? (
             <StatusLine tone="ok">
               {list.length} reseller{list.length === 1 ? "" : "s"} ·{" "}
-              {list.reduce((n, r) => n + r.client_count, 0)} clients
+              {(() => {
+                const n = list.reduce((sum, r) => sum + r.client_count, 0);
+                return `${n} client${n === 1 ? "" : "s"}`;
+              })()}
             </StatusLine>
           ) : undefined
         }
