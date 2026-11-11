@@ -941,56 +941,7 @@ impl Containers for ContainerOps {
 
     async fn create_managed(&self, ctx: &Ctx, spec: ManagedContainerSpec) -> PResult<ContainerInfo> {
         let client = self.client()?;
-        let network = managed::network_name(&spec.install_id);
-        match self.find_network(ctx, &client, &network).await? {
-            Some(n)
-                if managed::is_managed_by(
-                    n.labels.as_ref().unwrap_or(&BTreeMap::new()),
-                    &spec.install_id,
-                ) => {}
-            Some(_) => {
-                return Err(precondition(format!("{network} was not created by Kaname")));
-            }
-            None => {
-                return Err(precondition(format!(
-                    "the install's network {network} does not exist; create it first"
-                )));
-            }
-        }
-
-        let name = managed::container_name(&spec.install_id, &spec.role);
-        match client.inspect_raw(ctx, &name).await {
-            Ok(existing) => {
-                let labels = existing.config.labels.clone().unwrap_or_default();
-                let ours = managed::is_managed_by(&labels, &spec.install_id)
-                    && labels.get(managed::LABEL_ROLE) == Some(&spec.role);
-                if !ours {
-                    return Err(ProviderError::conflict(format!(
-                        "a container named {name} exists and was not created by Kaname"
-                    )));
-                }
-                if !spec.replace {
-                    return Err(ProviderError::conflict(format!(
-                        "container {name} already exists"
-                    )));
-                }
-                client
-                    .call(
-                        ctx,
-                        Method::DELETE,
-                        &format!("/containers/{}?force=true&v=true", path_escape(&existing.id)),
-                        None,
-                        false,
-                    )
-                    .await?;
-            }
-            Err(ProviderError::NotFound(_)) => {}
-            Err(err) => return Err(err),
-        }
-
-        for mount in &spec.mounts {
-            prepare_source(mount, &spec.install_id)?;
-        }
+        let name = self.prepare_managed(ctx, &client, &spec, spec.replace).await?;
 
         #[derive(Deserialize)]
         struct Created {
@@ -1026,6 +977,55 @@ impl Containers for ContainerOps {
             return Err(err);
         }
         client.inspect(ctx, &created.id).await
+    }
+
+    async fn run_task(&self, ctx: &Ctx, p: ManagedTaskParams) -> PResult<ManagedTaskResult> {
+        let client = self.client()?;
+        let spec = p.spec;
+        // A task of the same role left by an interrupted run is replaced.
+        let name = self.prepare_managed(ctx, &client, &spec, true).await?;
+
+        #[derive(Deserialize)]
+        struct Created {
+            #[serde(rename = "Id", default)]
+            id: String,
+        }
+        #[derive(Deserialize)]
+        struct Waited {
+            #[serde(rename = "StatusCode", default)]
+            status_code: i64,
+        }
+        let created: Created = client
+            .post(
+                ctx,
+                &format!("/containers/create?name={}", path_escape(&name)),
+                Some(managed::task_body(&spec)),
+            )
+            .await?;
+        let id = path_escape(&created.id);
+        let remove = format!("/containers/{id}?force=true&v=true");
+
+        let outcome: PResult<i64> = async {
+            client.post_empty(ctx, &format!("/containers/{id}/start"), None).await?;
+            let wait_path = format!("/containers/{id}/wait?condition=not-running");
+            let wait = client.post::<Waited>(ctx, &wait_path, None);
+            match tokio::time::timeout(Duration::from_secs(p.timeout_seconds as u64), wait).await {
+                Ok(waited) => Ok(waited?.status_code),
+                Err(_) => Err(ProviderError::Timeout),
+            }
+        }
+        .await;
+
+        let output = client
+            .call(ctx, Method::GET, &format!("/containers/{id}/logs?stdout=1&stderr=1&tail=64"), None, true)
+            .await
+            .map(|raw| demultiplex_bytes(&raw))
+            .unwrap_or_default();
+        let _ = client.call(ctx, Method::DELETE, &remove, None, false).await;
+        Ok(ManagedTaskResult {
+            exit_code: outcome?,
+            output: truncate_output(output),
+        })
     }
 
     async fn app_status(&self, ctx: &Ctx, install_id: &str) -> PResult<ManagedAppStatus> {
@@ -1154,6 +1154,55 @@ fn prepare_source(mount: &ManagedMount, install_id: &str) -> PResult<()> {
     Ok(())
 }
 
+/// Writes one configuration file under the install's directory. The path
+/// was checked by the handler; it is checked again once its parents exist,
+/// and the file is opened without following a symlink at its name.
+fn write_managed_file(file: &ManagedFile, install_id: &str) -> PResult<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = managed::MANAGED_APPS_ROOT;
+    let target = managed::file_source(root, install_id, &file.path);
+    if let Some(parent) = std::path::Path::new(&target).parent() {
+        prepare_source(
+            &ManagedMount {
+                source: parent.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            install_id,
+        )
+        .or_else(|err| {
+            // The install directory itself is a valid parent of a top-level file.
+            if parent.to_string_lossy() == managed::install_dir(root, install_id) {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        })?;
+    }
+    managed::check_source(root, install_id, &target)?;
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o644)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&target)?;
+    out.write_all(file.content.as_bytes())?;
+    Ok(())
+}
+
+/// Decodes a whole framed (non-TTY) log body into text.
+fn demultiplex_bytes(mut raw: &[u8]) -> String {
+    let mut out = Vec::new();
+    while raw.len() >= 8 {
+        let size = u32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]) as usize;
+        let end = (8 + size).min(raw.len());
+        out.extend_from_slice(&raw[8..end]);
+        raw = &raw[end..];
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Sends `GET /` to a loopback port and reads the status line, so the
 /// install's health check means "the app answers HTTP", not "a socket is
 /// open". The address is fixed; only the port comes from the container.
@@ -1190,6 +1239,67 @@ fn parse_status_line(head: &[u8]) -> Option<i64> {
 }
 
 impl ContainerOps {
+    /// Everything before the create call, shared by services and tasks:
+    /// the install's network must be Kaname's, a same-named container must
+    /// be this install's (and is replaced only when asked), and every bind
+    /// source and file is put in place under the managed root.
+    async fn prepare_managed(&self, ctx: &Ctx, client: &DockerClient, spec: &ManagedContainerSpec, replace: bool) -> PResult<String> {
+        let network = managed::network_name(&spec.install_id);
+        match self.find_network(ctx, client, &network).await? {
+            Some(n)
+                if managed::is_managed_by(
+                    n.labels.as_ref().unwrap_or(&BTreeMap::new()),
+                    &spec.install_id,
+                ) => {}
+            Some(_) => {
+                return Err(precondition(format!("{network} was not created by Kaname")));
+            }
+            None => {
+                return Err(precondition(format!(
+                    "the install's network {network} does not exist; create it first"
+                )));
+            }
+        }
+
+        let name = managed::container_name(&spec.install_id, &spec.role);
+        match client.inspect_raw(ctx, &name).await {
+            Ok(existing) => {
+                let labels = existing.config.labels.clone().unwrap_or_default();
+                let ours = managed::is_managed_by(&labels, &spec.install_id)
+                    && labels.get(managed::LABEL_ROLE) == Some(&spec.role);
+                if !ours {
+                    return Err(ProviderError::conflict(format!(
+                        "a container named {name} exists and was not created by Kaname"
+                    )));
+                }
+                if !replace {
+                    return Err(ProviderError::conflict(format!(
+                        "container {name} already exists"
+                    )));
+                }
+                client
+                    .call(
+                        ctx,
+                        Method::DELETE,
+                        &format!("/containers/{}?force=true&v=true", path_escape(&existing.id)),
+                        None,
+                        false,
+                    )
+                    .await?;
+            }
+            Err(ProviderError::NotFound(_)) => {}
+            Err(err) => return Err(err),
+        }
+
+        for mount in &spec.mounts {
+            prepare_source(mount, &spec.install_id)?;
+        }
+        for file in &spec.files {
+            write_managed_file(file, &spec.install_id)?;
+        }
+        Ok(name)
+    }
+
     async fn managed_containers(
         &self,
         ctx: &Ctx,
@@ -1991,5 +2101,14 @@ mod tests {
             .collect();
         assert!(decoded.contains("io.kaname.managed=true"), "{decoded}");
         assert!(decoded.contains("io.kaname.install=abc"), "{decoded}");
+    }
+
+    #[test]
+    fn a_task_log_body_is_demultiplexed_whole() {
+        let mut raw = vec![1, 0, 0, 0, 0, 0, 0, 6];
+        raw.extend_from_slice(b"hello\n");
+        raw.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 4]);
+        raw.extend_from_slice(b"oops");
+        assert_eq!(demultiplex_bytes(&raw), "hello\noops");
     }
 }
