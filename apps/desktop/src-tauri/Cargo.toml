@@ -1,0 +1,59 @@
+[package]
+name = "kaname-desktop"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.90"
+description = "Kaname Desktop — a Tauri client for Kaname panels"
+license = "AGPL-3.0-only"
+repository = "https://github.com/FutureForge-Studios/kaname"
+publish = false
+
+# Standalone: not part of a workspace with agent/.
+[workspace]
+
+[lib]
+# The `_lib` suffix keeps the lib and bin from colliding on Windows (Tauri v2 template).
+name = "kaname_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "kaname-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+# HTTP + WebSocket, both on rustls with one TLS config per connection.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots", "json", "http2"] }
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "handshake", "__rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-native-certs = "0.8"
+webpki-roots = "0.26"
+
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+zeroize = { version = "1", features = ["std"] }
+
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
