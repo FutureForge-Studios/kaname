@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { and, desc, eq, ne, sql } from "@kaname/db";
+import { and, desc, eq, inArray, ne, or, sql, type SQL } from "@kaname/db";
 import {
   appInstalls,
   certificates,
@@ -39,6 +39,7 @@ import {
 import { ApiException, conflict, notFound } from "../lib/errors.js";
 import { buildPlan, chooseEngine, installNames } from "../services/app-installer.js";
 import { combine, enqueueServerJob, loadServer, scopeFilter, type ServerRow } from "./_shared.js";
+import { isOwnedBy, ownership } from "./_ownership.js";
 
 /* ------------------------------------------------------------------ *
  * Apps — the one-click installer.
@@ -55,6 +56,12 @@ import { combine, enqueueServerJob, loadServer, scopeFilter, type ServerRow } fr
  * from a recipe the caller cannot alter, so it does not also ask for
  * websites.* and databases.* — that would make "may install WordPress"
  * unusable without handing over the modules it is a safer front for.
+ *
+ * Every route opts in to ownership (KD-039): a reseller or client sees
+ * only installs it started or whose site it owns, may only install on
+ * a domain that is new or already theirs, and has to fit its quota.
+ * What the install job creates is recorded as theirs by
+ * services/app-ownership.ts.
  * ------------------------------------------------------------------ */
 
 type InstallRow = typeof appInstalls.$inferSelect;
@@ -68,11 +75,13 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
   /* ----------------------------- catalog ---------------------------- */
 
   app.get("/apps/catalog", async (req, reply) => {
+    ownership(req);
     helpers(req).authorize("apps.installs:read", null);
     return list(reply, [...APP_CATALOG], paginate(APP_CATALOG.length, 1, APP_CATALOG.length || 1));
   });
 
   app.get("/apps/catalog/:id", async (req, reply) => {
+    ownership(req);
     helpers(req).authorize("apps.installs:read", null);
     const { id } = parseParams(req, catalogParam);
     const recipe = findApp(id);
@@ -186,11 +195,13 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
   /* ------------------------------ list ------------------------------ */
 
   app.get("/apps/installs", async (req, reply) => {
+    const own = ownership(req);
     const q = parseQuery(req, appInstallListQuery);
     helpers(req).authorize("apps.installs:read", q.server_id ?? null);
 
     const where = combine(
       scopeFilter(req, "apps.installs:read", appInstalls.serverId),
+      own.account ? installsOwnedBy(own.account.ownerIds) : null,
       q.server_id ? eq(appInstalls.serverId, q.server_id) : null,
       q.app_id ? eq(appInstalls.appId, q.app_id) : null,
       q.status ? eq(appInstalls.status, q.status) : null,
@@ -224,6 +235,7 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/apps/installs/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const row = await loadInstall(req, id, "apps.installs:read");
     return item(reply, await installApi(req, row.id));
   });
@@ -238,6 +250,7 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
    */
   app.delete("/apps/installs/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const row = await loadInstall(req, id, "apps.installs:delete");
     const server = await loadServer(req, row.serverId, "apps.installs:delete");
     const h = helpers(req);
@@ -330,6 +343,7 @@ function precondition(
  * and "the install was refused" cannot both be true of the same input.
  */
 async function preflight(req: FastifyRequest, body: InstallAppInput): Promise<Preflight> {
+  const own = ownership(req);
   const recipe = findApp(body.app_id);
   if (!recipe) throw notFound("App", body.app_id);
 
@@ -397,6 +411,8 @@ async function preflight(req: FastifyRequest, body: InstallAppInput): Promise<Pr
   }
 
   const known = await db.select().from(domains).where(eq(domains.name, domain)).limit(1);
+  // A scoped account installs on a domain that is new or already its own.
+  if (known[0]) await own.assertOwns("domain", known[0].id, `Domain ${domain}`);
   if (known[0]?.siteId) {
     throw conflict(`${domain} already answers on another site.`, {
       summary:
@@ -452,6 +468,11 @@ async function preflight(req: FastifyRequest, body: InstallAppInput): Promise<Pr
     );
   }
 
+  // What the job will create has to fit the caller's allowance (KD-039).
+  await own.reserve("site");
+  if (!known[0]) await own.reserve("domain");
+  if (choice.engine) await own.reserve("database");
+
   const names = installNames(recipe, body, installId);
   notices.push(`Files go in ${names.deployRoot}, owned by the "${body.system_user}" account.`);
 
@@ -481,7 +502,38 @@ async function loadInstall(
   const row = rows[0];
   if (!row) throw notFound("App install", id);
   helpers(req).authorize(permission, row.serverId);
+  const account = req.principal?.scoped;
+  if (account && !(await installVisibleTo(req, row, account.ownerIds))) {
+    throw notFound("App install", id);
+  }
   return row;
+}
+
+/** Installs a scoped account may see: ones it started, or whose site it owns. */
+function installsOwnedBy(ownerIds: readonly string[]): SQL {
+  if (ownerIds.length === 0) return sql`false`;
+  return or(
+    inArray(appInstalls.createdBy, [...ownerIds]),
+    siteOwnedBy(appInstalls.siteId, ownerIds),
+  )!;
+}
+
+function siteOwnedBy(column: typeof appInstalls.siteId, ownerIds: readonly string[]): SQL {
+  return sql`exists (select 1 from resource_owners o
+    where o.kind = 'site' and o.resource_id = ${column}
+      and o.owner_id in (${sql.join(
+        ownerIds.map((id) => sql`${id}::uuid`),
+        sql`, `,
+      )}))`;
+}
+
+async function installVisibleTo(
+  req: FastifyRequest,
+  row: InstallRow,
+  ownerIds: readonly string[],
+): Promise<boolean> {
+  if (row.createdBy && ownerIds.includes(row.createdBy)) return true;
+  return row.siteId ? isOwnedBy(req.ctx.db, "site", row.siteId, ownerIds) : false;
 }
 
 async function installApi(req: FastifyRequest, id: string): Promise<AppInstall> {
