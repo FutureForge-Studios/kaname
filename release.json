@@ -1,8 +1,8 @@
 {
   "breaking": true,
   "destructive": true,
-  "security": false,
+  "security": true,
   "adds_config": [],
   "min_upgrade_from": null,
-  "summary": "Mail moves to Yunori Mail Server. Migration 0003 drops mail_forwarders, mail_auth_checks and mail_log_entries and empties the mail domain, mailbox and alias tables; a host running yunori-mail is re-read on its next sync. Postfix/Dovecot hosts are no longer managed."
+  "summary": "Agent rewritten in Rust (same protocol; update agents from the panel). Mail moves to Yunori Mail Server: migration 0003 drops mail_forwarders, mail_auth_checks and mail_log_entries and empties the mail domain, mailbox and alias tables; Postfix/Dovecot hosts are no longer managed. Security: single-use TOTP codes, X-Forwarded-For only from trusted proxies, checksum-verified agent installs. Plus alert rules, a finished DNS page and many fixes."
 }
