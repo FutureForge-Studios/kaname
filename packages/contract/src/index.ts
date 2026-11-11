@@ -23,10 +23,12 @@ export * from "./resources/mail.js";
 export * from "./resources/databases.js";
 export * from "./resources/security.js";
 export * from "./resources/backups.js";
+export * from "./resources/s3-presets.js";
 export * from "./resources/platform.js";
 export * from "./resources/accounts.js";
 export * from "./resources/updates.js";
 export * from "./resources/apps.js";
+export * from "./resources/app-health.js";
 export * from "./resources/setup.js";
 
 export * as agent from "./agent/index.js";

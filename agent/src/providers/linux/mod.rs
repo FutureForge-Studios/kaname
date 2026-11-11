@@ -8,6 +8,7 @@
 //! anything the host cannot serve returns `ProviderError::Unsupported`, so
 //! the panel greys the feature out instead of showing a failure.
 
+pub mod app_backup;
 pub mod backups;
 pub mod capabilities;
 pub mod certs;
@@ -112,6 +113,7 @@ pub struct LinuxProvider {
     backups: backups::BackupOps,
     pty: pty::PtyOps,
     ftp: ftp::FtpOps,
+    app_backup: app_backup::AppBackupOps,
 }
 
 pub async fn open(opts: Options) -> anyhow::Result<ProviderRef> {
@@ -158,6 +160,7 @@ pub async fn open(opts: Options) -> anyhow::Result<ProviderRef> {
         backups: backups::BackupOps(shared.clone()),
         pty: pty::PtyOps(shared.clone()),
         ftp: ftp::FtpOps(shared.clone()),
+        app_backup: app_backup::AppBackupOps(shared.clone()),
         shared,
         events: Arc::new(tokio::sync::Mutex::new(rx)),
         watcher,
@@ -248,6 +251,9 @@ impl Provider for LinuxProvider {
     }
     fn ftp(&self) -> &dyn super::ftp::Ftp {
         &self.ftp
+    }
+    fn app_backup(&self) -> &dyn super::app_backup::AppBackup {
+        &self.app_backup
     }
 
     async fn close(&self) {

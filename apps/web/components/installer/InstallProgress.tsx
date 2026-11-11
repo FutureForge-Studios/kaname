@@ -151,7 +151,9 @@ export function InstallSummary({ install }: { install: AppInstall }) {
       sentence = "A step failed · undoing what this install created";
       break;
     case "removing":
-      sentence = "Removing the site, its files and its database";
+      sentence = install.app_port !== null
+        ? "Removing the site, its containers and their data"
+        : "Removing the site, its files and its database";
       break;
   }
 

@@ -27,7 +27,17 @@ import { ftpJobHandlers } from "./ftp.js";
 import { mailJobHandlers } from "./mail.js";
 import { websiteJobHandlers } from "./websites.js";
 import { appJobHandlers } from "./apps.js";
+import {
+  appBackupJobHandlers,
+  emptyPrepared,
+  finishAppBackups,
+  prepareAppBackups,
+  recordManifests,
+  type PreparedApps,
+} from "./app-backups.js";
+import type { AppBackupPlanEntry } from "../services/app-backup-plan.js";
 import { banHandler, unbanHandler } from "./threats.js";
+import { recordUpgrade } from "../services/os-updates.js";
 import type { JobContext, JobHandler, JobWorker } from "./worker.js";
 
 /* ------------------------------------------------------------------ *
@@ -408,7 +418,15 @@ export function registerJobHandlers(worker: JobWorker): void {
   const handlers: Partial<Record<JobType, JobHandler>> = {
     /* system */
     "system.reboot": passthrough("system.reboot"),
-    "system.packages.upgrade": streaming("system.packages.upgrade"),
+    "system.packages.upgrade": async (ctx) => {
+      const serverId = requireServer(ctx);
+      const result = (await streaming("system.packages.upgrade")(ctx)) as MethodResult<"system.packages.upgrade">;
+      if (result.reboot_required) await ctx.log_("warn", "The host reports that a reboot is required.");
+      // The cached list is what the System updates tab shows; re-read it
+      // so the page says what is left, not what was there.
+      await recordUpgrade(ctx, serverId, result, { signal: ctx.signal });
+      return result;
+    },
     "system.sync": async (ctx) => {
       const serverId = requireServer(ctx);
       const info = await ctx.hub.call(serverId, "system.info", {}, { signal: ctx.signal });
@@ -661,6 +679,7 @@ export function registerJobHandlers(worker: JobWorker): void {
 
     /* the one-click app installer: see ./apps.ts */
     ...appJobHandlers(),
+    ...appBackupJobHandlers(),
 
     /* mail (Yunori Mail Server): see ./mail.ts */
     ...mailJobHandlers(),
@@ -845,8 +864,8 @@ export function registerJobHandlers(worker: JobWorker): void {
     /* backups */
     "backup.run": async (ctx) => {
       const serverId = requireServer(ctx);
-      const p = params<{ run_id: string } & MethodParams<"backup.run">>(ctx);
-      const { run_id, ...rest } = p;
+      const p = params<{ run_id: string; apps?: AppBackupPlanEntry[] } & MethodParams<"backup.run">>(ctx);
+      const { run_id, apps = [], ...rest } = p;
 
       await ctx.db
         .update(backupRuns)
@@ -879,7 +898,11 @@ export function registerJobHandlers(worker: JobWorker): void {
       await settleSchedule("running");
 
       let snapshot: MethodResult<"backup.run">;
+      // App scopes: dumps, manifests and a brief stop before the snapshot,
+      // undone after it whatever happens (jobs/app-backups.ts).
+      const preparedApps: PreparedApps | null = apps.length > 0 ? emptyPrepared() : null;
       try {
+        if (preparedApps) await prepareAppBackups(ctx, serverId, apps, preparedApps);
         const handle = ctx.hub.stream(
           serverId,
           "backup.run",
@@ -891,7 +914,9 @@ export function registerJobHandlers(worker: JobWorker): void {
           },
         );
         snapshot = await handle.done;
+        if (preparedApps) await finishAppBackups(ctx, serverId, preparedApps);
       } catch (err) {
+        if (preparedApps) await finishAppBackups(ctx, serverId, preparedApps);
         // The run row mirrors the job: an unreachable host is a wait, so
         // the run goes back to queued with the job; anything else is a
         // failure the backups page and the notifier both need to see —
@@ -941,6 +966,7 @@ export function registerJobHandlers(worker: JobWorker): void {
           fileCount: snapshot.file_count,
         })
         .returning({ id: restorePoints.id });
+      if (preparedApps) await recordManifests(ctx, point?.id, preparedApps);
 
       await ctx.db
         .update(backupRuns)

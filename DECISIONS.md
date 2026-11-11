@@ -873,3 +873,148 @@ that with one table and one helper; a tenant column would have touched every que
 sizes plus mailbox allowances), so a site's files do not count. A resource has one owner; a
 reseller "sharing" a site with two clients is not modelled. PLAN.md §0's non-goal narrows to
 multi-tenant hierarchies and billing.
+
+## KD-040 — Container apps: a typed create with agent-side guards, companions on a private network, loopback-only ports
+
+**Decision.** The app installer provisions image recipes (Ghost, Nextcloud, Uptime Kuma, n8n,
+Gitea, Plausible CE) through six new agent verbs: `container.image.pull`,
+`container.network.create`, `container.create`, `container.task.run`, `container.app.status` and
+`container.app.remove`. There is no Docker API passthrough. `container.create` takes a closed
+`ManagedContainerSpec` — install id, role, image, env, bind mounts, published ports, optional
+memory/CPU, an optional `nofile` ulimit, entrypoint argument tokens and small read-only config
+files — and the agent (`agent/src/providers/managed.rs`) validates it and writes the create body
+itself. Those guards live in the agent, not only in the control plane:
+
+- privileged off, `CapAdd` empty, no devices, `no-new-privileges`, private IPC/cgroup namespace,
+  no host network/PID/UTS/user namespace, a PIDs limit, bounded json-file logs, restart
+  `unless-stopped`; the entrypoint is never replaced and argument tokens cannot hold a space;
+- every published port binds `127.0.0.1` (there is no host-IP field), host ports ≥ 1024;
+- bind sources and config files only under `/var/lib/kaname-apps/<install_id>/`, checked
+  lexically and again after resolving symlinks, so the runtime socket, `/etc` or the agent's key
+  cannot be mounted; config files are always mounted read-only and opened with `O_NOFOLLOW`;
+- images need an explicit tag or digest;
+- names (`kaname-<install>-<role>`, network `kaname-<install>`) and labels (`io.kaname.managed`,
+  `io.kaname.install`, `io.kaname.role`) are derived from the install id; `container.create`
+  only replaces, and `container.app.remove` only deletes, resources carrying this install's labels.
+
+Each install gets its own bridge network. Databases run as **companion containers** on it,
+reachable by role (`db`, `events`) and never published: MySQL 8 for Ghost (the only engine Ghost
+supports in production), PostgreSQL 16 for Nextcloud, n8n, Gitea and Plausible, plus ClickHouse
+for Plausible with the settings from Plausible's Community Edition compose file. Uptime Kuma keeps
+SQLite in its data directory. Generated passwords and keys are sealed in `secrets` under
+`app_install:<id>:*` and removed with the install. The app is published on `127.0.0.1:<port>`,
+allocated per server from 20000–29999 and recorded on `app_installs.app_port` (migration 0010,
+unique per server); the site is a `container` runtime vhost proxying to it (websocket upgrade
+headers included), and nginx now answers the ACME challenge from the webroot for proxied sites
+instead of passing it to the app. Gitea's SSH is disabled and its port 22 never published: clone
+over HTTPS.
+
+**Why.** PLAN.md §0: the web tier must never reach a root primitive. A reachable container socket
+is a root shell, and a "create container" verb that accepted a raw body would be one too
+(`Privileged: true`, a bind of `/`). A closed shape validated where the socket is makes that
+impossible to express rather than merely checked upstream. Per-install networks keep one app's
+database unreachable from another app; loopback-only ports mean nginx and its certificate are the
+only way in, so a container never bypasses the host firewall the way Docker's published ports do.
+
+**Cost accepted.** The managed root is outside the agent's state directory
+(`/var/lib/kaname-apps`, not `/var/lib/kaname/apps`), because that directory is denied to every
+file verb. Images are not removed on uninstall (they may be shared). Podman hosts advertise
+`podman`, not `docker`, and are not offered image recipes yet. A port someone else binds on the
+host after allocation surfaces as a failed container start and a rolled-back install, not as a
+reallocation. Upgrading an installed app's image is not covered.
+
+## KD-041 — OS package updates are a cached read and an ordinary job
+
+**Decision.** A host's pending package updates (`system.packages.list`) are cached per server in
+`settings` under `os_updates:<server id>` and every page reads the cache. The control plane
+refreshes a connected host's cache when it is older than six hours (a background pass every ten
+minutes, one host at a time), on an explicit **Check now**, and after every upgrade. Upgrading is
+the existing `system.packages.upgrade` job — all packages or `security_only` — under the
+permission it was always specced with: `infra.servers:read` to look, `infra.servers:write` to
+upgrade or opt a server in to automatic security updates (security-only, at most once a day, never
+stacked on an upgrade in flight). "Reboot required" is learned only from an upgrade's result and
+cleared by a refresh that sees a later `boot_time`; Kaname never reboots a host by itself.
+
+**Why.** `apt-get update` across a fleet on page load is the KD-012 mistake at its most expensive.
+A cache row in `settings` needs no migration and merges atomically (`value || patch`), so a refresh
+and a settings change cannot overwrite each other. No new permission: the job spec already named
+`infra.servers:write`, which also guards rebooting the same host, and scoped accounts hold neither.
+
+**Cost accepted.** The list can be up to six hours old (the page says how old). Rows for a removed
+server linger in `settings` until overwritten; they are never read because every read joins the
+fleet. A reboot pending from outside Kaname (an upgrade run over SSH) is not detected.
+
+## KD-042 — App health is probed from the control plane; app alerts are ordinary alert rules
+
+**Decision.** Each active app install gets an HTTP(S) probe of its own address and a configurable
+path (default: the recipe's health endpoint, else `/`) once a minute, **from the control plane**,
+10 s timeout, eight at a time; a final 2xx is up, anything else (status, timeout, refusal, TLS)
+is a failure. Image recipes additionally get one `container.list` with stats **per server** every
+other minute (grouped by the `io.kaname.install` label), and one `fs.usage` of the managed data
+directory every six hours. Samples live in `app_health_samples` (eight days), the running verdict
+in `app_monitors`. Alerting on them is not a second engine: an app rule is an `alert_rules` row
+with an app kind as `metric`, `{ kind: "app" }` as scope and `app_install_id` set, evaluated in the
+same pass and through the same pending → firing → resolved lifecycle, open-alert key and
+notification path as a server rule. Defaults (app down after 3 failed checks; restart loop for
+image recipes; certificate expiring for HTTPS) are created once an install is active and cascade
+away with it.
+
+**Why.** The control plane is where a visitor stands: a probe from the host itself would pass with
+DNS, the firewall or the certificate broken, and needs a new agent verb. One poll per server, not
+per install, keeps container stats off the agent's back. Reusing the rule engine means mute,
+tune, dedup and channels already work, and Monitoring lists app alerts with no special case.
+
+**Cost accepted.** A control plane that cannot reach the internet (or its own apps' names) sees
+every app as down — the probe can be paused per app. A simulated host answers its probe from its
+container state (KD-010). The certificate-expiring app rule only marks the app; the certificate
+sweep keeps sending the one notification. App rules notify the operator's alert channels — there
+is no per-user channel, so a client sees its apps' alerts in the panel, not in its inbox.
+
+## KD-043 — App backups: a typed in-container dump, the managed root, restore through staging
+
+**Decision.** A backup scope kind `app` selects app installs by id. For an image recipe the
+snapshot is the install's directory under the managed apps root (KD-040) minus each SQL
+companion's live data directory; the consistent copy of that database is a dump taken by a new
+agent verb, `app.db_dump` (and its inverse `app.db_restore`). The verb takes an install id, a
+companion role, an engine from a closed enum (`postgres`, `mysql`, `mariadb`) and one of two
+fixed slots — no path, no command, no credential. The agent inspects `kaname-<install>-<role>`,
+refuses anything without Kaname's labels for exactly that install and role, reads the database
+name, user and root password from the container's own environment, runs one fixed argv per
+engine (`pg_dump`/`pg_restore`, `mysqldump`/`mysql`, `mariadb-dump`/`mariadb`) through the
+runtime's exec API, and moves the file through the companion's own data mount to a path it
+derives under `<root>/<install>/kaname-backup/`. Git recipes (WordPress, DokuWiki) reuse the
+files and databases machinery: the site root plus a `db.dump` written beside (never inside) the
+served tree. Each run writes a manifest — recipe, version, images, settings and secret *refs*;
+values stay envelope-encrypted in the control plane — stored on `restore_points.manifest`.
+Recipes that keep live state in files are briefly stopped for the snapshot (a map on the
+backup side, not a recipe field).
+
+A restore is one `app.restore` job: restic restores into a staging directory beside the live
+data, today's database is dumped to the `pre_restore` slot, the app stops, the live directory is
+moved aside and the staged one moved in (renames on one filesystem), each companion re-imports,
+the app starts and must answer on its loopback port. Any failure after the swap moves the
+original back and re-imports the safety dump. "Restore as new" (image recipes only) seals the
+source's secrets under a fresh install id, runs the ordinary installer for the new domain and
+server, then restores into it. A point whose app version is newer than today's recipe is
+refused. Scoped accounts reach all of this only through `/backups/apps/*`, the one backup route
+that opts in to ownership (KD-039).
+
+S3 destinations carry a provider preset (AWS, R2, B2's S3 API, Wasabi, Spaces, Hetzner,
+MinIO/custom) that derives the endpoint and signing region from each provider's documentation,
+plus path-style addressing. "Test connection" writes, reads back and deletes a probe object,
+SigV4-signed from the control plane (where the credentials already are), and names the failure:
+credentials, missing bucket, wrong region, clock skew, permission or network. No server-side
+encryption option: restic does not offer one, and its repositories are encrypted client-side.
+
+**Why.** A raw copy of a running database's files is not a backup, and the agent must not grow a
+general exec to get a better one. Fixing the argv and deriving every path keeps the verb as
+narrow as the managed-container verbs it sits beside. Staging plus rename means the slow part
+(download) happens while the app is still up, and the swap that touches live data is two
+renames that can be undone.
+
+**Cost accepted.** ClickHouse (Plausible's events) is taken as files with the app stopped, not
+dumped. A copy restored onto a new domain keeps whatever address the app stores in its own data
+(Nextcloud's trusted domains). The repository password and object-store credentials still have
+to be present on the host under the agent's `backup-secrets` directory, as before; the S3
+path-style choice reaches restic as `KANAME_S3_BUCKET_LOOKUP` in that file. Migration 0012 adds
+the nullable `restore_points.manifest`.

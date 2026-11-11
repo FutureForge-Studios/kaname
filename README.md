@@ -372,6 +372,25 @@ acknowledges it; one whose update was interrupted by a control-plane restart is 
 way rather than left "running". Prerelease versions order the way semver says (`rc.10` after
 `rc.9`), and an agent whose version cannot be parsed is shown as unknown, never as up to date.
 
+When a newer release is available, people who can apply it (`admin.settings:write`) see a dot on
+**Updates** in the sidebar and a dismissible pill in the top bar that opens the confirm step with
+the release notes — summary, and whether it is breaking, migrates destructively or fixes a
+security issue. Dismissing it lasts until the next release; after the update the panel says
+"Updated to X" once.
+
+### Operating-system updates
+
+Each server's **System updates** tab lists the host's pending package updates (apt, dnf/yum, apk,
+pacman) with installed and candidate versions and which are security fixes, and upgrades all of
+them or only the security ones as an ordinary job. The list is cached by the control plane and
+refreshed every six hours in the background or on **Check now**, so no page ever runs a package
+manager across the fleet. An upgrade that leaves a reboot pending marks the server until it has
+booted; Kaname never reboots it on its own. A server can opt in to applying security updates
+automatically (at most once a day). **Administration → Updates → System updates** lists every
+server with something waiting, with bulk upgrade, and the Command Center flags pending security
+updates and reboots. Reading needs `infra.servers:read`, upgrading `infra.servers:write`; reseller
+and client accounts never see it.
+
 ---
 
 ## Running it from source

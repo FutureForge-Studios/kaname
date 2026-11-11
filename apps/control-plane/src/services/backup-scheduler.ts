@@ -5,6 +5,7 @@ import type { AppContext } from "../context.js";
 import { computeNextRun } from "../lib/cron.js";
 import { ApiException, badRequest } from "../lib/errors.js";
 import { JobQueue } from "../jobs/queue.js";
+import { planAppScope, type AppBackupPlanEntry } from "./app-backup-plan.js";
 
 /* ------------------------------------------------------------------ *
  * Backup scheduler.
@@ -220,9 +221,12 @@ export class BackupScheduler {
         repository: schedule.repositoryPath,
         password_ref: schedule.passwordRef ?? "",
         paths: plan.paths,
-        exclude: [],
+        exclude: plan.exclude,
         tags: [`schedule:${schedule.id}`, "trigger:scheduled"],
         databases: plan.databases,
+        // Not sent to the agent: the handler runs these before and after
+        // the snapshot (dumps, manifests, a brief stop).
+        ...(plan.apps.length > 0 ? { apps: plan.apps } : {}),
       };
       // The queue bound to this transaction, so the job commits with the
       // claim and the run — or none of the three does.
@@ -318,16 +322,31 @@ const SCOPE_DEFAULT_PATHS: Record<BackupScope["kind"], string[]> = {
   mail: ["/var/vmail"],
   config: ["/etc"],
   panel: ["/var/lib/kaname"],
+  app: [],
 };
 
 export async function planScope(
   db: Database,
   schedule: ScheduleRow,
-): Promise<{ paths: string[]; databases: { engine: string; name: string }[] }> {
+): Promise<{
+  paths: string[];
+  exclude: string[];
+  databases: { engine: string; name: string }[];
+  apps: AppBackupPlanEntry[];
+}> {
   const paths: string[] = [];
+  const exclude: string[] = [];
   const databases: { engine: string; name: string }[] = [];
+  const apps: AppBackupPlanEntry[] = [];
 
   for (const scope of schedule.scope as BackupScope[]) {
+    if (scope.kind === "app") {
+      const plan = await planAppScope(db, schedule.serverId, scope.selectors);
+      paths.push(...plan.paths);
+      exclude.push(...plan.exclude);
+      apps.push(...plan.apps);
+      continue;
+    }
     if (scope.kind === "databases") {
       for (const selector of scope.selectors) {
         const [engine, name] = selector.includes(":")
@@ -361,7 +380,7 @@ export async function planScope(
       },
     );
   }
-  return { paths, databases };
+  return { paths, exclude, databases, apps };
 }
 
 /** A bare database name is only unambiguous once we know its engine. */

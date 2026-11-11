@@ -10,7 +10,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { BackupRunStatus } from "@kaname/contract";
+import type { AppBackupManifest, BackupRunStatus } from "@kaname/contract";
 import { pk, timestamps, ts } from "./common";
 import { servers } from "./fleet";
 import { users } from "./identity";
@@ -124,6 +124,12 @@ export const restorePoints = pgTable(
     scope: jsonb("scope").$type<{ kind: string; selectors: string[] }[]>().notNull().default([]),
     verifiedAt: ts("verified_at"),
     expiresAt: ts("expires_at"),
+    /**
+     * App scopes: each app's manifest (recipe, version, images, secret
+     * refs, where its data and dumps sit in the snapshot), keyed by
+     * install id. Never a secret value.
+     */
+    manifest: jsonb("manifest").$type<{ apps: Record<string, AppBackupManifest> } | null>(),
     ...timestamps,
   },
   (t) => [

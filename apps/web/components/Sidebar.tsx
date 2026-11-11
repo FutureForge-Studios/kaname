@@ -5,10 +5,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LifeBuoy, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { NavLeaf, NavSection, ResellerBranding } from "@kaname/contract";
-import { IconButton, Kbd, MonoLabel, Tooltip, cn } from "@kaname/ui";
+import { Dot, IconButton, Kbd, MonoLabel, Tooltip, cn } from "@kaname/ui";
 import { iconFor } from "@/lib/icons";
 import { AUDIENCE_LABELS, useModes, useNavigation } from "@/lib/modes";
 import { Wordmark } from "./Logo";
+import { useNavIndicators } from "./UpdateNotice";
 
 /* ------------------------------------------------------------------ *
  * Sidebar.
@@ -56,6 +57,7 @@ export function Sidebar({
   const drawer = variant === "drawer";
   const narrow = collapsed && !drawer;
   const sections = useNavigation();
+  const indicators = useNavIndicators();
 
   return (
     <div
@@ -105,6 +107,7 @@ export function Sidebar({
             pathname={pathname}
             narrow={narrow}
             first={index === 0}
+            indicators={indicators}
             number={
               leaves.length > 0
                 ? sections.slice(0, index + 1).filter((entry) => entry.leaves.length > 0).length
@@ -149,6 +152,8 @@ interface SidebarSectionProps {
   first: boolean;
   /** 1-based position among the grouped sections; shown as "01". */
   number: number;
+  /** Leaves that carry an "attention here" dot, e.g. a Kaname update. */
+  indicators: ReadonlySet<string>;
   onNavigate?: () => void;
 }
 
@@ -159,6 +164,7 @@ function SidebarSection({
   narrow,
   first,
   number,
+  indicators,
   onNavigate,
 }: SidebarSectionProps) {
   const labelId = React.useId();
@@ -201,6 +207,7 @@ function SidebarSection({
               icon={leaf.icon}
               shortcut={leaf.shortcut}
               active={isActive(pathname, leaf.href)}
+              indicator={indicators.has(leaf.href)}
               narrow={narrow}
               onNavigate={onNavigate}
             />
@@ -217,6 +224,8 @@ interface SidebarLinkProps {
   icon: string;
   shortcut?: string;
   active: boolean;
+  /** A small accent dot: something new behind this link. */
+  indicator?: boolean;
   narrow: boolean;
   onNavigate?: () => void;
 }
@@ -227,6 +236,7 @@ function SidebarLink({
   icon,
   shortcut,
   active,
+  indicator = false,
   narrow,
   onNavigate,
 }: SidebarLinkProps) {
@@ -259,6 +269,16 @@ function SidebarLink({
         aria-hidden
       />
       {!narrow && <span className="min-w-0 flex-1 truncate">{label}</span>}
+      {indicator && (
+        <>
+          <Dot
+            tone="accent"
+            className={cn(narrow && "absolute right-1.5 top-1")}
+            data-testid="nav-indicator"
+          />
+          <span className="sr-only"> — update available</span>
+        </>
+      )}
       {!narrow && shortcut && (
         <Kbd
           keys={`g then ${shortcut}`}

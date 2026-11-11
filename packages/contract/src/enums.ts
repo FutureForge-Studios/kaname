@@ -258,7 +258,8 @@ export type AuditActorType = z.infer<typeof auditActorType>;
  * ------------------------------------------------------------------ */
 
 export const backupDestinationKind = z.enum(["s3", "b2", "sftp", "local"]);
-export const backupScopeKind = z.enum(["files", "databases", "mail", "config", "panel"]);
+/** `app` selects app installs by id: its data, a consistent database dump and a manifest. */
+export const backupScopeKind = z.enum(["files", "databases", "mail", "config", "panel", "app"]);
 export const backupRunStatus = z.enum([
   "queued",
   "running",

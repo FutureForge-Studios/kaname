@@ -2,6 +2,12 @@
 
 import * as React from "react";
 import { Check, Plug, Plus, Trash2, TriangleAlert, X } from "lucide-react";
+import {
+  S3_PROVIDER_PRESETS,
+  s3EndpointFor,
+  type AppInstall,
+  type S3Provider,
+} from "@kaname/contract";
 import type {
   BackupDestination,
   BackupDestinationTarget,
@@ -73,6 +79,7 @@ export const SCOPE_KIND_LABELS: Record<ScopeKind, string> = {
   mail: "Mail",
   config: "Configuration",
   panel: "Panel state",
+  app: "Apps",
 };
 
 /** What each scope covers when the operator names no selectors. */
@@ -82,6 +89,7 @@ const SCOPE_HINTS: Record<ScopeKind, string> = {
   mail: "Absolute paths, one per line. Defaults to /var/vmail.",
   config: "Absolute paths, one per line. Defaults to /etc.",
   panel: "Absolute paths, one per line. Defaults to /var/lib/kaname.",
+  app: "Pick installs on this server. Each one's data, a database dump and its manifest go into the snapshot.",
 };
 
 const DEFAULT_RETENTION: BackupRetention = {
@@ -98,6 +106,7 @@ export function describeScope(scope: readonly BackupScope[]): string {
   return scope
     .map((entry) => {
       const label = SCOPE_KIND_LABELS[entry.kind];
+      if (entry.kind === "app") return `${label}: ${pluralize(entry.selectors.length, "install", "installs")}`;
       if (entry.selectors.length === 0) return `${label} (defaults)`;
       if (entry.selectors.length === 1) return `${label}: ${entry.selectors[0]}`;
       return `${label}: ${pluralize(entry.selectors.length, "entry", "entries")}`;
@@ -193,6 +202,10 @@ function FormError({ error, onRetry }: { error: ApiError | null; onRetry: () => 
 interface DestinationDraft {
   name: string;
   kind: DestinationKind;
+  provider: S3Provider;
+  accountId: string;
+  /** Null follows the provider preset. */
+  pathStyle: boolean | null;
   endpoint: string;
   region: string;
   bucket: string;
@@ -214,7 +227,12 @@ function emptyDraft(destination: BackupDestination | null): DestinationDraft {
   return {
     name: destination?.name ?? "",
     kind: destination?.kind ?? "s3",
-    endpoint: destination?.config.endpoint ?? "",
+    provider: destination?.config.provider ?? "aws",
+    accountId: "",
+    pathStyle: destination?.config.path_style ?? null,
+    // A preset-derived endpoint is not shown back as an override.
+    endpoint:
+      destination?.config.provider === "minio" ? (destination?.config.endpoint ?? "") : "",
     region: destination?.config.region ?? "us-east-1",
     bucket: destination?.config.bucket ?? "",
     prefix: "",
@@ -237,7 +255,12 @@ function buildTarget(draft: DestinationDraft): BackupDestinationTarget {
     case "s3":
       return {
         kind: "s3",
+        provider: draft.provider,
         ...(draft.endpoint.trim() ? { endpoint: draft.endpoint.trim() } : {}),
+        ...(draft.provider === "r2" && draft.accountId.trim()
+          ? { account_id: draft.accountId.trim().toLowerCase() }
+          : {}),
+        ...(draft.pathStyle !== null ? { path_style: draft.pathStyle } : {}),
         region: draft.region.trim(),
         bucket: draft.bucket.trim(),
         prefix: draft.prefix.trim(),
@@ -459,29 +482,7 @@ export function DestinationDialog({
 
               {(draft.kind === "s3" || draft.kind === "b2") && (
                 <>
-                  {draft.kind === "s3" && (
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                      <FormField
-                        label="Endpoint"
-                        description="Leave empty for AWS."
-                        error={fieldError(error, "target.endpoint")}
-                      >
-                        <Input
-                          mono
-                          value={draft.endpoint}
-                          onChange={(event) => patch({ endpoint: event.target.value })}
-                          placeholder="s3.eu-central-1.wasabisys.com"
-                        />
-                      </FormField>
-                      <FormField label="Region" required error={fieldError(error, "target.region")}>
-                        <Input
-                          mono
-                          value={draft.region}
-                          onChange={(event) => patch({ region: event.target.value })}
-                        />
-                      </FormField>
-                    </div>
-                  )}
+                  {draft.kind === "s3" && <S3ProviderFields draft={draft} patch={patch} error={error} />}
 
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <FormField label="Bucket" required error={fieldError(error, "target.bucket")}>
@@ -677,11 +678,24 @@ export function DestinationDialog({
   );
 }
 
+const PROBE_FAILURE_LABELS: Record<NonNullable<BackupDestinationTestResult["failure"]>, string> = {
+  network: "network",
+  auth: "credentials",
+  bucket_missing: "bucket missing",
+  region_mismatch: "wrong region",
+  clock_skew: "clock skew",
+  permission: "permission",
+  other: "refused",
+};
+
+const PROBE_STEP_LABELS = { connect: "connect", write: "write", read: "read back", delete: "delete" } as const;
+
 function TestResult({ result }: { result: BackupDestinationTestResult | null }) {
   if (!result) return null;
 
   return (
     <div
+      role="status"
       className={cn(
         "rounded-[var(--kn-r-sm)] border p-3",
         result.ok
@@ -689,7 +703,7 @@ function TestResult({ result }: { result: BackupDestinationTestResult | null }) 
           : "border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]",
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {result.ok ? (
           <Check size={14} className="text-[var(--kn-ok)]" aria-hidden />
         ) : (
@@ -698,6 +712,11 @@ function TestResult({ result }: { result: BackupDestinationTestResult | null }) 
         <span className="font-medium text-[var(--kn-text)]">
           {result.ok ? "Reachable" : "Not reachable"}
         </span>
+        {result.failure && (
+          <Badge tone="danger" size="xs">
+            {PROBE_FAILURE_LABELS[result.failure]}
+          </Badge>
+        )}
         {result.latency_ms !== null && (
           <Badge tone="neutral" size="xs" mono>
             <Duration ms={result.latency_ms} units={1} />
@@ -709,11 +728,146 @@ function TestResult({ result }: { result: BackupDestinationTestResult | null }) 
           </Badge>
         )}
       </div>
+      {result.checks.length > 0 && (
+        <ol className="m-0 mt-2 flex list-none flex-wrap gap-1.5 p-0" aria-label="Probe steps">
+          {result.checks.map((check) => (
+            <li key={check.step}>
+              <Badge tone={check.ok ? "ok" : "danger"} size="xs" mono title={check.detail ?? undefined}>
+                {check.ok ? "✓" : "✕"} {PROBE_STEP_LABELS[check.step]}
+                {check.latency_ms !== null ? ` · ${check.latency_ms}ms` : ""}
+              </Badge>
+            </li>
+          ))}
+        </ol>
+      )}
       {result.error && <p className="mt-1.5 text-[var(--kn-text)]">{result.error}</p>}
       {result.remediation?.summary && (
         <p className="mt-1.5 text-sm text-[var(--kn-text-2)]">{result.remediation.summary}</p>
       )}
     </div>
+  );
+}
+
+/**
+ * The S3 half of the destination form: a provider preset fills the
+ * endpoint, signing region and addressing its own docs give; the
+ * operator picks a region (or types one where the provider's list is
+ * open) and overrides the endpoint only when they mean to.
+ */
+function S3ProviderFields({
+  draft,
+  patch,
+  error,
+}: {
+  draft: DestinationDraft;
+  patch: (next: Partial<DestinationDraft>) => void;
+  error: ApiError | null;
+}) {
+  const preset = S3_PROVIDER_PRESETS[draft.provider];
+  const derived = s3EndpointFor(draft.provider, draft.region.trim() || preset.default_region, draft.accountId.trim() || null);
+  const pathStyle = draft.pathStyle ?? preset.path_style;
+  const listId = `s3-regions-${draft.provider}`;
+
+  return (
+    <>
+      <FormField
+        label="Provider"
+        required
+        description={
+          <>
+            {preset.note}{" "}
+            <a href={preset.docs_url} target="_blank" rel="noreferrer" className="underline">
+              Provider docs
+            </a>
+          </>
+        }
+      >
+        <Select
+          value={draft.provider}
+          onChange={(event) => {
+            const next = event.target.value as S3Provider;
+            patch({ provider: next, region: S3_PROVIDER_PRESETS[next].default_region, pathStyle: null, endpoint: "" });
+          }}
+          options={(Object.keys(S3_PROVIDER_PRESETS) as S3Provider[]).map((id) => ({
+            value: id,
+            label: S3_PROVIDER_PRESETS[id].label,
+          }))}
+        />
+      </FormField>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <FormField
+          label={draft.provider === "hetzner" || draft.provider === "spaces" ? "Location" : "Region"}
+          required
+          error={fieldError(error, "target.region")}
+        >
+          {preset.closed_regions ? (
+            <Select
+              mono
+              value={draft.region}
+              onChange={(event) => patch({ region: event.target.value })}
+              options={[...preset.regions]}
+            />
+          ) : (
+            <>
+              <Input
+                mono
+                value={draft.region}
+                list={preset.regions.length > 0 ? listId : undefined}
+                onChange={(event) => patch({ region: event.target.value })}
+                placeholder={preset.default_region}
+              />
+              {preset.regions.length > 0 && (
+                <datalist id={listId}>
+                  {preset.regions.map((r) => (
+                    <option key={r.value} value={r.value} />
+                  ))}
+                </datalist>
+              )}
+            </>
+          )}
+        </FormField>
+
+        {preset.needs_account_id ? (
+          <FormField label="Account ID" required error={fieldError(error, "target.account_id")}>
+            <Input
+              mono
+              autoComplete="off"
+              value={draft.accountId}
+              onChange={(event) => patch({ accountId: event.target.value })}
+              placeholder="32 hex characters"
+            />
+          </FormField>
+        ) : (
+          <FormField
+            label="Endpoint"
+            required={!preset.derived_endpoint}
+            description={
+              preset.derived_endpoint ? `Leave empty for ${derived ?? "the preset"}.` : "Host, or URL with http:// for plain HTTP."
+            }
+            error={fieldError(error, "target.endpoint")}
+          >
+            <Input
+              mono
+              value={draft.endpoint}
+              onChange={(event) => patch({ endpoint: event.target.value })}
+              placeholder={derived ?? "minio.internal:9000"}
+            />
+          </FormField>
+        )}
+      </div>
+
+      <Switch
+        checked={pathStyle}
+        onChange={(event) => patch({ pathStyle: event.target.checked })}
+        label="Path-style addressing"
+        description={
+          pathStyle
+            ? "Requests go to host/bucket. Needed for MinIO and for bucket names with dots."
+            : "Requests go to bucket.host (virtual-hosted), the default for this provider."
+        }
+      />
+    </>
   );
 }
 
@@ -924,7 +1078,10 @@ export function ScheduleDialog({
                       aria-label={`Scope ${index + 1} kind`}
                       onChange={(event) => {
                         const next = [...draft.scope];
-                        next[index] = { ...entry, kind: event.target.value as ScopeKind };
+                        const kind = event.target.value as ScopeKind;
+                        // Install ids and paths do not translate into each other.
+                        const reset = (kind === "app") !== (entry.kind === "app");
+                        next[index] = { kind, selectors: reset ? "" : entry.selectors };
                         patch({ scope: next });
                       }}
                       options={(Object.keys(SCOPE_KIND_LABELS) as ScopeKind[]).map((kind) => ({
@@ -932,19 +1089,32 @@ export function ScheduleDialog({
                         label: SCOPE_KIND_LABELS[kind],
                       }))}
                     />
-                    <Textarea
-                      mono
-                      rows={2}
-                      spellCheck={false}
-                      aria-label={`Scope ${index + 1} selectors`}
-                      placeholder={SCOPE_HINTS[entry.kind]}
-                      value={entry.selectors}
-                      onChange={(event) => {
-                        const next = [...draft.scope];
-                        next[index] = { ...entry, selectors: event.target.value };
-                        patch({ scope: next });
-                      }}
-                    />
+                    {entry.kind === "app" ? (
+                      <AppInstallPicker
+                        index={index}
+                        serverId={editing ? schedule.server_id : draft.serverId}
+                        value={entry.selectors.split("\n").filter(Boolean)}
+                        onChange={(ids) => {
+                          const next = [...draft.scope];
+                          next[index] = { ...entry, selectors: ids.join("\n") };
+                          patch({ scope: next });
+                        }}
+                      />
+                    ) : (
+                      <Textarea
+                        mono
+                        rows={2}
+                        spellCheck={false}
+                        aria-label={`Scope ${index + 1} selectors`}
+                        placeholder={SCOPE_HINTS[entry.kind]}
+                        value={entry.selectors}
+                        onChange={(event) => {
+                          const next = [...draft.scope];
+                          next[index] = { ...entry, selectors: event.target.value };
+                          patch({ scope: next });
+                        }}
+                      />
+                    )}
                     <IconButton
                       icon={Trash2}
                       label={`Remove scope ${index + 1}`}
@@ -1143,6 +1313,44 @@ export function ScheduleDialog({
         </DialogFooter>
       </form>
     </Dialog>
+  );
+}
+
+/** Picks app installs on the schedule's server for an `app` scope. */
+function AppInstallPicker({
+  index,
+  serverId,
+  value,
+  onChange,
+}: {
+  index: number;
+  serverId: string;
+  value: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const installs = useList<AppInstall>(
+    "apps/installs",
+    { per_page: 200, ...(serverId ? { server_id: serverId } : {}) },
+    { enabled: Boolean(serverId) },
+  );
+  const rows = installs.data?.data ?? [];
+  return (
+    <Combobox
+      multiple
+      aria-label={`Scope ${index + 1} app installs`}
+      options={rows.map((install) => ({
+        value: install.id,
+        label: install.domain,
+        description: `${install.app_name} ${install.app_version}${install.status === "active" ? "" : ` · ${install.status}`}`,
+        mono: true,
+      }))}
+      value={value}
+      onValueChange={onChange}
+      loading={installs.isLoading}
+      disabled={!serverId}
+      placeholder={serverId ? "Select installs" : "Pick a server first"}
+      emptyMessage="No app is installed on this server."
+    />
   );
 }
 

@@ -11,3 +11,4 @@ export * from "./security";
 export * from "./backups";
 export * from "./lifecycle";
 export * from "./apps";
+export * from "./app-health";

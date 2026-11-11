@@ -12,6 +12,7 @@
 
 pub mod pathguard;
 
+mod app_backup;
 mod backups;
 mod certs;
 mod containers;
@@ -104,6 +105,7 @@ pub fn register_handlers(registry: &mut Registry, provider: ProviderRef, guarded
     ssh::register(registry, &h);
     ftp::register(registry, &h);
     backups::register(registry, &h);
+    app_backup::register(registry, &h);
     logs::register(registry, &h);
     pty::register(registry, &h);
 }

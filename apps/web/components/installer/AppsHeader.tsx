@@ -26,7 +26,7 @@ export function AppsHeader({ view, installedCount, status, actions }: AppsHeader
         size="md"
         eyebrow="Apps"
         title="Install an app"
-        lede="Pick an app, a server and a domain. Kaname creates the database, the files, the website and its HTTPS certificate in one go, and shows you every step."
+        lede="Pick an app, a server and a domain. Kaname creates the database, the files or the containers, the website and its HTTPS certificate in one go, and shows you every step."
         actions={actions}
         status={status}
       />

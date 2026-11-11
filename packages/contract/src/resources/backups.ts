@@ -13,6 +13,7 @@ import {
   uuid,
 } from "../primitives.js";
 import { backupDestinationKind, backupRunStatus, backupScopeKind } from "../enums.js";
+import { S3_PROVIDER_PRESETS, r2AccountId, s3Provider, s3Region } from "./s3-presets.js";
 
 /* ------------------------------------------------------------------ *
  * Destinations
@@ -34,6 +35,10 @@ export const backupDestinationSummary = z.object({
   path: z.string().nullable(),
   /** Last characters of the key id, enough to tell two credentials apart. */
   access_key_hint: z.string().nullable(),
+  /** S3 only: which provider preset filled it, and how buckets are addressed. */
+  provider: s3Provider.nullable().default(null),
+  path_style: z.boolean().nullable().default(null),
+  prefix: z.string().nullable().default(null),
 });
 export type BackupDestinationSummary = z.infer<typeof backupDestinationSummary>;
 
@@ -58,13 +63,41 @@ export type BackupDestination = z.infer<typeof backupDestination>;
  * again. Nested unions rather than optional pairs, so "an sftp destination with
  * neither a password nor a key" is unrepresentable.
  */
-export const backupDestinationTarget = z.discriminatedUnion("kind", [
+/** S3's bucket naming rules: 3-63 lowercase letters, digits, dots and hyphens. */
+export const s3BucketName = z
+  .string()
+  .min(3, "bucket names are at least 3 characters")
+  .max(63, "bucket names are at most 63 characters")
+  .regex(/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/, "bucket names are lowercase letters, digits, dots and hyphens")
+  .refine((v) => !/\.\./.test(v) && !/^\d+\.\d+\.\d+\.\d+$/.test(v), {
+    message: "bucket names may not hold two dots in a row or look like an IP address",
+  });
+
+/** A key prefix inside the bucket: no leading slash, no traversal. */
+export const s3Prefix = z
+  .string()
+  .max(512)
+  .regex(/^(?:[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)?\/?$/, "must be a relative path such as kaname/backups")
+  .refine((v) => !v.split("/").includes(".."), { message: "may not contain .." });
+
+const destinationTargetUnion = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("s3"),
-    endpoint: z.string().max(255).optional(),
-    region: z.string().min(1).max(64).default("us-east-1"),
-    bucket: z.string().min(1).max(255),
-    prefix: z.string().max(512).default(""),
+    /** Which preset filled the form; "minio" is any other S3-compatible service. */
+    provider: s3Provider.default("aws"),
+    /** Host (or http(s) URL) of the service. Derived from the preset unless given. */
+    endpoint: z
+      .string()
+      .max(255)
+      .regex(/^(?:https?:\/\/)?[A-Za-z0-9.-]+(?::\d{1,5})?\/?$/, "must be a host name or URL with no path")
+      .optional(),
+    region: s3Region.default("us-east-1"),
+    /** Cloudflare R2 only: the account id in the endpoint's host name. */
+    account_id: r2AccountId.optional(),
+    bucket: s3BucketName,
+    prefix: s3Prefix.default(""),
+    /** Path-style (`host/bucket`) instead of virtual-hosted (`bucket.host`) addressing. */
+    path_style: z.boolean().optional(),
     access_key_id: z.string().min(1).max(128),
     secret_access_key: z.string().min(1).max(256),
   }),
@@ -96,6 +129,29 @@ export const backupDestinationTarget = z.discriminatedUnion("kind", [
     path: absolutePath,
   }),
 ]);
+
+/**
+ * The provider rules a flat object cannot say: R2 needs its account id,
+ * a custom service needs an endpoint, and a preset's region list is the
+ * provider's own (B2 and MinIO regions are free text).
+ */
+export const backupDestinationTarget = destinationTargetUnion.superRefine((target, ctx) => {
+  if (target.kind !== "s3") return;
+  const preset = S3_PROVIDER_PRESETS[target.provider];
+  if (preset.needs_account_id && !target.account_id && !target.endpoint) {
+    ctx.addIssue({ code: "custom", path: ["account_id"], message: `${preset.label} needs the account id` });
+  }
+  if (!preset.derived_endpoint && !target.endpoint) {
+    ctx.addIssue({ code: "custom", path: ["endpoint"], message: "an endpoint is required for this provider" });
+  }
+  if (preset.closed_regions && !target.endpoint && !preset.regions.some((r) => r.value === target.region)) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["region"],
+      message: `${preset.label} has no region "${target.region}"`,
+    });
+  }
+});
 export type BackupDestinationTarget = z.infer<typeof backupDestinationTarget>;
 
 export const createBackupDestinationInput = z.object({
@@ -123,8 +179,32 @@ export const testBackupDestinationInput = z
   });
 export type TestBackupDestinationInput = z.infer<typeof testBackupDestinationInput>;
 
+/** Why a probe failed, in the terms an operator can act on. */
+export const destinationProbeFailure = z.enum([
+  "network",
+  "auth",
+  "bucket_missing",
+  "region_mismatch",
+  "clock_skew",
+  "permission",
+  "other",
+]);
+export type DestinationProbeFailure = z.infer<typeof destinationProbeFailure>;
+
+export const destinationProbeCheck = z.object({
+  step: z.enum(["connect", "write", "read", "delete"]),
+  ok: z.boolean(),
+  detail: z.string().nullable(),
+  latency_ms: z.number().int().nonnegative().nullable(),
+});
+export type DestinationProbeCheck = z.infer<typeof destinationProbeCheck>;
+
 export const backupDestinationTestResult = z.object({
   ok: z.boolean(),
+  /** What failed, when something did. */
+  failure: destinationProbeFailure.nullable().default(null),
+  /** Each step of an object-store probe (write, read back, delete), in order. */
+  checks: z.array(destinationProbeCheck).default([]),
   writable: z.boolean(),
   latency_ms: z.number().int().nonnegative().nullable(),
   used_bytes: bytes.nullable(),
@@ -303,4 +383,144 @@ export function restoreInputFor(label: string) {
     path: ["confirm_label"],
     message: `must be exactly "${label}"`,
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * App backups
+ *
+ * An `app` scope names app installs by id. A run captures, per install:
+ * its directory under the managed apps root (or its site root for a
+ * host-based recipe), a consistent dump of each companion SQL database
+ * taken by the engine's own tool inside the install's labelled container
+ * (`app.db_dump`), and a manifest. The manifest names the recipe, the
+ * images and where the install's secrets live — refs only; the values
+ * stay envelope-encrypted in the control plane and never enter the
+ * repository.
+ * ------------------------------------------------------------------ */
+
+export const appBackupManifest = z.object({
+  format: z.literal(1),
+  install_id: uuid,
+  app_id: z.string(),
+  app_name: z.string(),
+  /** The recipe version the install was running when the snapshot was taken. */
+  app_version: z.string(),
+  domain: z.string(),
+  ssl: z.boolean(),
+  server_id: uuid,
+  source: z.enum(["image", "git"]),
+  images: z.array(z.string()),
+  companions: z.array(
+    z.object({ role: z.string(), engine: z.string(), image: z.string(), dumped: z.boolean() }),
+  ),
+  /** What the person chose at install time. Never a credential. */
+  settings: z.record(z.string(), z.unknown()),
+  /** Names of the sealed secrets the install uses; never their values. */
+  secret_refs: z.array(z.string()),
+  /** Paths inside the snapshot, for a restore to find them without guessing. */
+  paths: z.object({
+    data: z.string().nullable(),
+    dumps: z.array(z.object({ role: z.string(), engine: z.string(), path: z.string() })),
+    site_root: z.string().nullable(),
+    databases: z.array(z.object({ engine: z.string(), name: z.string() })),
+  }),
+  /** Whether the app container was stopped while the snapshot was taken. */
+  stopped: z.boolean(),
+  taken_at: isoDate,
+});
+export type AppBackupManifest = z.infer<typeof appBackupManifest>;
+
+/** A restore point as one app sees it. */
+export const appRestorePoint = restorePoint.extend({
+  /** The app version inside, when the snapshot holds this app's manifest. */
+  app_version: z.string().nullable(),
+  /** Newer than the recipe Kaname would install now: such a point cannot be restored. */
+  newer_than_recipe: z.boolean(),
+});
+export type AppRestorePoint = z.infer<typeof appRestorePoint>;
+
+export const appBackupOverview = z.object({
+  install_id: uuid,
+  app_name: z.string(),
+  domain: z.string(),
+  /** The schedule "Back up now" runs: the one whose scope is exactly this app. */
+  schedule: z
+    .object({
+      id: uuid,
+      name: z.string(),
+      destination_id: uuid,
+      destination_name: z.string(),
+      cron: z.string(),
+      enabled: z.boolean(),
+      next_run_at: isoDate.nullable(),
+    })
+    .nullable(),
+  /** Every schedule whose scope includes this app, by name. */
+  covered_by: z.array(z.object({ id: uuid, name: z.string() })),
+  last_run: backupRun.nullable(),
+  restore_points: z.array(appRestorePoint),
+  /** Destinations a first "Back up now" may write to (names only). */
+  destinations: z.array(z.object({ id: uuid, name: z.string(), kind: backupDestinationKind })),
+  /** The app container is stopped for the few seconds the snapshot takes. */
+  stop_during_backup: z.boolean(),
+  /** Null when the app can be backed up; otherwise why not. */
+  unsupported_reason: z.string().nullable(),
+});
+export type AppBackupOverview = z.infer<typeof appBackupOverview>;
+
+export const appBackupNowInput = z.object({
+  /** Needed only the first time, when no schedule for this app exists yet. */
+  destination_id: uuid.optional(),
+});
+export type AppBackupNowInput = z.infer<typeof appBackupNowInput>;
+
+/**
+ * Restore in place: stop the app, restore its data into a staging
+ * directory, swap it in, re-import each database, start, health check.
+ * The person retypes the app's domain.
+ */
+export const appRestoreInput = z.object({
+  restore_point_id: uuid,
+  confirm_domain: z.string().min(1).max(253),
+});
+export type AppRestoreInput = z.infer<typeof appRestoreInput>;
+
+/**
+ * Restore as new: a fresh install of the same recipe on another server or
+ * domain (its own port, site and certificate), the app's own secrets
+ * copied across sealed, then the restore into it.
+ */
+export const appRestoreAsNewInput = z.object({
+  restore_point_id: uuid,
+  target_server_id: uuid,
+  domain: z
+    .string()
+    .min(1)
+    .max(253)
+    .transform((v) => v.trim().toLowerCase()),
+  ssl: z.boolean().default(true),
+  /** Retype the SOURCE app's domain: what is being copied. */
+  confirm_domain: z.string().min(1).max(253),
+});
+export type AppRestoreAsNewInput = z.infer<typeof appRestoreAsNewInput>;
+
+/**
+ * Whether `backup` (a version string from a manifest) is newer than
+ * `recipe`. Dotted numbers compare numerically; anything else ("stable")
+ * is only ever equal to itself, and an unequal pair of non-numeric
+ * versions is treated as newer, so an unknown line is refused rather than
+ * downgraded onto.
+ */
+export function isNewerVersion(backup: string, recipe: string): boolean {
+  if (backup === recipe) return false;
+  const parse = (v: string) => (/^v?\d+(\.\d+)*$/.test(v) ? v.replace(/^v/, "").split(".").map(Number) : null);
+  const a = parse(backup);
+  const b = parse(recipe);
+  if (!a || !b) return true;
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return false;
 }

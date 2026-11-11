@@ -20,7 +20,10 @@ use super::state::{GIB, MIB, Sim, World, clampf, drift, hash_string, human_durat
 use crate::providers::{
     ContainerExecParams, ContainerInfo, ContainerInspectResult, ContainerListParams, ContainerLogsParams,
     ContainerMount, ContainerPort, ContainerPruneParams, ContainerPruneResult, ContainerRemoveParams,
-    ContainerStopParams, Containers, Ctx, ImageInfo, LogRecord, PResult, ProviderError, StreamRef, topic,
+    ContainerStopParams, Containers, Ctx, ImageInfo, ImagePullParams, ImagePullResult, LogRecord,
+    ManagedAppRemoveParams, ManagedAppRemoveResult, ManagedAppStatus, ManagedContainerSpec,
+    ManagedContainerState, ManagedEndpoint, ManagedNetworkResult, ManagedTaskParams, ManagedTaskResult,
+    PResult, ProviderError, StreamRef, managed, say, topic,
 };
 
 pub struct Container {
@@ -574,6 +577,314 @@ impl Containers for SimContainers {
             removed,
         })
     }
+
+    async fn pull_image(&self, ctx: &Ctx, p: ImagePullParams, s: StreamRef) -> PResult<ImagePullResult> {
+        managed::validate_image(&p.image)?;
+        let id = self.image_id(&p.image);
+        let present = self
+            .0
+            .world
+            .lock()
+            .images
+            .iter()
+            .any(|i| i.tags.contains(&p.image));
+        say(s.as_ref(), format!("pulling {}", p.image)).await;
+        if present {
+            say(s.as_ref(), format!("Status: Image is up to date for {}", p.image)).await;
+        } else {
+            for layer in 0..3u64 {
+                ctx.check()?;
+                let short = format!("{:012x}", mix(hash_string(&p.image) ^ layer));
+                say(s.as_ref(), format!("{short}: Pull complete")).await;
+            }
+            say(
+                s.as_ref(),
+                format!("Status: Downloaded newer image for {}", p.image),
+            )
+            .await;
+            self.0.world.lock().images.push(ImageInfo {
+                id: id.clone(),
+                tags: vec![p.image.clone()],
+                size: 180 * MIB + (hash_string(&p.image) % 400) as i64 * MIB,
+                created_at: stamp(Utc::now()),
+                in_use: false,
+            });
+        }
+        Ok(ImagePullResult { image: p.image, id })
+    }
+
+    async fn create_network(&self, _ctx: &Ctx, install_id: &str) -> PResult<ManagedNetworkResult> {
+        managed::validate_install_id(install_id)?;
+        let name = managed::network_name(install_id);
+        let mut w = self.0.world.lock();
+        if let Some((_, id, labels)) = w.networks.iter().find(|(n, _, _)| *n == name) {
+            if !managed::is_managed_by(labels, install_id) {
+                return Err(ProviderError::conflict(format!(
+                    "a network named {name} exists and was not created by Kaname"
+                )));
+            }
+            return Ok(ManagedNetworkResult {
+                name,
+                id: id.clone(),
+                created: false,
+            });
+        }
+        let id = format!(
+            "{:016x}{:048x}",
+            hash_string(&name),
+            mix(self.0.seed ^ hash_string(&name))
+        );
+        w.networks
+            .push((name.clone(), id.clone(), managed::install_labels(install_id)));
+        Ok(ManagedNetworkResult {
+            name,
+            id,
+            created: true,
+        })
+    }
+
+    async fn create_managed(&self, _ctx: &Ctx, mut spec: ManagedContainerSpec) -> PResult<ContainerInfo> {
+        // The handler validated already; the simulator checks again so a
+        // test that drives it directly meets the same guards.
+        managed::validate_spec(&mut spec, managed::MANAGED_APPS_ROOT)?;
+        let network = managed::network_name(&spec.install_id);
+        let name = managed::container_name(&spec.install_id, &spec.role);
+        let image_id = self.image_id(&spec.image);
+        let info = {
+            let mut w = self.0.world.lock();
+            if !w
+                .networks
+                .iter()
+                .any(|(n, _, l)| *n == network && managed::is_managed_by(l, &spec.install_id))
+            {
+                return Err(ProviderError::PreconditionFailed(format!(
+                    "the install's network {network} does not exist; create it first"
+                )));
+            }
+            if !w.images.iter().any(|i| i.tags.contains(&spec.image)) {
+                return Err(ProviderError::not_found(format!("No such image: {}", spec.image)));
+            }
+            if let Some(idx) = find_container(&w, &name) {
+                let labels = &w.containers[idx].info.labels;
+                let ours = managed::is_managed_by(labels, &spec.install_id)
+                    && labels.get(managed::LABEL_ROLE) == Some(&spec.role);
+                if !ours {
+                    return Err(ProviderError::conflict(format!(
+                        "a container named {name} exists and was not created by Kaname"
+                    )));
+                }
+                if !spec.replace {
+                    return Err(ProviderError::conflict(format!(
+                        "container {name} already exists"
+                    )));
+                }
+                w.containers.remove(idx);
+            }
+            for port in &spec.ports {
+                let taken = w.containers.iter().any(|c| {
+                    c.info.state == "running"
+                        && c.info.ports.iter().any(|p| p.host_port == Some(port.host_port))
+                });
+                if taken {
+                    return Err(ProviderError::conflict(format!(
+                        "Bind for 127.0.0.1:{} failed: port is already allocated",
+                        port.host_port
+                    )));
+                }
+            }
+            let now = Utc::now();
+            let (process, args, user) = process_for(&spec.image);
+            let info = ContainerInfo {
+                id: format!(
+                    "{:016x}{:048x}",
+                    hash_string(&name),
+                    mix(self.0.seed ^ hash_string(&name) ^ now.timestamp_millis() as u64)
+                ),
+                name: name.clone(),
+                image: spec.image.clone(),
+                image_id,
+                state: "running".into(),
+                status: "Up 1 seconds".into(),
+                created_at: stamp(now),
+                started_at: Some(stamp(now)),
+                ports: spec
+                    .ports
+                    .iter()
+                    .map(|p| ContainerPort {
+                        container_port: p.container_port,
+                        host_port: Some(p.host_port),
+                        host_ip: Some(managed::LOOPBACK.into()),
+                        protocol: "tcp".into(),
+                    })
+                    .collect(),
+                labels: managed::container_labels(&spec.install_id, &spec.role),
+                networks: vec![network],
+                mounts: spec
+                    .mounts
+                    .iter()
+                    .map(|m| ContainerMount {
+                        source: m.source.clone(),
+                        destination: m.target.clone(),
+                        rw: !m.read_only,
+                    })
+                    .collect(),
+                restart_count: 0,
+                cpu_percent: None,
+                memory_usage: None,
+                memory_limit: spec.memory_bytes,
+                runtime: "docker".into(),
+            };
+            for image in w.images.iter_mut().filter(|i| i.tags.contains(&spec.image)) {
+                image.in_use = true;
+            }
+            if !spec.mounts.is_empty() {
+                w.app_data.insert(spec.install_id.clone());
+            }
+            w.containers.push(Container {
+                info: info.clone(),
+                process: process.into(),
+                process_args: args.into(),
+                process_user: user.into(),
+                rss_base: 160 * MIB,
+                mem_limit: spec.memory_bytes.unwrap_or(GIB),
+                cpu_base: 1.2,
+                fs: None,
+            });
+            respawn_containerd(&self.0, &mut w);
+            info
+        };
+        self.0.emit(
+            topic::CONTAINER_CHANGED,
+            serde_json::json!({"container_id": info.id, "name": info.name, "state": info.state}),
+        );
+        Ok(info)
+    }
+
+    async fn run_task(&self, _ctx: &Ctx, mut p: ManagedTaskParams) -> PResult<ManagedTaskResult> {
+        managed::validate_task(&mut p.spec, p.timeout_seconds.max(1), managed::MANAGED_APPS_ROOT)?;
+        let network = managed::network_name(&p.spec.install_id);
+        let w = self.0.world.lock();
+        if !w
+            .networks
+            .iter()
+            .any(|(n, _, l)| *n == network && managed::is_managed_by(l, &p.spec.install_id))
+        {
+            return Err(ProviderError::PreconditionFailed(format!(
+                "the install's network {network} does not exist; create it first"
+            )));
+        }
+        if !w.images.iter().any(|i| i.tags.contains(&p.spec.image)) {
+            return Err(ProviderError::not_found(format!(
+                "No such image: {}",
+                p.spec.image
+            )));
+        }
+        Ok(ManagedTaskResult {
+            exit_code: 0,
+            output: format!("{} {}: done\n", p.spec.image, p.spec.args.join(" ")),
+        })
+    }
+
+    async fn app_status(&self, _ctx: &Ctx, install_id: &str) -> PResult<ManagedAppStatus> {
+        managed::validate_install_id(install_id)?;
+        let w = self.0.world.lock();
+        let mut status = ManagedAppStatus::default();
+        for c in w
+            .containers
+            .iter()
+            .filter(|c| managed::is_managed_by(&c.info.labels, install_id))
+        {
+            let role = c
+                .info
+                .labels
+                .get(managed::LABEL_ROLE)
+                .cloned()
+                .unwrap_or_default();
+            let running = c.info.state == "running";
+            for port in &c.info.ports {
+                let Some(host_port) = port.host_port else { continue };
+                status.endpoints.push(ManagedEndpoint {
+                    role: role.clone(),
+                    host_port,
+                    container_port: port.container_port,
+                    reachable: running,
+                    http_status: running.then_some(200),
+                });
+            }
+            status.containers.push(ManagedContainerState {
+                role,
+                name: c.info.name.clone(),
+                state: c.info.state.clone(),
+                status: c.info.status.clone(),
+            });
+        }
+        status.containers.sort_by(|a, b| a.role.cmp(&b.role));
+        Ok(status)
+    }
+
+    async fn remove_app(&self, _ctx: &Ctx, p: ManagedAppRemoveParams) -> PResult<ManagedAppRemoveResult> {
+        managed::validate_install_id(&p.install_id)?;
+        let mut result = ManagedAppRemoveResult::default();
+        let removed: Vec<(String, String)> = {
+            let mut w = self.0.world.lock();
+            let containers = std::mem::take(&mut w.containers);
+            let mut removed = Vec::new();
+            for c in containers {
+                if managed::is_managed_by(&c.info.labels, &p.install_id) {
+                    removed.push((c.info.id.clone(), c.info.name.clone()));
+                } else {
+                    w.containers.push(c);
+                }
+            }
+            let networks = std::mem::take(&mut w.networks);
+            for network in networks {
+                if managed::is_managed_by(&network.2, &p.install_id) {
+                    result.networks.push(network.0);
+                } else {
+                    w.networks.push(network);
+                }
+            }
+            if p.remove_data {
+                result.data_removed = w.app_data.remove(&p.install_id);
+            }
+            respawn_containerd(&self.0, &mut w);
+            removed
+        };
+        for (id, name) in removed {
+            self.0.emit(
+                topic::CONTAINER_CHANGED,
+                serde_json::json!({"container_id": id, "name": name, "state": "removed"}),
+            );
+            result.containers.push(name);
+        }
+        Ok(result)
+    }
+}
+
+/* ----------------------- managed app containers --------------------- */
+
+/// A plausible main process for a managed container, so the host process
+/// table has something to show while it runs.
+fn process_for(image: &str) -> (&'static str, &'static str, &'static str) {
+    let repo = image.split([':', '@']).next().unwrap_or(image);
+    let repo = repo.rsplit('/').next().unwrap_or(repo);
+    match repo {
+        "mysql" | "mariadb" => ("mysqld", "mysqld", "mysql"),
+        "postgres" => ("postgres", "postgres -D /var/lib/postgresql/data", "postgres"),
+        "nextcloud" => ("apache2", "apache2 -DFOREGROUND", "www-data"),
+        "gitea" => ("gitea", "/usr/local/bin/gitea web", "git"),
+        _ => ("node", "node current/index.js", "node"),
+    }
+}
+
+impl SimContainers {
+    fn image_id(&self, image: &str) -> String {
+        format!(
+            "sha256:{:016x}{:048x}",
+            hash_string(image),
+            mix(self.0.seed ^ hash_string(image))
+        )
+    }
 }
 
 #[cfg(test)]
@@ -656,6 +967,183 @@ mod tests {
         assert!(!out.contains(&format!("\r\n{}\r\n", sim.id.hostname)), "{out}");
         assert!(out.contains("Alpine Linux"), "{out}");
         assert!(out.contains(&format!("root@{short}")), "{out}");
+        sim.close().await;
+    }
+
+    const INSTALL: &str = "0f0e0d0c-0b0a-4908-8706-050403020100";
+
+    struct Sink(Mutex<Vec<u8>>);
+
+    #[async_trait]
+    impl Stream for Sink {
+        async fn send(&self, data: &[u8], _enc: Encoding) -> PResult<()> {
+            self.0.lock().extend_from_slice(data);
+            Ok(())
+        }
+        async fn recv(&self) -> PResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+    }
+
+    fn app_spec(role: &str, image: &str, host_port: Option<i64>) -> ManagedContainerSpec {
+        ManagedContainerSpec {
+            install_id: INSTALL.into(),
+            role: role.into(),
+            image: image.into(),
+            mounts: vec![crate::providers::ManagedMount {
+                source: format!("{}/{INSTALL}/{role}", managed::MANAGED_APPS_ROOT),
+                target: "/data".into(),
+                ..Default::default()
+            }],
+            ports: host_port
+                .map(|h| {
+                    vec![crate::providers::ManagedPort {
+                        container_port: 2368,
+                        host_port: h,
+                    }]
+                })
+                .unwrap_or_default(),
+            replace: true,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_managed_app_is_pulled_networked_started_probed_and_removed() {
+        let sim = sim("managed");
+        let c = SimContainers(sim.clone());
+        let ctx = Ctx::background();
+
+        // No network yet: refused before anything is created.
+        let early = c.create_managed(&ctx, app_spec("db", "mysql:8.0", None)).await;
+        assert!(
+            matches!(early, Err(ProviderError::PreconditionFailed(_))),
+            "{early:?}"
+        );
+
+        let net = c.create_network(&ctx, INSTALL).await.unwrap();
+        assert!(net.created);
+        assert!(
+            !c.create_network(&ctx, INSTALL).await.unwrap().created,
+            "idempotent"
+        );
+
+        // An image that was never pulled is not there to run.
+        let missing = c.create_managed(&ctx, app_spec("db", "mysql:8.0", None)).await;
+        assert!(matches!(missing, Err(ProviderError::NotFound(_))), "{missing:?}");
+
+        let sink = Arc::new(Sink(Mutex::new(Vec::new())));
+        for image in ["mysql:8.0", "ghost:5"] {
+            c.pull_image(&ctx, ImagePullParams { image: image.into() }, sink.clone())
+                .await
+                .unwrap();
+        }
+        assert!(String::from_utf8_lossy(&sink.0.lock()).contains("Downloaded newer image for ghost:5"));
+
+        let db = c
+            .create_managed(&ctx, app_spec("db", "mysql:8.0", None))
+            .await
+            .unwrap();
+        assert_eq!(db.name, format!("kaname-{INSTALL}-db"));
+        let app = c
+            .create_managed(&ctx, app_spec("app", "ghost:5", Some(20001)))
+            .await
+            .unwrap();
+        assert_eq!(app.ports[0].host_ip.as_deref(), Some("127.0.0.1"));
+        assert!(managed::is_managed_by(&app.labels, INSTALL));
+
+        // Replace is the idempotent path a resumed install takes.
+        c.create_managed(&ctx, app_spec("app", "ghost:5", Some(20001)))
+            .await
+            .unwrap();
+        let mut again = app_spec("app", "ghost:5", Some(20001));
+        again.replace = false;
+        assert!(matches!(
+            c.create_managed(&ctx, again).await,
+            Err(ProviderError::Conflict(_))
+        ));
+
+        let status = c.app_status(&ctx, INSTALL).await.unwrap();
+        assert_eq!(
+            status
+                .containers
+                .iter()
+                .map(|c| c.role.as_str())
+                .collect::<Vec<_>>(),
+            ["app", "db"]
+        );
+        assert_eq!(status.endpoints.len(), 1);
+        assert!(status.endpoints[0].reachable);
+
+        let removed = c
+            .remove_app(
+                &ctx,
+                ManagedAppRemoveParams {
+                    install_id: INSTALL.into(),
+                    remove_data: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(removed.containers.len(), 2);
+        assert_eq!(removed.networks, vec![format!("kaname-{INSTALL}")]);
+        assert!(removed.data_removed);
+        assert!(c.app_status(&ctx, INSTALL).await.unwrap().containers.is_empty());
+        sim.close().await;
+    }
+
+    #[tokio::test]
+    async fn the_destructive_verb_never_touches_unlabelled_containers() {
+        let sim = sim("managed-labels");
+        let c = SimContainers(sim.clone());
+        let before = sim.world.lock().containers.len();
+        // A container someone named like a managed one is still not ours.
+        {
+            let mut w = sim.world.lock();
+            w.containers[0].info.name = format!("kaname-{INSTALL}-app");
+        }
+        let removed = c
+            .remove_app(
+                &Ctx::background(),
+                ManagedAppRemoveParams {
+                    install_id: INSTALL.into(),
+                    remove_data: true,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(removed.containers.is_empty());
+        assert_eq!(sim.world.lock().containers.len(), before);
+
+        // And create will not replace it either.
+        c.create_network(&Ctx::background(), INSTALL).await.unwrap();
+        c.pull_image(
+            &Ctx::background(),
+            ImagePullParams {
+                image: "ghost:5".into(),
+            },
+            Arc::new(Sink(Mutex::new(Vec::new()))),
+        )
+        .await
+        .unwrap();
+        let clash = c
+            .create_managed(&Ctx::background(), app_spec("app", "ghost:5", Some(20002)))
+            .await;
+        assert!(matches!(clash, Err(ProviderError::Conflict(_))), "{clash:?}");
+        sim.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_spec_that_escapes_the_guards_is_refused_by_the_simulator_too() {
+        let sim = sim("managed-guards");
+        let c = SimContainers(sim.clone());
+        c.create_network(&Ctx::background(), INSTALL).await.unwrap();
+        let mut spec = app_spec("app", "ghost:5", Some(20003));
+        spec.mounts[0].source = "/var/run/docker.sock".into();
+        assert!(matches!(
+            c.create_managed(&Ctx::background(), spec).await,
+            Err(ProviderError::PermissionDenied(_))
+        ));
         sim.close().await;
     }
 

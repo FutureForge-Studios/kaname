@@ -37,7 +37,7 @@ import {
   parseQuery,
 } from "../http/plugin.js";
 import { ApiException, conflict, notFound } from "../lib/errors.js";
-import { buildPlan, chooseEngine, installNames } from "../services/app-installer.js";
+import { allocatePort, buildPlan, chooseEngine, installNames } from "../services/app-installer.js";
 import { combine, enqueueServerJob, loadServer, scopeFilter, type ServerRow } from "./_shared.js";
 import { isOwnedBy, ownership } from "./_ownership.js";
 
@@ -125,10 +125,15 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
       finished_at: null,
     }));
 
-    const [row] = await req.ctx.db
+    // Image recipes get a loopback port of their own. The unique index on
+    // (server_id, app_port) is what makes "of their own" true when two
+    // installs race; the loser takes the next free port.
+    const insertRow = async (appPort: number | null) =>
+      req.ctx.db
       .insert(appInstalls)
       .values({
         id: plan.plan_id,
+        appPort,
         appId: recipe.id,
         appName: recipe.name,
         appVersion: recipe.version,
@@ -147,6 +152,26 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
         createdByName: principal.name,
       })
       .returning();
+
+    let row: InstallRow | undefined;
+    if (recipe.source.kind === "image") {
+      for (let attempt = 0; !row; attempt += 1) {
+        const port = allocatePort(await portsInUse(req, server.id));
+        if (port === null) {
+          throw precondition(
+            `${server.name} has no free port left for another app.`,
+            "Every loopback port Kaname hands to apps on this server is taken. Uninstall an app you no longer use, or install on another server.",
+          );
+        }
+        try {
+          [row] = await insertRow(port);
+        } catch (err) {
+          if (!isUniqueViolation(err) || attempt >= 5) throw err;
+        }
+      }
+    } else {
+      [row] = await insertRow(null);
+    }
 
     let job;
     try {
@@ -325,6 +350,10 @@ interface Preflight {
   plan: AppInstallPlan;
 }
 
+function formatMb(mb: number): string {
+  return mb >= 1024 ? `${Math.round((mb / 1024) * 10) / 10} GB` : `${mb} MB`;
+}
+
 function precondition(
   messageText: string,
   summary: string,
@@ -350,6 +379,13 @@ async function preflight(req: FastifyRequest, body: InstallAppInput): Promise<Pr
   const server = await loadServer(req, body.server_id, "apps.installs:write");
   const db = req.ctx.db;
   const notices: string[] = [];
+
+  const minimumBytes = recipe.requirements.min_memory_mb * 1024 * 1024;
+  if (server.memoryTotal && server.memoryTotal < minimumBytes) {
+    notices.push(
+      `${recipe.name} wants at least ${formatMb(recipe.requirements.min_memory_mb)} of memory and ${server.name} reports ${formatMb(Math.round(server.memoryTotal / 1024 / 1024))}. It may install but run slowly or be stopped for lack of memory.`,
+    );
+  }
 
   if (recipe.availability !== "available") {
     throw precondition(
@@ -474,7 +510,15 @@ async function preflight(req: FastifyRequest, body: InstallAppInput): Promise<Pr
   if (choice.engine) await own.reserve("database");
 
   const names = installNames(recipe, body, installId);
-  notices.push(`Files go in ${names.deployRoot}, owned by the "${body.system_user}" account.`);
+  let appPort: number | null = null;
+  if (recipe.source.kind === "image") {
+    appPort = allocatePort(await portsInUse(req, server.id));
+    notices.push(
+      `Its data is kept in ${names.dataDir} on ${server.name}. The app listens on 127.0.0.1${appPort ? `:${appPort}` : ""} only; the site is the way in.`,
+    );
+  } else {
+    notices.push(`Files go in ${names.deployRoot}, owned by the "${body.system_user}" account.`);
+  }
 
   return {
     recipe,
@@ -485,6 +529,7 @@ async function preflight(req: FastifyRequest, body: InstallAppInput): Promise<Pr
       serverName: server.name,
       engine: choice.engine,
       notices,
+      appPort,
     }),
   };
 }
@@ -548,10 +593,32 @@ async function installApi(req: FastifyRequest, id: string): Promise<AppInstall> 
   return installToApi(row.install, row.server_name);
 }
 
+/** Loopback ports already handed to installs on a server. */
+async function portsInUse(req: FastifyRequest, serverId: string): Promise<(number | null)[]> {
+  const rows = await req.ctx.db
+    .select({ port: appInstalls.appPort })
+    .from(appInstalls)
+    .where(eq(appInstalls.serverId, serverId));
+  return rows.map((r) => r.port);
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  for (let e: unknown = err; e && typeof e === "object"; e = (e as { cause?: unknown }).cause) {
+    if ((e as { code?: unknown }).code === "23505") return true;
+  }
+  return false;
+}
+
 /** True when a failed install has no host resource or row left to remove. */
 function nothingLeft(row: InstallRow): boolean {
   const r = row.resources;
   const flags = [
+    r.network_attempted,
+    r.network_created,
+    r.db_container_attempted,
+    r.db_container_created,
+    r.app_container_attempted,
+    r.app_container_created,
     r.database_attempted,
     r.database_created,
     r.db_user_attempted,
@@ -595,6 +662,7 @@ export function installToApi(row: InstallRow, serverName: string): AppInstall {
     database_id: row.databaseId,
     db_user_id: row.dbUserId,
     certificate_id: row.certificateId,
+    app_port: row.appPort,
     steps: row.steps.map((step) => ({
       id: step.id,
       title: byId.get(step.id)?.title ?? step.id,

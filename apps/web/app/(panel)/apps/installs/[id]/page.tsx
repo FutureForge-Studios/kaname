@@ -19,6 +19,8 @@ import {
   Skeleton,
   useToast,
 } from "@kaname/ui";
+import { AppHealth } from "@/components/installer/AppHealth";
+import { AppBackups } from "@/components/installer/AppBackups";
 import { AppMark, versionLabel } from "@/components/installer/AppMark";
 import { InstallProgress, InstallSummary } from "@/components/installer/InstallProgress";
 import { UninstallDialog } from "@/components/installer/InstalledList";
@@ -185,6 +187,11 @@ export default function AppInstallPage({ params }: { params: Promise<{ id: strin
                   <ResourceLink href={`/websites/sites/${install.site_id}`}>{install.domain}</ResourceLink>
                 ) : null}
               </PropertyRow>
+              {install.app_port !== null && (
+                <PropertyRow label="Containers" mono>
+                  <ResourceLink href="/infrastructure/containers">127.0.0.1:{install.app_port}</ResourceLink>
+                </PropertyRow>
+              )}
               <PropertyRow label="Database" mono>
                 {install.database_id ? (
                   <ResourceLink href={install.db_engine === "postgres" ? "/databases/postgres" : "/databases/mysql"}>
@@ -203,6 +210,9 @@ export default function AppInstallPage({ params }: { params: Promise<{ id: strin
             </PropertyList>
           </Card>
         </NumberedSection>
+
+        {install.status === "active" && <AppHealth installId={install.id} index={4} />}
+        {install.status === "active" && <AppBackups installId={install.id} serverId={install.server_id} index={6} />}
       </PageBody>
 
       {confirming && (

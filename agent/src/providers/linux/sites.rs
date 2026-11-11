@@ -642,6 +642,12 @@ pub fn render_site(meta: &SiteMetadata, certs: Option<(&str, &str)>) -> PResult<
             b.push_str("    location ~ /\\.(?!well-known).* { deny all; }\n");
         }
         "node" | "python" | "proxy" | "container" => {
+            // HTTP-01 answers from the webroot, not from the app: without
+            // this the challenge is proxied and a proxied site could never
+            // get its first certificate.
+            b.push_str(
+                "    location ^~ /.well-known/acme-challenge/ {\n        try_files $uri =404;\n    }\n",
+            );
             b.push_str("    location / {\n");
             b.push_str(&format!(
                 "        proxy_pass {};\n",
@@ -925,6 +931,10 @@ server {
             "        proxy_set_header Connection \"upgrade\";\n        proxy_read_timeout 300s;\n    }\n}\n"
         ));
         assert!(rendered.contains("\"upstream\":\"127.0.0.1:3000\""));
+        assert!(
+            rendered.contains("    location ^~ /.well-known/acme-challenge/ {\n        try_files $uri =404;\n    }\n    location / {\n"),
+            "the ACME challenge must not be proxied: {rendered}"
+        );
 
         m.upstream = "unix:/run/app.sock".into();
         assert!(

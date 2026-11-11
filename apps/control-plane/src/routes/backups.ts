@@ -31,6 +31,7 @@ import {
   type BackupSchedule,
   type BackupScope,
   type RestorePoint,
+  s3BaseUrl,
 } from "@kaname/contract";
 import {
   accepted,
@@ -48,6 +49,8 @@ import { ApiException, badRequest, conflict, notFound } from "../lib/errors.js";
 import { generateToken, open, seal } from "../lib/crypto.js";
 import { computeNextRun } from "../lib/cron.js";
 import { planScope } from "../services/backup-scheduler.js";
+import { probeS3 } from "../services/s3-probe.js";
+import { appBackupRoutes } from "./app-backups.js";
 import {
   combine,
   enqueueServerJob,
@@ -109,6 +112,9 @@ const SORTABLE_POINTS = {
 
 
 export async function backupRoutes(app: FastifyInstance): Promise<void> {
+  // App backup & restore: /backups/apps/* (routes/app-backups.ts).
+  await appBackupRoutes(app);
+
   /* -------------------------- destinations -------------------------- */
 
   app.get("/backups/destinations", async (req, reply) => {
@@ -583,52 +589,7 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
       id,
       "backups.schedules:write",
     );
-    const h = helpers(req);
-    const principal = h.requirePrincipal();
-
-    const plan = await planScope(req.ctx.db, schedule);
-
-    const [run] = await req.ctx.db
-      .insert(backupRuns)
-      .values({
-        scheduleId: schedule.id,
-        serverId: server.id,
-        trigger: "manual",
-        status: "queued",
-        triggeredBy: principal.kind === "user" ? principal.id : null,
-      })
-      .returning();
-
-    const job = await enqueueServerJob(req, {
-      type: "backup.run",
-      server,
-      targetType: "backup_run",
-      targetId: run!.id,
-      targetLabel: schedule.name,
-      params: {
-        run_id: run!.id,
-        repository: schedule.repositoryPath,
-        password_ref: schedule.passwordRef ?? "",
-        paths: plan.paths,
-        exclude: [],
-        tags: [`schedule:${schedule.id}`, "trigger:manual"],
-        databases: plan.databases,
-      },
-    });
-
-    await req.ctx.db.update(backupRuns).set({ jobId: job.id }).where(eq(backupRuns.id, run!.id));
-    await req.ctx.db
-      .update(backupSchedules)
-      .set({ lastRunAt: new Date(), lastRunStatus: "queued", updatedAt: new Date() })
-      .where(eq(backupSchedules.id, schedule.id));
-
-    req.ctx.events.publish(
-      "backups",
-      "run.queued",
-      { run_id: run!.id, schedule_id: schedule.id, destination: destination.name },
-      server.id,
-    );
-
+    const job = await startScheduleRun(req, schedule, server, destination);
     return accepted(reply, job);
   });
 
@@ -818,15 +779,76 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
   });
 }
 
+
+/**
+ * Queues one run of a schedule: plans its scope, records the run and
+ * enqueues the job. Shared by "Run now" and an app's "Back up now".
+ */
+export async function startScheduleRun(
+  req: FastifyRequest,
+  schedule: ScheduleRow,
+  server: ServerRow,
+  destination: DestinationRow,
+) {
+  const h = helpers(req);
+  const principal = h.requirePrincipal();
+
+  const plan = await planScope(req.ctx.db, schedule);
+
+  const [run] = await req.ctx.db
+    .insert(backupRuns)
+    .values({
+      scheduleId: schedule.id,
+      serverId: server.id,
+      trigger: "manual",
+      status: "queued",
+      triggeredBy: principal.kind === "user" ? principal.id : null,
+    })
+    .returning();
+
+  const job = await enqueueServerJob(req, {
+    type: "backup.run",
+    server,
+    targetType: "backup_run",
+    targetId: run!.id,
+    targetLabel: schedule.name,
+    params: {
+      run_id: run!.id,
+      repository: schedule.repositoryPath,
+      password_ref: schedule.passwordRef ?? "",
+      paths: plan.paths,
+      exclude: plan.exclude,
+      tags: [`schedule:${schedule.id}`, "trigger:manual"],
+      databases: plan.databases,
+      ...(plan.apps.length > 0 ? { apps: plan.apps } : {}),
+    },
+  });
+
+  await req.ctx.db.update(backupRuns).set({ jobId: job.id }).where(eq(backupRuns.id, run!.id));
+  await req.ctx.db
+    .update(backupSchedules)
+    .set({ lastRunAt: new Date(), lastRunStatus: "queued", updatedAt: new Date() })
+    .where(eq(backupSchedules.id, schedule.id));
+
+  req.ctx.events.publish(
+    "backups",
+    "run.queued",
+    { run_id: run!.id, schedule_id: schedule.id, destination: destination.name },
+    server.id,
+  );
+
+  return job;
+}
+
 /* ------------------------------------------------------------------ *
  * Loaders
  * ------------------------------------------------------------------ */
 
-type DestinationRow = typeof backupDestinations.$inferSelect;
-type ScheduleRow = typeof backupSchedules.$inferSelect;
-type RestorePointRow = typeof restorePoints.$inferSelect;
+export type DestinationRow = typeof backupDestinations.$inferSelect;
+export type ScheduleRow = typeof backupSchedules.$inferSelect;
+export type RestorePointRow = typeof restorePoints.$inferSelect;
 
-async function destinationRow(req: FastifyRequest, id: string): Promise<DestinationRow> {
+export async function destinationRow(req: FastifyRequest, id: string): Promise<DestinationRow> {
   const rows = await req.ctx.db
     .select()
     .from(backupDestinations)
@@ -917,7 +939,7 @@ async function lastRunIds(
 }
 
 /** A local destination is a path on one host; another host cannot reach it. */
-function assertDestinationReachableFrom(destination: DestinationRow, server: ServerRow): void {
+export function assertDestinationReachableFrom(destination: DestinationRow, server: ServerRow): void {
   if (destination.kind !== "local") return;
   if (destination.config.server_id === server.id) return;
   throw conflict(
@@ -934,21 +956,31 @@ function assertDestinationReachableFrom(destination: DestinationRow, server: Ser
  * Destinations: config, secrets and reachability
  * ------------------------------------------------------------------ */
 
-function secretRef(id: string, kind: "destination" | "schedule" = "destination"): string {
+export function secretRef(id: string, kind: "destination" | "schedule" = "destination"): string {
   return kind === "schedule" ? `backup_schedule:${id}` : `backup_destination:${id}`;
 }
 
 /** Everything about a target except how it authenticates. */
 function publicConfig(target: BackupDestinationTarget): Record<string, string> {
   switch (target.kind) {
-    case "s3":
+    case "s3": {
+      const base = s3BaseUrl({
+        provider: target.provider,
+        region: target.region,
+        endpoint: target.endpoint ?? null,
+        account_id: target.account_id ?? null,
+      });
       return {
-        ...(target.endpoint ? { endpoint: target.endpoint } : {}),
+        // The endpoint as it will be used, preset-derived or typed.
+        ...(base ? { endpoint: base.replace(/^https:\/\//, "") } : {}),
+        provider: target.provider,
         region: target.region,
         bucket: target.bucket,
         prefix: target.prefix,
+        path_style: String(target.path_style ?? (target.provider === "minio" || target.provider === "r2")),
         access_key_hint: hint(target.access_key_id),
       };
+    }
     case "b2":
       return {
         bucket: target.bucket,
@@ -973,7 +1005,7 @@ function hint(accessKeyId: string): string {
   return accessKeyId.length <= 4 ? "****" : `****${accessKeyId.slice(-4)}`;
 }
 
-async function storeSecret(
+export async function storeSecret(
   req: FastifyRequest,
   ref: string,
   ownerType: string,
@@ -1051,6 +1083,8 @@ async function probeDestination(
         return {
           ok: false,
           writable: false,
+          failure: "other",
+          checks: [],
           latency_ms: Date.now() - started,
           used_bytes: null,
           error: `${target.path} on ${server.name} is a ${stat.kind}, not a directory.`,
@@ -1070,6 +1104,8 @@ async function probeDestination(
       return {
         ok: true,
         writable: true,
+        failure: null,
+        checks: [],
         latency_ms: Date.now() - started,
         used_bytes: null,
         error: null,
@@ -1079,6 +1115,8 @@ async function probeDestination(
       return {
         ok: false,
         writable: false,
+        failure: "network",
+        checks: [],
         latency_ms: Date.now() - started,
         used_bytes: null,
         error: `${target.path} is not reachable on ${server.name}: ${message(err)}`,
@@ -1096,6 +1134,8 @@ async function probeDestination(
     return {
       ok: banner.ok,
       writable: false,
+      failure: banner.ok ? null : "network",
+      checks: [],
       latency_ms: banner.latencyMs,
       used_bytes: null,
       error: banner.ok ? null : `${target.host}:${target.port} did not answer: ${banner.error}`,
@@ -1112,6 +1152,29 @@ async function probeDestination(
     };
   }
 
+  if (target.kind === "s3") {
+    const probe = await probeS3(target, { timeoutMs: PROBE_TIMEOUT_MS });
+    return {
+      ok: probe.ok,
+      writable: probe.writable,
+      failure: probe.failure,
+      checks: probe.checks,
+      latency_ms: Date.now() - started,
+      used_bytes: null,
+      error: probe.error,
+      remediation: probe.ok
+        ? {
+            summary: `Wrote, read back and deleted a probe object in ${target.bucket}. These credentials can do what a backup does.`,
+            actions: [],
+          }
+        : {
+            summary: probe.hint ?? "The storage service refused the probe.",
+            actions: probe.url ? [{ label: "Copy URL", copy: probe.url }] : [],
+          },
+      checked_at: checkedAt(),
+    };
+  }
+
   const url = objectStoreUrl(target);
   try {
     const response = await fetch(url, {
@@ -1123,6 +1186,8 @@ async function probeDestination(
     return {
       ok: true,
       writable: false,
+      failure: null,
+      checks: [],
       latency_ms: Date.now() - started,
       used_bytes: null,
       error: null,
@@ -1138,6 +1203,8 @@ async function probeDestination(
       writable: false,
       latency_ms: Date.now() - started,
       used_bytes: null,
+      failure: "network",
+      checks: [],
       error: `${url} is unreachable from the control plane: ${message(err)}`,
       remediation: {
         summary:
@@ -1149,12 +1216,8 @@ async function probeDestination(
   }
 }
 
-function objectStoreUrl(target: Extract<BackupDestinationTarget, { kind: "s3" | "b2" }>): string {
-  if (target.kind === "b2") return "https://api.backblazeb2.com";
-  if (target.endpoint) {
-    return target.endpoint.startsWith("http") ? target.endpoint : `https://${target.endpoint}`;
-  }
-  return `https://s3.${target.region}.amazonaws.com`;
+function objectStoreUrl(_target: Extract<BackupDestinationTarget, { kind: "b2" }>): string {
+  return "https://api.backblazeb2.com";
 }
 
 function sshBanner(
@@ -1189,14 +1252,16 @@ function message(err: unknown): string {
  * Repository naming
  * ------------------------------------------------------------------ */
 
-function repositoryFor(destination: DestinationRow, scheduleName: string): string {
+export function repositoryFor(destination: DestinationRow, scheduleName: string): string {
   const config = destination.config;
   const name = slugify(scheduleName);
   switch (destination.kind) {
     case "s3": {
+      // restic's form: s3:<host>/<bucket>/<prefix>, with an explicit
+      // scheme only when it is not https (a MinIO on plain HTTP).
       const endpoint = (
         config.endpoint ?? `s3.${config.region ?? "us-east-1"}.amazonaws.com`
-      ).replace(/^https?:\/\//, "");
+      ).replace(/^https:\/\//, "");
       return `s3:${endpoint}/${config.bucket}/${joinPath(config.prefix, name)}`;
     }
     case "b2":
@@ -1236,6 +1301,9 @@ function toDestination(row: DestinationRow): BackupDestination {
     host: config.host ?? null,
     path: config.path ?? null,
     access_key_hint: config.access_key_hint ?? null,
+    provider: (config.provider as BackupDestinationSummary["provider"]) ?? (row.kind === "s3" ? "aws" : null),
+    path_style: config.path_style === undefined ? null : config.path_style === "true",
+    prefix: config.prefix ?? null,
   };
   return {
     id: row.id,
@@ -1280,7 +1348,7 @@ function toSchedule(
   };
 }
 
-function toRun(
+export function toRun(
   row: typeof backupRuns.$inferSelect,
   serverName: string,
   scheduleName: string | null,
@@ -1304,7 +1372,7 @@ function toRun(
   };
 }
 
-function toRestorePoint(row: RestorePointRow, serverName: string): RestorePoint {
+export function toRestorePoint(row: RestorePointRow, serverName: string): RestorePoint {
   return {
     id: row.id,
     run_id: row.runId,

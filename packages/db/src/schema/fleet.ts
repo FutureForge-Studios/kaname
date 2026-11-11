@@ -248,16 +248,30 @@ export const alertRules = pgTable(
       .notNull()
       .default("warning"),
     scope: jsonb("scope")
-      .$type<{ kind: "fleet" } | { kind: "servers"; server_ids: string[] }>()
+      .$type<
+        | { kind: "fleet" }
+        | { kind: "servers"; server_ids: string[] }
+        | { kind: "app"; app_install_id: string }
+      >()
       .notNull(),
     enabled: boolean("enabled").notNull().default(true),
     channels: uuid("channels")
       .array()
       .notNull()
       .default(sql`'{}'::uuid[]`),
+    /**
+     * Set for an app rule (metric is an app kind, scope `{ kind: "app" }`).
+     * The foreign key to app_installs (ON DELETE CASCADE) lives in
+     * migration 0011 rather than here, so this module does not import
+     * apps.ts, which imports it.
+     */
+    appInstallId: uuid("app_install_id"),
     ...timestamps,
   },
-  (t) => [index("alert_rules_metric_idx").on(t.metric)],
+  (t) => [
+    index("alert_rules_metric_idx").on(t.metric),
+    index("alert_rules_app_install_idx").on(t.appInstallId),
+  ],
 );
 
 export const alerts = pgTable(

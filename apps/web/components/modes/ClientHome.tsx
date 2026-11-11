@@ -13,6 +13,7 @@ import {
   Skeleton,
   StatusLine,
 } from "@kaname/ui";
+import { AppHealthLine } from "@/components/installer/AppHealth";
 import { formatCount } from "@/lib/format";
 import { useCan, useList } from "@/lib/queries";
 import type { IconComponent } from "@/lib/icons";
@@ -72,7 +73,10 @@ export function ClientHome() {
           }
           status={
             account || preview ? (
-              <QuotaStatus quota={quota} usage={usage} />
+              <div className="flex flex-col gap-1.5">
+                <QuotaStatus quota={quota} usage={usage} />
+                {!preview && <AppHealthLine />}
+              </div>
             ) : (
               <Skeleton className="h-4 w-64" />
             )

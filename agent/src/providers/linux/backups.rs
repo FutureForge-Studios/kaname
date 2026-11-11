@@ -38,9 +38,37 @@ pub struct BackupOps(pub Arc<Shared>);
 
 type Environment = Vec<(String, String)>;
 
-fn restic(args: &[&str], environment: &Environment) -> ExecOptions {
-    let mut options = ExecOptions::new("restic", args.iter().copied()).c_locale();
+/// The `.env` key that picks restic's S3 bucket addressing. It is turned
+/// into `-o s3.bucket-lookup=<value>` rather than passed through, because
+/// restic reads that setting only as an option.
+const BUCKET_LOOKUP_KEY: &str = "KANAME_S3_BUCKET_LOOKUP";
+
+/// Leading `-o` options derived from the environment, and the environment
+/// without the keys that became options. Unknown values are dropped.
+fn split_options(environment: &Environment) -> (Vec<String>, Environment) {
+    let mut options = Vec::new();
+    let mut rest = Environment::new();
     for (k, v) in environment {
+        if k == BUCKET_LOOKUP_KEY {
+            if matches!(v.as_str(), "auto" | "dns" | "path") {
+                options.push("-o".to_string());
+                options.push(format!("s3.bucket-lookup={v}"));
+            }
+            continue;
+        }
+        rest.push((k.clone(), v.clone()));
+    }
+    (options, rest)
+}
+
+fn restic(args: &[&str], environment: &Environment) -> ExecOptions {
+    let (leading, environment) = split_options(environment);
+    let argv: Vec<String> = leading
+        .into_iter()
+        .chain(args.iter().map(|a| a.to_string()))
+        .collect();
+    let mut options = ExecOptions::new("restic", argv).c_locale();
+    for (k, v) in &environment {
         options = options.env(k.clone(), v.clone());
     }
     options
@@ -386,9 +414,10 @@ impl BackupOps {
         mut observe: impl FnMut(&ResticMessage, &str),
     ) -> PResult<String> {
         self.0.require(cap::RESTIC)?;
-        let options = ExecOptions::new("restic", args.iter().cloned()).c_locale();
-        let mut options = options;
-        for (k, v) in environment {
+        let (leading, environment) = split_options(environment);
+        let argv: Vec<String> = leading.into_iter().chain(args.iter().cloned()).collect();
+        let mut options = ExecOptions::new("restic", argv).c_locale();
+        for (k, v) in &environment {
             options = options.env(k.clone(), v.clone());
         }
 
@@ -699,6 +728,22 @@ fn check_sql_identifier(name: &str) -> PResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bucket_lookup_becomes_an_option_and_never_an_env_var() {
+        let env: Environment = vec![
+            ("AWS_ACCESS_KEY_ID".into(), "k".into()),
+            (BUCKET_LOOKUP_KEY.into(), "path".into()),
+        ];
+        let (options, rest) = split_options(&env);
+        assert_eq!(
+            options,
+            vec!["-o".to_string(), "s3.bucket-lookup=path".to_string()]
+        );
+        assert_eq!(rest, vec![("AWS_ACCESS_KEY_ID".to_string(), "k".to_string())]);
+        let (options, _) = split_options(&vec![(BUCKET_LOOKUP_KEY.into(), "path --x".into())]);
+        assert!(options.is_empty(), "an unknown value is dropped");
+    }
 
     #[test]
     fn a_password_ref_is_a_bare_name() {

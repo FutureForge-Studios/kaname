@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, isNull, sql, type Database } from "@kaname
 import {
   alertRules,
   alerts,
+  appInstalls,
   notificationChannels,
   serverMetrics,
   serverMetrics5m,
@@ -13,6 +14,7 @@ import {
   alertState,
   createAlertRuleInput,
   idParam,
+  isAppAlertKind,
   listQuery,
   seriesQuery,
   uuid,
@@ -101,8 +103,15 @@ const METRIC_SOURCES: Record<
   processes: { row: "processes", agg: "avg", unit: "count" },
 };
 
-/** An alert rule targets the fleet or a server list — not an RBAC scope. */
+/** An alert rule targets the fleet, a server list or one app — not an RBAC scope. */
 type AlertRuleScope = AlertRule["scope"];
+
+/** "any" narrows a list to app rules (or their alerts) without naming one. */
+const appFilter = z.union([uuid, z.literal("any")]);
+
+/** "App on domain", the label app rules and their alerts carry. */
+const appLabel = sql<string | null>`case when ${appInstalls.id} is null then null
+  else ${appInstalls.appName} || ' on ' || ${appInstalls.domain} end`;
 
 const SORTABLE_ALERTS = {
   started_at: alerts.startedAt,
@@ -123,11 +132,13 @@ const alertListQuery = listQuery.extend({
   state: alertState.optional(),
   severity: alertSeverity.optional(),
   acknowledged: queryBoolean.optional(),
+  app_install_id: appFilter.optional(),
 });
 
 const alertRuleListQuery = listQuery.extend({
   enabled: queryBoolean.optional(),
   severity: alertSeverity.optional(),
+  app_install_id: appFilter.optional(),
 });
 
 const updateAlertRuleInput = createAlertRuleInput.partial();
@@ -253,6 +264,11 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
       q.severity ? eq(alerts.severity, q.severity) : null,
       q.acknowledged === true ? sql`${alerts.acknowledgedAt} is not null` : null,
       q.acknowledged === false ? isNull(alerts.acknowledgedAt) : null,
+      q.app_install_id === "any"
+        ? sql`${alertRules.appInstallId} is not null`
+        : q.app_install_id
+          ? eq(alertRules.appInstallId, q.app_install_id)
+          : null,
       term
         ? sql`(lower(${alerts.message}) like ${term} or lower(${alertRules.name}) like ${term})`
         : null,
@@ -260,10 +276,17 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
 
     const column = sortColumn(SORTABLE_ALERTS, q.sort, "started_at");
     const rows = await req.ctx.db
-      .select({ alert: alerts, ruleName: alertRules.name, serverName: servers.name })
+      .select({
+        alert: alerts,
+        ruleName: alertRules.name,
+        serverName: servers.name,
+        appInstallId: alertRules.appInstallId,
+        appName: appLabel,
+      })
       .from(alerts)
       .innerJoin(alertRules, eq(alerts.ruleId, alertRules.id))
       .leftJoin(servers, eq(alerts.serverId, servers.id))
+      .leftJoin(appInstalls, eq(alertRules.appInstallId, appInstalls.id))
       .where(where)
       .orderBy(q.order === "asc" ? asc(column) : desc(column))
       .limit(q.per_page)
@@ -278,7 +301,7 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
 
     return list(
       reply,
-      rows.map((r) => toAlert(r.alert, r.ruleName, r.serverName)),
+      rows.map((r) => toAlert(r.alert, r.ruleName, r.serverName, r.appInstallId, r.appName)),
       paginate(total?.n ?? 0, q.page, q.per_page),
     );
   });
@@ -288,10 +311,17 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     const h = helpers(req);
 
     const rows = await req.ctx.db
-      .select({ alert: alerts, ruleName: alertRules.name, serverName: servers.name })
+      .select({
+        alert: alerts,
+        ruleName: alertRules.name,
+        serverName: servers.name,
+        appInstallId: alertRules.appInstallId,
+        appName: appLabel,
+      })
       .from(alerts)
       .innerJoin(alertRules, eq(alerts.ruleId, alertRules.id))
       .leftJoin(servers, eq(alerts.serverId, servers.id))
+      .leftJoin(appInstalls, eq(alertRules.appInstallId, appInstalls.id))
       .where(eq(alerts.id, id))
       .limit(1);
 
@@ -330,7 +360,10 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     });
     req.ctx.events.publish("alerts", "alert.acknowledged", { alert_id: id }, found.alert.serverId);
 
-    return item(reply, toAlert(row!, found.ruleName, found.serverName));
+    return item(
+      reply,
+      toAlert(row!, found.ruleName, found.serverName, found.appInstallId, found.appName),
+    );
   });
 
   /* --------------------------- alert rules -------------------------- */
@@ -371,6 +404,11 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     const where = combine(
       q.enabled !== undefined ? eq(alertRules.enabled, q.enabled) : null,
       q.severity ? eq(alertRules.severity, q.severity) : null,
+      q.app_install_id === "any"
+        ? sql`${alertRules.appInstallId} is not null`
+        : q.app_install_id
+          ? eq(alertRules.appInstallId, q.app_install_id)
+          : null,
       term
         ? sql`(lower(${alertRules.name}) like ${term} or lower(${alertRules.metric}) like ${term})`
         : null,
@@ -378,8 +416,9 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
 
     const column = sortColumn(SORTABLE_RULES, q.sort, "name");
     const rows = await req.ctx.db
-      .select()
+      .select({ rule: alertRules, appName: appLabel, appServerId: appInstalls.serverId })
       .from(alertRules)
+      .leftJoin(appInstalls, eq(alertRules.appInstallId, appInstalls.id))
       .where(where)
       .orderBy(q.order === "asc" ? asc(column) : desc(column))
       .limit(q.per_page)
@@ -394,7 +433,9 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     const visible = visibleServerIds(req, "monitoring.alerts:read");
     return list(
       reply,
-      rows.filter((r) => ruleIsVisible(r.scope, visible)).map(toRule),
+      rows
+        .filter((r) => ruleIsVisible(r.rule.scope, visible, r.appServerId))
+        .map((r) => toRule(r.rule, r.appName)),
       paginate(total?.n ?? 0, q.page, q.per_page),
     );
   });
@@ -404,17 +445,19 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     helpers(req).authorize("monitoring.alerts:read");
 
     const rule = await loadRule(req, id);
-    if (!ruleIsVisible(rule.scope, visibleServerIds(req, "monitoring.alerts:read"))) {
+    const app = await ruleApp(req, rule.appInstallId);
+    if (!ruleIsVisible(rule.scope, visibleServerIds(req, "monitoring.alerts:read"), app?.serverId)) {
       throw notFound("Alert rule", id);
     }
-    return item(reply, toRule(rule));
+    return item(reply, toRule(rule, app?.label ?? null));
   });
 
   app.post("/monitoring/alert-rules", async (req, reply) => {
     const body = parseBody(req, createAlertRuleInput);
     const h = helpers(req);
     h.authorize("monitoring.alerts:write");
-    assertRuleScope(req, body.scope);
+    assertRuleShape(body.metric, body.scope);
+    const app = await assertRuleScope(req, body.scope);
     await assertChannelsExist(req, body.channels);
 
     const [row] = await req.ctx.db
@@ -429,6 +472,7 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
         scope: body.scope,
         enabled: body.enabled ?? true,
         channels: body.channels ?? [],
+        appInstallId: app?.id ?? null,
       })
       .returning();
 
@@ -442,7 +486,7 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     });
     req.ctx.events.publish("alerts", "alert_rule.created", { rule_id: row!.id });
 
-    return item(reply, toRule(row!), 201);
+    return item(reply, toRule(row!, app?.label ?? null), 201);
   });
 
   app.patch("/monitoring/alert-rules/:id", async (req, reply) => {
@@ -452,8 +496,24 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     h.authorize("monitoring.alerts:write");
 
     const before = await loadRule(req, id);
-    assertRuleScope(req, before.scope);
-    if (body.scope) assertRuleScope(req, body.scope);
+    const app = await assertRuleScope(req, before.scope);
+    if (body.scope || body.metric) {
+      const scope = body.scope ?? before.scope;
+      assertRuleShape(body.metric ?? before.metric, scope);
+      // An app rule belongs to its install for good: moving it to
+      // another app or to servers would orphan the default it replaced.
+      if (before.appInstallId && (scope.kind !== "app" || scope.app_install_id !== before.appInstallId)) {
+        throw new ApiException("validation_failed", "An app rule cannot be moved to another target.", {
+          fields: { scope: "must stay on the same app" },
+        });
+      }
+      if (!before.appInstallId && scope.kind === "app") {
+        throw new ApiException("validation_failed", "A server rule cannot be turned into an app rule.", {
+          fields: { scope: "create an app rule instead" },
+        });
+      }
+    }
+    if (body.scope) await assertRuleScope(req, body.scope);
     await assertChannelsExist(req, body.channels);
 
     const [row] = await req.ctx.db
@@ -473,18 +533,22 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(alertRules.id, id))
       .returning();
 
+    if (before.appInstallId && body.enabled === false) {
+      await resolveOpenAlerts(req.ctx.db, id);
+    }
+
     await req.ctx.audit.record({
       actor: h.actor(),
       action: "alert_rule.updated",
       targetType: "alert_rule",
       targetId: id,
       targetLabel: row!.name,
-      before: toRule(before),
+      before: toRule(before, app?.label ?? null),
       after: body,
     });
     req.ctx.events.publish("alerts", "alert_rule.updated", { rule_id: id });
 
-    return item(reply, toRule(row!));
+    return item(reply, toRule(row!, app?.label ?? null));
   });
 
   app.delete("/monitoring/alert-rules/:id", async (req, reply) => {
@@ -493,7 +557,7 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
     h.authorize("monitoring.alerts:write");
 
     const rule = await loadRule(req, id);
-    assertRuleScope(req, rule.scope);
+    const app = await assertRuleScope(req, rule.scope);
 
     await req.ctx.db.delete(alertRules).where(eq(alertRules.id, id));
 
@@ -503,7 +567,7 @@ export async function monitoringRoutes(app: FastifyInstance): Promise<void> {
       targetType: "alert_rule",
       targetId: id,
       targetLabel: rule.name,
-      before: toRule(rule),
+      before: toRule(rule, app?.label ?? null),
     });
     req.ctx.events.publish("alerts", "alert_rule.deleted", { rule_id: id });
 
@@ -711,14 +775,24 @@ async function assertChannelsExist(
   );
 }
 
-function assertRuleScope(req: FastifyRequest, scope: AlertRuleScope): void {
+async function assertRuleScope(
+  req: FastifyRequest,
+  scope: AlertRuleScope,
+): Promise<{ id: string; serverId: string; label: string } | null> {
   const principal = helpers(req).requirePrincipal();
 
   if (scope.kind === "servers") {
     for (const serverId of scope.server_ids) {
       helpers(req).authorize("monitoring.alerts:write", serverId);
     }
-    return;
+    return null;
+  }
+
+  if (scope.kind === "app") {
+    const app = await ruleApp(req, scope.app_install_id);
+    if (!app) throw notFound("App install", scope.app_install_id);
+    helpers(req).authorize("monitoring.alerts:write", app.serverId);
+    return app;
   }
 
   if (req.ctx.auth.scope(principal, "monitoring.alerts:write") !== "global") {
@@ -733,19 +807,66 @@ function assertRuleScope(req: FastifyRequest, scope: AlertRuleScope): void {
       },
     );
   }
+  return null;
 }
 
-function ruleIsVisible(scope: AlertRuleScope, visible: "global" | readonly string[]): boolean {
+/** App kinds go with an app scope, server metrics with a fleet or server scope — never crossed. */
+function assertRuleShape(metric: string, scope: AlertRuleScope): void {
+  const app = isAppAlertKind(metric);
+  if (app === (scope.kind === "app")) return;
+  throw new ApiException(
+    "validation_failed",
+    app
+      ? "An app alert kind needs an app scope."
+      : "A server metric cannot be scoped to an app; use an app alert kind.",
+    { fields: { metric: app ? "app kinds watch one app" : "server metrics watch servers" } },
+  );
+}
+
+/** The install an app rule watches: its server (for RBAC) and its display label. */
+async function ruleApp(
+  req: FastifyRequest,
+  installId: string | null,
+): Promise<{ id: string; serverId: string; label: string } | null> {
+  if (!installId) return null;
+  const rows = await req.ctx.db
+    .select({
+      id: appInstalls.id,
+      serverId: appInstalls.serverId,
+      appName: appInstalls.appName,
+      domain: appInstalls.domain,
+    })
+    .from(appInstalls)
+    .where(eq(appInstalls.id, installId))
+    .limit(1);
+  const row = rows[0];
+  return row ? { id: row.id, serverId: row.serverId, label: `${row.appName} on ${row.domain}` } : null;
+}
+
+/** A muted app rule closes what it had open, quietly: nobody muted it to be told it resolved. */
+export async function resolveOpenAlerts(db: Database, ruleId: string): Promise<void> {
+  await db
+    .update(alerts)
+    .set({ state: "resolved", resolvedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(alerts.ruleId, ruleId), isNull(alerts.resolvedAt)));
+}
+
+function ruleIsVisible(
+  scope: AlertRuleScope,
+  visible: "global" | readonly string[],
+  appServerId?: string | null,
+): boolean {
   if (visible === "global") return true;
   if (scope.kind === "fleet") return false;
+  if (scope.kind === "app") return !!appServerId && visible.includes(appServerId);
   return scope.server_ids.some((id) => visible.includes(id));
 }
 
-function toRule(row: typeof alertRules.$inferSelect): AlertRule {
+export function toRule(row: typeof alertRules.$inferSelect, appName: string | null): AlertRule {
   return {
     id: row.id,
     name: row.name,
-    metric: row.metric as MetricName,
+    metric: row.metric as AlertRule["metric"],
     comparator: row.comparator,
     threshold: row.threshold,
     duration_seconds: row.durationSeconds,
@@ -753,15 +874,19 @@ function toRule(row: typeof alertRules.$inferSelect): AlertRule {
     scope: row.scope,
     enabled: row.enabled,
     channels: row.channels,
+    app_install_id: row.appInstallId,
+    app_name: appName,
     created_at: row.createdAt.toISOString(),
     updated_at: row.updatedAt.toISOString(),
   };
 }
 
-function toAlert(
+export function toAlert(
   row: typeof alerts.$inferSelect,
   ruleName: string,
   serverName: string | null,
+  appInstallId: string | null = null,
+  appName: string | null = null,
 ): Alert {
   return {
     id: row.id,
@@ -777,6 +902,8 @@ function toAlert(
     started_at: row.startedAt.toISOString(),
     resolved_at: row.resolvedAt?.toISOString() ?? null,
     acknowledged_by: row.acknowledgedBy,
+    app_install_id: appInstallId,
+    app_name: appName,
   };
 }
 

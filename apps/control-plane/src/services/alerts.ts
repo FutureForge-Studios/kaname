@@ -1,7 +1,9 @@
 import { and, eq, isNull, sql } from "@kaname/db";
 import { alertRules, alerts, servers } from "@kaname/db/schema";
-import type { MetricName } from "@kaname/contract";
+import type { AlertRuleMetric, MetricName } from "@kaname/contract";
 import type { AppContext } from "../context.js";
+import { AppHealthMonitor } from "./app-health.js";
+import { appTargets, appWindow, describeApp, type AppTarget } from "./alerts-apps.js";
 
 /* ------------------------------------------------------------------ *
  * Alert rules, evaluated.
@@ -22,19 +24,28 @@ const FIRST_TICK_MS = 30_000;
 /** Samples arrive every 15 s; the window counts as covered a bit short of its full length. */
 const COVERAGE_SLACK_S = 30;
 
-interface RuleRow {
+export interface RuleRow {
   id: string;
   name: string;
-  metric: MetricName;
+  metric: AlertRuleMetric;
   comparator: "gt" | "gte" | "lt" | "lte";
   threshold: number;
   durationSeconds: number;
   severity: "info" | "warning" | "critical";
-  scope: { kind: "fleet" } | { kind: "servers"; server_ids: string[] };
+  scope:
+    | { kind: "fleet" }
+    | { kind: "servers"; server_ids: string[] }
+    | { kind: "app"; app_install_id: string };
   channels: string[];
+  appInstallId: string | null;
 }
 
-interface Window {
+/**
+ * What a rule is checked against over its window. `lo`/`hi` bound the
+ * window's samples; `latest` is the newest; `covered` says the window
+ * reaches back far enough for a breach in it to count as sustained.
+ */
+export interface Window {
   lo: number | null;
   hi: number | null;
   latest: number | null;
@@ -70,7 +81,7 @@ const METRIC_LABEL: Record<MetricName, [label: string, unit: string]> = {
   processes: ["processes", ""],
 };
 
-const COMPARATOR: Record<RuleRow["comparator"], string> = {
+export const COMPARATOR: Record<RuleRow["comparator"], string> = {
   gt: ">",
   gte: "≥",
   lt: "<",
@@ -81,11 +92,16 @@ export class AlertEvaluator {
   private timer: NodeJS.Timeout | null = null;
   private first: NodeJS.Timeout | null = null;
   private running = false;
+  /** Collects the samples app rules read (HTTP probes, containers). */
+  readonly apps: AppHealthMonitor;
 
-  constructor(private readonly ctx: AppContext) {}
+  constructor(private readonly ctx: AppContext) {
+    this.apps = new AppHealthMonitor(ctx);
+  }
 
   start(): void {
     if (this.timer) return;
+    this.apps.start();
     this.timer = setInterval(() => void this.evaluate(), TICK_MS);
     this.timer.unref?.();
     this.first = setTimeout(() => void this.evaluate(), FIRST_TICK_MS);
@@ -93,6 +109,7 @@ export class AlertEvaluator {
   }
 
   stop(): void {
+    this.apps.stop();
     if (this.timer) clearInterval(this.timer);
     if (this.first) clearTimeout(this.first);
     this.timer = null;
@@ -115,7 +132,25 @@ export class AlertEvaluator {
         .from(servers)
         .where(and(isNull(servers.revokedAt), sql`${servers.enrolledAt} is not null`));
 
+      const appRules = rules.filter((rule) => rule.appInstallId !== null);
+      if (appRules.length > 0) {
+        const targets = await appTargets(this.ctx, appRules);
+        for (const rule of appRules) {
+          const target = targets.get(rule.appInstallId!);
+          if (!target) continue;
+          try {
+            await this.evaluateApp(rule, target);
+          } catch (err) {
+            this.ctx.log.warn(
+              { err, rule: rule.name, appInstallId: rule.appInstallId },
+              "app alert evaluation failed",
+            );
+          }
+        }
+      }
+
       for (const rule of rules) {
+        if (rule.appInstallId !== null) continue;
         const targets =
           rule.scope.kind === "fleet"
             ? fleet
@@ -143,7 +178,42 @@ export class AlertEvaluator {
 
   private async evaluateOne(rule: RuleRow, server: { id: string; name: string }): Promise<void> {
     const window = await this.window(rule, server.id);
+    await this.transition(rule, server, window, {
+      describe: (value) => describe(rule, value),
+      resolvedSuffix: (value) => format(rule, value),
+      extra: {},
+    });
+  }
+
+  /** An app rule: the same lifecycle, read from the install's health samples. */
+  private async evaluateApp(rule: RuleRow, target: AppTarget): Promise<void> {
+    const window = await appWindow(this.ctx, rule, target);
+    const app = describeApp(rule, target);
+    await this.transition(rule, { id: target.serverId, name: target.serverName }, window, {
+      describe: app.describe,
+      resolvedSuffix: app.format,
+      extra: app.extra,
+    });
+  }
+
+  /**
+   * The one open/resolve lifecycle every rule goes through. At most one
+   * open alert per (rule, server) — the alerts_open_key index — which is
+   * also what dedups: a breach that persists updates its row instead of
+   * opening another, and only the edges (firing, resolved) are published.
+   */
+  private async transition(
+    rule: RuleRow,
+    server: { id: string; name: string },
+    window: Window,
+    text: {
+      describe: (value: number) => string;
+      resolvedSuffix: (value: number) => string;
+      extra: Record<string, unknown>;
+    },
+  ): Promise<void> {
     const { db, events } = this.ctx;
+    const describe = text.describe;
 
     const [open] = await db
       .select()
@@ -162,7 +232,7 @@ export class AlertEvaluator {
     const sustained = breachedNow && worst !== null && breaches(rule, worst) && window.covered;
 
     if (sustained) {
-      const message = describe(rule, worst!);
+      const message = describe(worst!);
       if (!open) {
         const [row] = await db
           .insert(alerts)
@@ -179,7 +249,7 @@ export class AlertEvaluator {
         events.publish(
           "alerts",
           "alert.firing",
-          this.payload(row!.id, rule, server, worst!, message),
+          this.payload(row!.id, rule, server, worst!, message, text.extra),
           server.id,
         );
         return;
@@ -192,7 +262,7 @@ export class AlertEvaluator {
         events.publish(
           "alerts",
           "alert.firing",
-          this.payload(open.id, rule, server, worst!, message),
+          this.payload(open.id, rule, server, worst!, message, text.extra),
           server.id,
         );
         return;
@@ -216,7 +286,7 @@ export class AlertEvaluator {
           severity: rule.severity,
           value: window.latest,
           threshold: rule.threshold,
-          message: describe(rule, window.latest),
+          message: describe(window.latest),
         });
       }
       return;
@@ -234,11 +304,11 @@ export class AlertEvaluator {
         })
         .where(eq(alerts.id, open.id));
       if (wasFiring) {
-        const message = `${describe(rule, open.value)} — back to ${format(rule, window.latest)}.`;
+        const message = `${describe(open.value)} — back to ${text.resolvedSuffix(window.latest)}.`;
         events.publish(
           "alerts",
           "alert.resolved",
-          this.payload(open.id, rule, server, window.latest, message),
+          this.payload(open.id, rule, server, window.latest, message, text.extra),
           server.id,
         );
       }
@@ -251,8 +321,10 @@ export class AlertEvaluator {
     server: { id: string; name: string },
     value: number,
     message: string,
+    extra: Record<string, unknown> = {},
   ): Record<string, unknown> {
     return {
+      ...extra,
       alert_id: alertId,
       rule_id: rule.id,
       rule_name: rule.name,
@@ -268,7 +340,7 @@ export class AlertEvaluator {
   }
 
   private async window(rule: RuleRow, serverId: string): Promise<Window> {
-    const expr = sql.raw(METRIC_SQL[rule.metric]);
+    const expr = sql.raw(METRIC_SQL[rule.metric as MetricName]);
     const seconds = Math.max(15, rule.durationSeconds);
     const since = sql.raw(`now() - interval '${seconds} seconds'`);
     const slack = sql.raw(`now() - interval '${Math.max(0, seconds - COVERAGE_SLACK_S)} seconds'`);
@@ -293,7 +365,10 @@ export class AlertEvaluator {
   }
 }
 
-function breaches(rule: RuleRow, value: number): boolean {
+export function breaches(
+  rule: Pick<RuleRow, "comparator" | "threshold">,
+  value: number,
+): boolean {
   switch (rule.comparator) {
     case "gt":
       return value > rule.threshold;
@@ -307,12 +382,12 @@ function breaches(rule: RuleRow, value: number): boolean {
 }
 
 function format(rule: RuleRow, value: number): string {
-  const [, unit] = METRIC_LABEL[rule.metric];
+  const [, unit] = METRIC_LABEL[rule.metric as MetricName];
   const rounded = Math.abs(value) >= 100 ? Math.round(value).toString() : value.toFixed(1);
   return `${rounded}${unit}`;
 }
 
 function describe(rule: RuleRow, value: number): string {
-  const [label] = METRIC_LABEL[rule.metric];
+  const [label] = METRIC_LABEL[rule.metric as MetricName];
   return `${label} ${format(rule, value)} ${COMPARATOR[rule.comparator]} ${format(rule, rule.threshold)} for ${rule.durationSeconds}s`;
 }
