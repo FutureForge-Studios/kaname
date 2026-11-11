@@ -5,6 +5,7 @@ import { RefreshCw } from "lucide-react";
 import type { Job } from "@kaname/contract";
 import {
   Button,
+  CardInset,
   CopyButton,
   CopyableCode,
   Dialog,
@@ -227,7 +228,7 @@ function JobWatch({ job }: { job: Job }) {
   const current = query.data ?? job;
 
   return (
-    <div className="flex flex-col gap-2 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)] p-3">
+    <CardInset padding="sm" className="flex flex-col gap-2">
       <div className="flex min-w-0 items-center gap-2">
         <JobStatusPill status={current.status} size="xs" blockedReason={current.blocked_reason} />
         <span className="min-w-0 truncate text-[var(--kn-text)]">{current.label}</span>
@@ -238,6 +239,6 @@ function JobWatch({ job }: { job: Job }) {
           <span className="kn-mono">{current.error.code}</span> — {current.error.message}
         </p>
       )}
-    </div>
+    </CardInset>
   );
 }

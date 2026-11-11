@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { ArrowRight, Check } from "lucide-react";
 import {
   SETUP_STEPS,
   SETUP_STEP_LABELS,
@@ -11,110 +12,160 @@ import {
   type SetupStep,
   type SetupStepOutcome,
 } from "@kaname/contract";
-import { Badge, Button, InlineError, cn } from "@kaname/ui";
+import { Button, Card, CardInset, Eyebrow, InlineError, MonoLabel, cn, formatIndex } from "@kaname/ui";
 import { ApiError, api, isApiError } from "@/lib/api";
-import { Wordmark } from "@/components/Logo";
+import { Hero, HeroSplit, StandaloneFrame } from "./frame";
 
 /* ------------------------------------------------------------------ *
- * The wizard's chrome: one calm column, a step indicator that says
- * where you are in words ("Step 6 of 11 · Backups"), and a card per
- * step whose footer always holds exactly one primary action on the
- * right and, on optional steps, a quiet way to leave it for later on
- * the left. Every step is a <form>, so Enter is always "the primary
- * action" and nothing has to reinvent that.
+ * The wizard's chrome, in the ffstudios.io language.
+ *
+ * Each step is a hero and a card. The hero (left on a wide screen,
+ * first on a phone) says what the step is in a tight headline whose
+ * second line is the purple gradient, explains it in one muted
+ * paragraph, and carries the numbered step rail — "01 INSTALL ───" —
+ * that says where you are and what was answered. The card holds the
+ * step itself: a <form>, so Enter is always "the primary action", whose
+ * footer has exactly one filled pill on the right and, on optional
+ * steps, a quiet way to leave it for later on the left.
  * ------------------------------------------------------------------ */
 
-export function Frame({ children, step }: { children: React.ReactNode; step?: SetupStep }) {
+type IconComponent = React.ComponentType<{ size?: number | string; className?: string }>;
+
+interface Progress {
+  step?: SetupStep;
+  outcomes?: SetupState["outcomes"];
+}
+
+const ProgressContext = React.createContext<Progress>({});
+
+export function Frame({
+  children,
+  step,
+  outcomes,
+}: {
+  children: React.ReactNode;
+  step?: SetupStep;
+  /** What each optional step was answered with, for the rail. */
+  outcomes?: SetupState["outcomes"];
+}) {
   // A new step starts at the top: the previous one may have been long.
   React.useEffect(() => {
     if (step) window.scrollTo({ top: 0 });
   }, [step]);
 
-  return (
-    <main className="flex min-h-dvh justify-center px-4 py-10 sm:py-16">
-      <div className="w-full max-w-xl">
-        <div className="mb-8 flex flex-col items-center gap-2 text-center">
-          <Wordmark size={28} />
-          <p className="text-[var(--kn-text-3)]">Setting up this installation</p>
-        </div>
+  const progress = React.useMemo(() => ({ step, outcomes }), [step, outcomes]);
 
-        {step && <Stepper current={step} />}
-        {children}
-      </div>
-    </main>
+  return (
+    <StandaloneFrame caption="Setting up this installation">
+      <ProgressContext.Provider value={progress}>{children}</ProgressContext.Provider>
+    </StandaloneFrame>
   );
 }
 
-function Stepper({ current }: { current: SetupStep }) {
+/**
+ * The numbered rail. One line always says where you are in words
+ * ("Step 6 of 11 · Backups"); on a wide screen the eleven steps are
+ * listed under it, each with its number, a leader and what became of it.
+ */
+function StepRail({ current, outcomes }: { current: SetupStep; outcomes?: SetupState["outcomes"] }) {
   const index = SETUP_STEPS.indexOf(current);
   const total = SETUP_STEPS.length;
-  const optional = isOptionalSetupStep(current);
 
   return (
-    <nav aria-label="Setup progress" className="mb-4">
-      <div className="mb-2 flex items-baseline justify-between gap-3">
-        <p className="text-sm text-[var(--kn-text-2)]" aria-live="polite">
+    <nav aria-label="Setup progress" className="flex min-w-0 flex-col gap-3">
+      <div className="kn-label-sm flex min-w-0 items-center gap-3">
+        <p className="m-0 min-w-0 truncate text-[var(--kn-text-2)]" aria-live="polite">
           <span className="kn-num text-[var(--kn-text)]">
             Step {index + 1} of {total}
           </span>
           <span className="text-[var(--kn-text-3)]"> · </span>
           {SETUP_STEP_LABELS[current]}
         </p>
-        {optional && (
-          <Badge tone="neutral" size="xs">
-            Optional
-          </Badge>
-        )}
+        <span aria-hidden className="h-px min-w-6 flex-1 bg-[var(--kn-border-strong)]" />
       </div>
 
-      <ol className="grid gap-1" style={{ gridTemplateColumns: `repeat(${total}, minmax(0, 1fr))` }}>
+      <ol className="m-0 hidden list-none flex-col p-0 lg:flex">
         {SETUP_STEPS.map((step, i) => {
           const done = i < index;
           const active = i === index;
+          const later = done && isOptionalSetupStep(step) && outcomes?.[step] === "skipped";
           return (
             <li
               key={step}
-              className="flex min-w-0 flex-col gap-1.5"
+              className="kn-label-sm flex h-7 min-w-0 items-center gap-3"
               aria-current={active ? "step" : undefined}
             >
               <span
                 aria-hidden
                 className={cn(
-                  "h-1 w-full rounded-full transition-colors duration-[var(--kn-dur)]",
-                  done && "bg-[var(--kn-accent-500)]",
-                  active && "bg-[var(--kn-accent-400)]",
-                  !done && !active && "bg-[var(--kn-surface-3)]",
+                  "kn-num shrink-0",
+                  active ? "text-[var(--kn-accent-400)]" : "text-[var(--kn-text-3)]",
                 )}
-              />
+              >
+                {formatIndex(i + 1)}
+              </span>
               <span
                 className={cn(
-                  "hidden truncate text-center text-xs sm:block",
-                  active ? "text-[var(--kn-text)]" : "text-[var(--kn-text-3)]",
+                  "shrink-0",
+                  active
+                    ? "text-[var(--kn-text)]"
+                    : done
+                      ? "text-[var(--kn-text-2)]"
+                      : "text-[var(--kn-text-3)]",
                 )}
               >
                 <span className="sr-only">
-                  {done ? "Completed: " : active ? "Current: " : "Upcoming: "}
+                  {later ? "Left for later: " : done ? "Completed: " : active ? "Current: " : "Upcoming: "}
                 </span>
                 {SETUP_STEP_SHORT_LABELS[step]}
+              </span>
+              <span
+                aria-hidden
+                className={cn(
+                  "h-px min-w-6 flex-1",
+                  active ? "bg-[var(--kn-border-strong)]" : "bg-[var(--kn-border)]",
+                )}
+              />
+              <span aria-hidden className="flex shrink-0 items-center text-[var(--kn-text-3)] empty:hidden">
+                {later ? (
+                  "Later"
+                ) : done ? (
+                  <Check size={12} className="text-[var(--kn-accent-400)]" />
+                ) : active ? (
+                  <span className="h-1.5 w-2 rounded-[1px] bg-[var(--kn-accent-500)]" />
+                ) : null}
               </span>
             </li>
           );
         })}
       </ol>
+
+      <p className="m-0 hidden text-sm text-[var(--kn-text-3)] lg:block">
+        Close the tab whenever you like. Setup picks up where you left it.
+      </p>
     </nav>
   );
 }
 
-export function Card({ children, className }: { children: React.ReactNode; className?: string }) {
+/**
+ * One step's layout: its heading as the hero with the rail under it,
+ * and the step's card beside (below, on a phone).
+ */
+export function StepShell({ heading, children }: { heading: React.ReactNode; children: React.ReactNode }) {
+  const { step, outcomes } = React.useContext(ProgressContext);
   return (
-    <div
-      className={cn(
-        "rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)] p-6 shadow-[var(--kn-shadow-sm)]",
-        className,
-      )}
+    <HeroSplit
+      hero={
+        <>
+          {heading}
+          {step && <StepRail current={step} outcomes={outcomes} />}
+        </>
+      }
     >
-      {children}
-    </div>
+      <Card radius="xl" padding="lg">
+        {children}
+      </Card>
+    </HeroSplit>
   );
 }
 
@@ -124,16 +175,19 @@ export function Card({ children, className }: { children: React.ReactNode; class
  * when the step appears.
  */
 export function StepForm({
+  heading,
   onSubmit,
   children,
   className,
 }: {
+  /** The step's `<StepHeading>`; it renders as the hero, outside the card. */
+  heading: React.ReactNode;
   onSubmit: () => void;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
-    <Card>
+    <StepShell heading={heading}>
       <form
         noValidate
         className={cn("flex flex-col gap-5", className)}
@@ -144,45 +198,60 @@ export function StepForm({
       >
         {children}
       </form>
-    </Card>
+    </StepShell>
   );
 }
 
+/**
+ * The step's headline. `accent` names the trailing words of `title`
+ * that take the gradient second line; the heading's text stays exactly
+ * `title`, so it reads (and is found) as one phrase.
+ */
 export function StepHeading({
   title,
+  accent,
   hint,
-  icon: Icon,
+  icon,
 }: {
   title: string;
+  accent?: string;
   hint?: React.ReactNode;
-  icon?: React.ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean }>;
+  icon?: IconComponent;
 }) {
+  const { step } = React.useContext(ProgressContext);
+  const split = accent && title.endsWith(accent) && title.length > accent.length;
   return (
-    <div className="flex items-start gap-3">
-      {Icon && (
-        <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--kn-r-sm)] bg-[var(--kn-accent-soft)] text-[var(--kn-accent-400)]">
-          <Icon size={14} aria-hidden />
-        </span>
-      )}
-      <div className="min-w-0">
-        <h1 className="text-xl font-medium tracking-tight text-[var(--kn-text)]">{title}</h1>
-        {hint && <p className="mt-1 text-[var(--kn-text-2)]">{hint}</p>}
-      </div>
-    </div>
+    <Hero
+      eyebrow={
+        <>
+          <Eyebrow icon={icon}>Setup</Eyebrow>
+          {step && isOptionalSetupStep(step) && (
+            <Eyebrow tone="neutral" marker={false}>
+              Optional
+            </Eyebrow>
+          )}
+        </>
+      }
+      title={split ? title.slice(0, title.length - accent.length).trimEnd() : title}
+      accent={split ? accent : undefined}
+      lede={hint}
+    />
   );
 }
 
 /** "What this needs" — said plainly, before anything starts. */
 export function Needs({ title = "Before you start", items }: { title?: string; items: React.ReactNode[] }) {
   return (
-    <div className="rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-4 py-3">
-      <p className="text-sm font-medium text-[var(--kn-text)]">{title}</p>
-      <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-sm text-[var(--kn-text-2)] marker:text-[var(--kn-text-3)]">
+    <CardInset className="px-4 py-3">
+      <MonoLabel as="p" size="xs" tone="muted" className="m-0">
+        {title}
+      </MonoLabel>
+      <ul className="m-0 mt-2 flex list-disc flex-col gap-1 pl-4 text-sm text-[var(--kn-text-2)] marker:text-[var(--kn-text-3)]">
         {items.map((entry, i) => (
           <li key={i}>{entry}</li>
         ))}
       </ul>
-    </div>
+    </CardInset>
   );
 }
 
@@ -190,10 +259,10 @@ export function Note({ children, tone = "neutral" }: { children: React.ReactNode
   return (
     <p
       className={cn(
-        "rounded-[var(--kn-r-md)] border px-4 py-3 text-sm text-[var(--kn-text-2)]",
+        "m-0 rounded-[var(--kn-r-md)] border px-4 py-3 text-sm text-[var(--kn-text-2)]",
         tone === "warn"
           ? "border-[var(--kn-warn)] bg-[var(--kn-warn-soft)]"
-          : "border-[var(--kn-border)] bg-[var(--kn-surface-2)]",
+          : "border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)]",
       )}
     >
       {children}
@@ -211,8 +280,18 @@ export function StepError({ error, exclude = [] }: { error: ApiError | null; exc
     <div className="rounded-[var(--kn-r-md)] border border-[var(--kn-danger)] bg-[var(--kn-danger-soft)] px-4 py-3">
       <InlineError message={error.message} icon={false} className="text-base" />
       {error.remediation?.summary && (
-        <p className="mt-1 text-sm text-[var(--kn-text-2)]">{error.remediation.summary}</p>
+        <p className="m-0 mt-1 text-sm text-[var(--kn-text-2)]">{error.remediation.summary}</p>
       )}
+    </div>
+  );
+}
+
+/** The hairline row that closes a step's card: quiet things left, the pill right. */
+export function StepActions({ start, children }: { start?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--kn-border)] pt-5">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">{start}</div>
+      {children}
     </div>
   );
 }
@@ -220,7 +299,8 @@ export function StepError({ error, exclude = [] }: { error: ApiError | null; exc
 /**
  * The bottom of every step: the one primary action on the right, and on
  * optional steps a quiet "later" on the left. `primaryAutoFocus` is for
- * screens with no field to land on.
+ * screens with no field to land on. An `icon` of ArrowRight is the
+ * forward action and gets the kit's nudging arrow.
  */
 export function StepFooter({
   primary,
@@ -237,7 +317,7 @@ export function StepFooter({
   pending?: boolean;
   disabled?: boolean;
   primaryAutoFocus?: boolean;
-  icon?: React.ComponentType<{ size?: number | string; className?: string }>;
+  icon?: IconComponent;
   later?: () => void;
   laterLabel?: string;
   laterPending?: boolean;
@@ -261,30 +341,35 @@ export function StepFooter({
    * it is leaves keyboard use untouched; the submit then shows every error.
    */
   const keepFocus = (event: React.MouseEvent) => event.preventDefault();
+  const forward = icon === ArrowRight;
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--kn-border)] pt-5">
-      <div className="flex min-w-0 items-center gap-2">
-        {later && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="md"
-            loading={laterPending}
-            disabled={pending}
-            onMouseDown={keepFocus}
-            onClick={later}
-          >
-            {laterLabel}
-          </Button>
-        )}
-        {aside}
-      </div>
+    <StepActions
+      start={
+        <>
+          {later && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="md"
+              loading={laterPending}
+              disabled={pending}
+              onMouseDown={keepFocus}
+              onClick={later}
+            >
+              {laterLabel}
+            </Button>
+          )}
+          {aside}
+        </>
+      }
+    >
       <Button
         type="submit"
         variant="primary"
-        size="md"
-        iconRight={icon}
+        size="lg"
+        arrow={forward && !pending}
+        iconRight={forward ? undefined : icon}
         loading={pending}
         ref={primaryRef}
         disabled={blocked}
@@ -292,7 +377,7 @@ export function StepFooter({
       >
         {primary}
       </Button>
-    </div>
+    </StepActions>
   );
 }
 

@@ -121,6 +121,8 @@ const ALIAS_SORTABLE = {
   created_at: mailAliases.createdAt,
 } as const;
 
+import { assertOwned, ownership } from "./_ownership.js";
+
 export async function mailRoutes(app: FastifyInstance): Promise<void> {
   /* ============================== servers =========================== */
 
@@ -611,11 +613,13 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/mailboxes", async (req, reply) => {
     const q = parseQuery(req, mailboxListQuery);
+    const own = ownership(req);
     helpers(req).authorize("email.mailboxes:read");
 
     const term = searchTerm(q.q);
     const where = combine(
       scopeFilter(req, "email.mailboxes:read", mailboxes.serverId),
+      own.filter("mailbox", mailboxes.id),
       q.mail_domain_id ? eq(mailboxes.mailDomainId, q.mail_domain_id) : null,
       q.domain ? eq(domains.name, q.domain.toLowerCase()) : null,
       q.server_id ? eq(mailboxes.serverId, q.server_id) : null,
@@ -659,6 +663,7 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/mailboxes/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const row = await loadMailbox(req, id, "email.mailboxes:read");
     return item(reply, toMailboxApi(row));
   });
@@ -668,7 +673,18 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
   // only place it ever exists on this side.
   app.post("/mailboxes", async (req, reply) => {
     const body = parseBody(req, createMailboxInput);
+    const own = ownership(req);
     const domain = await loadMailDomain(req, body.mail_domain_id, "email.mailboxes:write");
+    // A mailbox goes on a mail domain only when the domain under it is
+    // the caller's, and it must fit the allowance before the host is asked.
+    await own.assertOwns("domain", domain.mailDomain.domainId, "Mail domain");
+    if (own.restricted && body.quota_mb === 0) {
+      // "Unlimited" would be a mailbox no disk allowance could ever count.
+      throw new ApiException("validation_failed", "Give this mailbox a size.", {
+        fields: { quota_mb: "required for this account" },
+      });
+    }
+    await own.reserve("mailbox", 1, body.quota_mb);
     const server = await loadConnectedServer(req, domain.server.id, "email.mailboxes:write");
     requireYunori(req, server);
     if (domain.mailDomain.status !== "active") {
@@ -706,6 +722,7 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
         lastSyncedAt: new Date(),
       })
       .returning();
+    await own.claim("mailbox", row!.id);
 
     await req.ctx.audit.record({
       actor: helpers(req).actor(),
@@ -734,6 +751,7 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/mailboxes/:id/reset-password", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const row = await loadMailbox(req, id, "email.mailboxes:write");
     const server = await loadConnectedServer(req, row.server.id, "email.mailboxes:write");
     requireYunori(req, server);
@@ -760,6 +778,7 @@ export async function mailRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete("/mailboxes/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const row = await loadMailbox(req, id, "email.mailboxes:delete");
 
     await req.ctx.db
@@ -1085,6 +1104,7 @@ async function loadMailbox(
   const row = rows[0];
   if (!row) throw notFound("Mailbox", id);
   h.authorize(permission, row.server.id);
+  await assertOwned(req, "mailbox", id, "Mailbox");
   return row;
 }
 

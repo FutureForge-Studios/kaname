@@ -8,8 +8,6 @@ import {
   Bell,
   ChevronDown,
   ChevronRight,
-  CircleCheck,
-  Circle,
   Database,
   Globe,
   Mail,
@@ -24,7 +22,7 @@ import {
   type Permission,
   type UserPreferences,
 } from "@kaname/contract";
-import { IconButton, Progress, cn } from "@kaname/ui";
+import { Card, CheckItem, CheckList, IconButton, MonoLabel, Progress, cn } from "@kaname/ui";
 import { api } from "@/lib/api";
 import type { IconComponent } from "@/lib/icons";
 import { useCan, useDashboard, useResourceMutation, useSession } from "@/lib/queries";
@@ -40,6 +38,10 @@ import { useCan, useDashboard, useResourceMutation, useSession } from "@/lib/que
  * Two filters decide what is shown. The control plane leaves out steps
  * the caller cannot read; this component then hides steps the caller
  * cannot act on, because a to-do nobody here can do is noise.
+ *
+ * Drawn as the ffstudios check list: a soft purple circle per finished
+ * step, an outlined one on the step to do next, a hairline circle on
+ * the rest, grouped by the area of the panel each belongs to.
  *
  * Collapsed once complete. Hidden for good when the account says so —
  * stored on the account, so it stays hidden on the next machine too.
@@ -290,153 +292,150 @@ export function GettingStarted() {
     writeCollapsed(!collapsed);
   };
 
+  // The first thing left to do is the one the list points at.
+  const nextId = steps.find((step) => !step.done)?.id ?? null;
+
   return (
-    <section
-      className="overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] shadow-[var(--kn-shadow-sm)]"
-      aria-labelledby="getting-started-heading"
-    >
-      <div
-        className={cn(
-          "flex min-h-9 items-center gap-3 px-4 py-2",
-          !collapsed && "border-b border-[var(--kn-border)]",
-        )}
-      >
-        <button
-          type="button"
-          onClick={toggle}
-          aria-expanded={!collapsed}
-          aria-controls="getting-started-body"
-          className="flex min-w-0 items-center gap-2 rounded-[var(--kn-r-xs)] text-left"
-        >
-          {collapsed ? (
-            <ChevronRight size={14} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
-          ) : (
-            <ChevronDown size={14} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
-          )}
-          <h2 id="getting-started-heading" className="truncate font-medium text-[var(--kn-text)]">
-            Getting started
-          </h2>
-        </button>
-
-        <span className="kn-num shrink-0 text-sm text-[var(--kn-text-2)]">
-          {complete ? `All ${steps.length} done` : `${doneCount} of ${steps.length} done`}
-        </span>
-        <Progress
-          value={doneCount}
-          max={steps.length}
-          size="sm"
-          label={`Getting started: ${doneCount} of ${steps.length} done`}
-          className="hidden w-32 sm:block"
-        />
-
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <IconButton
-            icon={X}
-            label="Hide Getting started for this account"
-            size="xs"
-            loading={dismiss.isPending}
-            onClick={() => {
-              // Hidden immediately: waiting on a round trip to close
-              // something the operator asked to close reads as broken.
-              setHidden(true);
-              dismiss.mutate();
-            }}
-          />
-        </div>
-      </div>
-
-      {!collapsed && (
+    <section aria-labelledby="getting-started-heading">
+      <Card padding="none" className="overflow-hidden">
         <div
-          id="getting-started-body"
-          className="grid grid-cols-1 gap-px bg-[var(--kn-border)] md:grid-cols-2 xl:grid-cols-4"
+          className={cn(
+            "flex min-h-11 items-center gap-3 px-4 py-2",
+            !collapsed && "border-b border-[var(--kn-border)]",
+          )}
         >
-          {groups.map(([area, items]) => (
-            <AreaGroup key={area} area={area} items={items} />
-          ))}
-          {/* Fill the last row so the hairline grid does not show a hole. */}
-          {Array.from({ length: (4 - (groups.length % 4)) % 4 }, (_, index) => (
-            <div key={`pad-${index}`} className="hidden bg-[var(--kn-surface)] xl:block" />
-          ))}
+          <button
+            type="button"
+            onClick={toggle}
+            aria-expanded={!collapsed}
+            aria-controls="getting-started-body"
+            className="flex min-w-0 items-center gap-2 rounded-[var(--kn-r-xs)] text-left outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+          >
+            {collapsed ? (
+              <ChevronRight size={14} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
+            ) : (
+              <ChevronDown size={14} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
+            )}
+            <h2
+              id="getting-started-heading"
+              className="kn-title m-0 truncate text-md text-[var(--kn-text)]"
+            >
+              Getting started
+            </h2>
+          </button>
+
+          <MonoLabel size="xs" tone="muted" className="shrink-0">
+            {complete ? `All ${steps.length} done` : `${doneCount} of ${steps.length} done`}
+          </MonoLabel>
+          <Progress
+            value={doneCount}
+            max={steps.length}
+            size="sm"
+            label={`Getting started: ${doneCount} of ${steps.length} done`}
+            className="hidden w-32 sm:block"
+          />
+
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <IconButton
+              icon={X}
+              label="Hide Getting started for this account"
+              size="xs"
+              loading={dismiss.isPending}
+              onClick={() => {
+                // Hidden immediately: waiting on a round trip to close
+                // something the operator asked to close reads as broken.
+                setHidden(true);
+                dismiss.mutate();
+              }}
+            />
+          </div>
         </div>
-      )}
+
+        {!collapsed && (
+          <div
+            id="getting-started-body"
+            className="grid grid-cols-1 gap-px bg-[var(--kn-border)] md:grid-cols-2 xl:grid-cols-4"
+          >
+            {groups.map(([area, items]) => (
+              <AreaGroup key={area} area={area} items={items} nextId={nextId} />
+            ))}
+            {/* Fill the last row so the hairline grid does not show a hole. */}
+            {Array.from({ length: (4 - (groups.length % 4)) % 4 }, (_, index) => (
+              <div key={`pad-${index}`} className="hidden bg-[var(--kn-surface)] xl:block" />
+            ))}
+          </div>
+        )}
+      </Card>
     </section>
   );
 }
 
-function AreaGroup({ area, items }: { area: Area; items: VisibleStep[] }) {
+function AreaGroup({
+  area,
+  items,
+  nextId,
+}: {
+  area: Area;
+  items: VisibleStep[];
+  nextId: OnboardingStepId | null;
+}) {
   const Icon = AREA_ICONS[area];
   const done = items.filter((item) => item.done).length;
   const headingId = `getting-started-${area.toLowerCase()}`;
 
   return (
     <div className="flex min-w-0 flex-col bg-[var(--kn-surface)]">
-      <div className="flex items-center gap-2 px-4 pb-1 pt-3">
-        <Icon size={13} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
-        <h3 id={headingId} className="truncate text-sm font-medium text-[var(--kn-text-2)]">
+      <div className="flex items-center gap-2 px-4 pb-1.5 pt-3.5">
+        <Icon size={12} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
+        <MonoLabel as="h3" id={headingId} size="xs" className="m-0 truncate">
           {area}
-        </h3>
-        <span className="kn-num ml-auto text-xs text-[var(--kn-text-3)]">
+        </MonoLabel>
+        <span className="kn-mono ml-auto text-xs text-[var(--kn-text-3)]">
           {done}/{items.length}
         </span>
       </div>
-      <ul aria-labelledby={headingId} className="flex flex-col pb-2">
+      <CheckList divided={false} aria-labelledby={headingId} className="pb-2">
         {items.map((item) => (
-          <StepRow key={item.id} step={item} />
+          <StepRow key={item.id} step={item} next={item.id === nextId} />
         ))}
-      </ul>
+      </CheckList>
     </div>
   );
 }
 
-function StepRow({ step }: { step: VisibleStep }) {
+function StepRow({ step, next }: { step: VisibleStep; next: boolean }) {
   return (
-    <li>
-      <Link
-        href={step.target}
-        className={cn(
-          "group/step flex items-start gap-2.5 px-4 outline-none",
-          step.done ? "py-1.5" : "py-2",
-          "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
-          "hover:bg-[var(--kn-surface-2)] focus-visible:bg-[var(--kn-surface-2)]",
-          "focus-visible:ring-[3px] focus-visible:ring-inset focus-visible:ring-[var(--kn-ring)]",
-        )}
-      >
-        {step.done ? (
-          <CircleCheck size={14} className="mt-0.5 shrink-0 text-[var(--kn-ok)]" aria-hidden />
-        ) : (
-          <Circle size={14} className="mt-0.5 shrink-0 text-[var(--kn-text-3)]" aria-hidden />
-        )}
-        <span className="min-w-0 flex-1">
-          <span className="flex items-baseline gap-2">
-            <span
-              className={cn(
-                "truncate",
-                step.done ? "text-[var(--kn-text-2)]" : "font-medium text-[var(--kn-text)]",
-              )}
-            >
-              {step.label}
-            </span>
-            <span
-              className={cn(
-                "shrink-0 text-xs",
-                step.done ? "text-[var(--kn-ok)]" : "text-[var(--kn-text-3)]",
-              )}
-            >
-              {step.done ? "Done" : "To do"}
-            </span>
-          </span>
-          {/* A finished step has made its case; only what is left explains itself. */}
-          {!step.done && (
-            <span className="mt-0.5 block text-sm text-[var(--kn-text-3)]">{step.why}</span>
+    <CheckItem
+      state={step.done ? "done" : next ? "current" : "todo"}
+      className={cn(
+        "group/step relative gap-3 px-4",
+        step.done ? "py-1.5" : "py-2",
+        "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
+        "hover:bg-[var(--kn-surface-2)]",
+      )}
+      title={
+        /* The link is the row: its hit area and focus ring cover the item. */
+        <Link
+          href={step.target}
+          className={cn(
+            "outline-none after:absolute after:inset-0",
+            "focus-visible:after:outline-2 focus-visible:after:-outline-offset-2 focus-visible:after:outline-[var(--kn-ring)]",
+            step.done && "font-normal text-[var(--kn-text-2)]",
           )}
-        </span>
+        >
+          {step.label}
+        </Link>
+      }
+      /* A finished step has made its case; only what is left explains itself. */
+      description={step.done ? undefined : step.why}
+      action={
         <ArrowRight
           size={12}
-          className="mt-1 shrink-0 text-[var(--kn-text-3)] opacity-0 transition-opacity duration-[var(--kn-dur-fast)] group-hover/step:opacity-100 group-focus-visible/step:opacity-100"
+          className="mt-1 text-[var(--kn-text-3)] opacity-0 transition-opacity duration-[var(--kn-dur-fast)] group-focus-within/step:opacity-100 group-hover/step:opacity-100"
           aria-hidden
         />
-      </Link>
-    </li>
+      }
+    />
   );
 }
 

@@ -24,7 +24,9 @@ export * from "./resources/databases.js";
 export * from "./resources/security.js";
 export * from "./resources/backups.js";
 export * from "./resources/platform.js";
+export * from "./resources/accounts.js";
 export * from "./resources/updates.js";
+export * from "./resources/apps.js";
 export * from "./resources/setup.js";
 
 export * as agent from "./agent/index.js";
@@ -92,6 +94,7 @@ export interface NavSection {
 
 export const NAVIGATION: readonly NavSection[] = [
   { label: "Command Center", icon: "LayoutDashboard", href: "/", permission: "infra.servers:read" },
+  { label: "Apps", icon: "PackageCheck", href: "/apps", permission: "apps.installs:read" },
   {
     label: "Infrastructure",
     icon: "Server",

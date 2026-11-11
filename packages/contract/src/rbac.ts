@@ -39,6 +39,11 @@ export const PERMISSIONS = [
   "websites.deployments:read",
   "websites.deployments:exec",
 
+  // Apps (the one-click installer)
+  "apps.installs:read",
+  "apps.installs:write",
+  "apps.installs:delete",
+
   // Files
   "files.manager:read",
   "files.manager:write",
@@ -111,6 +116,7 @@ export const permission = z.enum(PERMISSIONS);
 export const PERMISSION_MODULES = [
   "infra",
   "websites",
+  "apps",
   "files",
   "email",
   "databases",
@@ -134,6 +140,7 @@ export const PERMISSION_GROUP_LABELS: Record<string, string> = {
   "websites.dns": "DNS",
   "websites.ssl": "SSL / TLS",
   "websites.deployments": "Deployments",
+  "apps.installs": "App installer",
   "files.manager": "File manager",
   "files.ftp": "FTP / SFTP",
   "email.mailboxes": "Mailboxes",
@@ -166,6 +173,12 @@ export const PERMISSION_DESCRIPTIONS: Partial<Record<Permission, string>> = {
   // needs terminal.session:exec as well; this alone is the lifecycle verbs.
   "infra.containers:exec":
     "Start, stop and restart containers. A shell inside one also needs terminal.session:exec.",
+  // One grant for the whole bundle: the installer creates the site, the
+  // database and the certificate itself, so this is enough on its own.
+  "apps.installs:write":
+    "Install catalog apps. Creates a site, a database with its own user, and a certificate on the server.",
+  "apps.installs:delete":
+    "Uninstall an app, deleting the site, its files and its database. Destructive.",
   "terminal.session:exec": "Open an interactive root shell on the server. Sessions are recorded.",
   "backups.restore:exec": "Restore data over live files or databases. Destructive.",
   "security.audit:read": "Read the append-only audit trail and verify its hash chain.",
@@ -260,6 +273,46 @@ export const SYSTEM_ROLES: Record<
     ],
   },
 };
+
+/* ------------------------------------------------------------------ *
+ * Scoped accounts (KD-039)
+ *
+ * A reseller or client holds no role. What they may do is this fixed
+ * list, on the servers a reseller was given, and only against
+ * resources recorded as theirs. Every permission here is one whose
+ * routes filter by ownership; adding one without wiring its routes
+ * hands a scoped account nothing, because routes that have not opted
+ * in to ownership never see these grants.
+ * ------------------------------------------------------------------ */
+
+export const SCOPED_ACCOUNT_PERMISSIONS = [
+  "websites.sites:read",
+  "websites.sites:write",
+  "websites.sites:delete",
+  "websites.domains:read",
+  "websites.domains:write",
+  "websites.domains:delete",
+  "email.mailboxes:read",
+  "email.mailboxes:write",
+  "email.mailboxes:delete",
+  "databases.mysql:read",
+  "databases.mysql:write",
+  "databases.mysql:delete",
+  "databases.postgres:read",
+  "databases.postgres:write",
+  "databases.postgres:delete",
+] as const satisfies readonly Permission[];
+
+/** The grants a scoped account holds: the fixed list, on exactly these servers. */
+export function scopedAccountGrants(serverIds: readonly string[]): EffectiveGrants {
+  if (serverIds.length === 0) return { map: new Map() };
+  return buildEffectiveGrants(
+    SCOPED_ACCOUNT_PERMISSIONS.map((permission) => ({
+      permission,
+      scope: { kind: "servers" as const, server_ids: [...serverIds] },
+    })),
+  );
+}
 
 /* ------------------------------------------------------------------ *
  * Evaluation

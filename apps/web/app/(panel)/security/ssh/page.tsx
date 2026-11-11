@@ -7,7 +7,6 @@ import {
   KeyRound,
   Plus,
   RefreshCw,
-  Server as ServerIcon,
   SlidersHorizontal,
   Terminal,
   Trash2,
@@ -37,6 +36,7 @@ import {
   IconButton,
   Input,
   MonoText,
+  PageBody,
   PageHeader,
   PropertyList,
   PropertyRow,
@@ -119,6 +119,9 @@ interface KeyResponse {
   jobs: Job[];
   correlation_id: string;
 }
+
+const SSH_LEDE =
+  "Who may log in, and how: the keys Kaname writes into authorized_keys, the sshd policy on each host, and who is connected right now.";
 
 export default function SshPage() {
   const pathname = usePathname() ?? "/security/ssh";
@@ -468,8 +471,10 @@ export default function SshPage() {
     return (
       <>
         <ResourcePage<SshKey>
+          eyebrow="Security"
           title="SSH security"
           subtitle={subtitle}
+          lede={SSH_LEDE}
           tabs={tabs}
           primaryAction={newKey}
           state={state}
@@ -529,8 +534,10 @@ export default function SshPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Security"
         title="SSH security"
         subtitle={subtitle}
+        lede={SSH_LEDE}
         tabs={tabs}
         actions={
           view === "sessions" ? (
@@ -556,7 +563,7 @@ export default function SshPage() {
         }
       />
 
-      <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+      <PageBody gap="sm">
         {rollback && rollback.serverId === serverId && (
           <RollbackBanner
             window={rollback}
@@ -584,7 +591,7 @@ export default function SshPage() {
         ) : (
           <SessionsPanel query={sessions} serverName={serverName} />
         )}
-      </div>
+      </PageBody>
 
       {dialogs}
     </div>
@@ -931,7 +938,7 @@ function ConfigPanel({
 
   if (!config || !draft) {
     return (
-      <Skeleton className="h-72 rounded-[var(--kn-r-md)]" label="Loading sshd configuration" />
+      <Skeleton className="h-72 rounded-[var(--kn-r-lg)]" label="Loading sshd configuration" />
     );
   }
 
@@ -947,8 +954,8 @@ function ConfigPanel({
 
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_288px]">
         <SectionCard
+          index={1}
           title="sshd configuration"
-          icon={SlidersHorizontal}
           description={`Read from ${serverName}. Nothing is written until you apply.`}
           actions={
             <Button
@@ -1058,7 +1065,7 @@ function ConfigPanel({
           </div>
         </SectionCard>
 
-        <SectionCard title="Applied state" icon={ServerIcon} headingLevel={3}>
+        <SectionCard index={2} title="Applied state" headingLevel={3}>
           <PropertyList dense labelWidth="sm">
             <PropertyRow label="Server">{config.server_name}</PropertyRow>
             <PropertyRow label="Port" mono copyValue={String(config.port)}>
@@ -1106,7 +1113,7 @@ function ConfigPanel({
           />
           <DialogBody>
             <div className="flex flex-col gap-4">
-              <dl className="rounded-[var(--kn-r-md)] border border-[var(--kn-border)]">
+              <dl className="rounded-[var(--kn-r-lg)] border border-[var(--kn-border)]">
                 {changes.map((change) => (
                   <div
                     key={change.label}
@@ -1253,7 +1260,7 @@ function SessionsPanel({
   return (
     <SectionCard
       title="Active sessions"
-      icon={Terminal}
+      caption={`${serverName}, live`}
       padded={false}
       footer={`Read live from ${serverName} on every refresh — a session list is only true at the instant it is taken. Nothing here is cached.`}
     >
@@ -1277,7 +1284,7 @@ function SessionsPanel({
               size="sm"
               boxClassName="w-56"
             />
-            <span className="ml-auto text-xs text-[var(--kn-text-3)]">
+            <span className="kn-label-sm ml-auto text-[var(--kn-text-3)]">
               {formatCount(rows.length)} open
             </span>
           </div>

@@ -27,11 +27,14 @@ import {
   Input,
   MetricTile,
   MonoText,
+  NumberedSection,
   RelativeTime,
   SectionCard,
+  SectionHeader,
   Select,
   Skeleton,
   StatusBadge,
+  StatusLine,
   TIME_RANGE_MS,
   TimeRangePicker,
   type DataTableColumn,
@@ -83,6 +86,51 @@ const DISPOSITION_TONES: Record<ThreatEvent["disposition"], Tone> = {
   banned: "info",
   ignored: "neutral",
 };
+
+/*
+ * Severity is a reading aid for triage, not a field the host reports:
+ * a known-bad address or a brute force that kept going outranks one
+ * malformed request. Derived here from kind and volume only, so it can
+ * never disagree with the numbers next to it.
+ */
+type Severity = "high" | "elevated" | "low";
+
+const KIND_WEIGHT: Record<ThreatEvent["kind"], number> = {
+  known_bad_ip: 2,
+  ssh_bruteforce: 1,
+  web_bruteforce: 1,
+  mail_bruteforce: 1,
+  port_scan: 0,
+  malformed_request: 0,
+  rate_abuse: 0,
+};
+
+const SEVERITY_META: Record<Severity, { tone: Tone; rank: number }> = {
+  high: { tone: "danger", rank: 2 },
+  elevated: { tone: "warn", rank: 1 },
+  low: { tone: "neutral", rank: 0 },
+};
+
+function severityOf(kind: ThreatEvent["kind"], attempts: number): Severity {
+  const volume = attempts >= 100 ? 2 : attempts >= 20 ? 1 : 0;
+  const score = (KIND_WEIGHT[kind] ?? 0) + volume;
+  if (score >= 3) return "high";
+  if (score >= 2) return "elevated";
+  return "low";
+}
+
+function SeverityBadge({ kind, attempts }: { kind: ThreatEvent["kind"]; attempts: number }) {
+  const severity = severityOf(kind, attempts);
+  return (
+    <StatusBadge
+      tone={SEVERITY_META[severity].tone}
+      size="xs"
+      title="Derived from the kind of attempt and how many there were."
+    >
+      {severity}
+    </StatusBadge>
+  );
+}
 
 const DURATION_OPTIONS = [
   { value: "3600", label: "1 hour" },
@@ -245,6 +293,12 @@ function EventsView() {
         ),
       },
       {
+        id: "severity",
+        header: "Severity",
+        width: 96,
+        cell: (row) => <SeverityBadge kind={row.kind} attempts={row.attempts} />,
+      },
+      {
         id: "kind",
         header: "Kind",
         sortable: true,
@@ -343,7 +397,9 @@ function EventsView() {
     <>
       <ResourcePage<ThreatEvent>
         waiting={selection.isLoading}
+        eyebrow="Security"
         title="Threat protection"
+        lede="Failed logins, scans and abuse the agents saw, ranked so the few that matter stand out. Ban at the host, or ignore in Kaname."
         subtitle={selection.server ? selection.server.hostname : "Every server in your scope"}
         tabs={<ThreatTabs current="events" serverId={serverId} />}
         primaryAction={
@@ -456,15 +512,28 @@ function EventsView() {
         {summary.isLoading && <SummarySkeleton />}
 
         {summary.data && (
-          <>
-            <SummaryStrip summary={summary.data} range={range} />
+          <div className="flex shrink-0 flex-col gap-6">
+            <NumberedSection
+              index={1}
+              title="At a glance"
+              caption={`Every attempt in the last ${range}.`}
+            >
+              <ThreatStatus summary={summary.data} range={range} />
+              <SummaryStrip summary={summary.data} range={range} />
+            </NumberedSection>
             <TimelineCard summary={summary.data} range={range} />
             <TopSources
               summary={summary.data}
               canWrite={mayWrite}
               onAct={(mode, ip, attempts) => act(mode, ip, attempts)}
             />
-          </>
+            <SectionHeader
+              index={4}
+              title="Events"
+              caption="One row per source, kind and target; newest first."
+              className="-mb-2"
+            />
+          </div>
         )}
       </ResourcePage>
 
@@ -497,13 +566,37 @@ function SummarySkeleton() {
         {[0, 1, 2].map((index) => (
           <Skeleton
             key={index}
-            className="h-16 rounded-[var(--kn-r-md)]"
+            className="h-16 rounded-[var(--kn-r-lg)]"
             label={index === 0 ? "Loading threat summary" : undefined}
           />
         ))}
       </div>
-      <Skeleton className="h-48 rounded-[var(--kn-r-md)]" />
+      <Skeleton className="h-48 rounded-[var(--kn-r-lg)]" />
     </div>
+  );
+}
+
+/** The page's condition in one sentence: calm when it is calm. */
+function ThreatStatus({ summary, range }: { summary: ThreatSummary; range: TimeRange }) {
+  if (summary.total_attempts === 0) {
+    return <StatusLine tone="ok">Quiet — nothing recorded in the last {range}.</StatusLine>;
+  }
+  const worst = summary.top_sources.reduce<Severity>((acc, source) => {
+    const next = severityOf(source.kind, source.attempts);
+    return SEVERITY_META[next].rank > SEVERITY_META[acc].rank ? next : acc;
+  }, "low");
+  const unbannedHigh = summary.top_sources.filter(
+    (source) => !source.banned && severityOf(source.kind, source.attempts) === "high",
+  ).length;
+  const tone: Tone = unbannedHigh > 0 ? "danger" : worst === "elevated" ? "warn" : "info";
+  return (
+    <StatusLine tone={tone}>
+      {formatCount(summary.total_attempts)} attempts from {formatCount(summary.unique_sources)}{" "}
+      {summary.unique_sources === 1 ? "source" : "sources"}
+      {unbannedHigh > 0
+        ? ` · ${formatCount(unbannedHigh)} high-severity ${unbannedHigh === 1 ? "source is" : "sources are"} not banned`
+        : ` · ${formatCount(summary.banned_count)} banned`}
+    </StatusLine>
   );
 }
 
@@ -549,9 +642,8 @@ function TimelineCard({ summary, range }: { summary: ThreatSummary; range: TimeR
 
   return (
     <SectionCard
+      index={2}
       title="Over time"
-      icon={ShieldAlert}
-      headingLevel={3}
       actions={
         <div className="flex flex-wrap items-center gap-1.5">
           {byKind.map((entry) => (
@@ -616,6 +708,12 @@ function TopSources({
         accessor: (row) => KIND_LABELS[row.kind] ?? humanize(row.kind),
       },
       {
+        id: "severity",
+        header: "Severity",
+        width: 96,
+        cell: (row) => <SeverityBadge kind={row.kind} attempts={row.attempts} />,
+      },
+      {
         id: "attempts",
         header: "Attempts",
         align: "right",
@@ -669,10 +767,9 @@ function TopSources({
 
   return (
     <SectionCard
+      index={3}
       title="Top sources"
-      icon={ShieldAlert}
       padded={false}
-      headingLevel={3}
       footer="Grouped by address and kind over the selected window."
     >
       <DataTable<TopSource>
@@ -1063,7 +1160,9 @@ function BansView() {
     <>
       <ResourcePage<IpBlock>
         waiting={selection.isLoading}
+        eyebrow="Security"
         title="Threat protection"
+        lede="Addresses the hosts are refusing right now, whether Kaname, an operator or the host's own jail put them there."
         subtitle={selection.server ? selection.server.hostname : "Every server in your scope"}
         tabs={<ThreatTabs current="bans" serverId={serverId} />}
         primaryAction={

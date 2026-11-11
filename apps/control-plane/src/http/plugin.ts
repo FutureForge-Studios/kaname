@@ -17,6 +17,12 @@ declare module "fastify" {
   interface FastifyRequest {
     principal: Principal | null;
     ctx: AppContext;
+    /**
+     * Set by `ownership()` (routes/_ownership.ts). Until a route has
+     * said it filters by owner, a reseller's or client's grants do not
+     * count, so a route that never opts in refuses them (KD-039).
+     */
+    ownershipScoped: boolean;
   }
 }
 
@@ -37,7 +43,7 @@ export interface RouteHelpers {
 export function helpers(req: FastifyRequest): RouteHelpers {
   return {
     authorize(permission, serverId) {
-      req.ctx.auth.authorize(req.principal, permission, serverId);
+      req.ctx.auth.authorize(req.principal, permission, serverId, req.ownershipScoped);
       return req.principal!;
     },
     requirePrincipal() {
@@ -152,10 +158,12 @@ export async function registerRequestContext(app: FastifyInstance, ctx: AppConte
   // but a null default is exactly what we want here.
   app.decorateRequest("principal", null as never);
   app.decorateRequest("ctx", null as never);
+  app.decorateRequest("ownershipScoped", false);
 
   app.addHook("onRequest", async (req) => {
     req.ctx = ctx;
     req.principal = null;
+    req.ownershipScoped = false;
 
     const auth = req.headers.authorization;
     if (auth?.startsWith("Bearer ")) {

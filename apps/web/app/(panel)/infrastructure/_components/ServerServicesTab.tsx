@@ -1,15 +1,15 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Cog } from "lucide-react";
 import { serviceActiveState, type Server, type Service } from "@kaname/contract";
-import { DataTable, EmptyState, SearchInput, Select, Switch } from "@kaname/ui";
+import { DataTable, EmptyState, NumberedSection, SearchInput, Select, Switch } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
 import { useCan, useList } from "@/lib/queries";
 import { humanize } from "@/lib/format";
 import { HostSync } from "./HostSync";
+import { PillLink } from "./PillLink";
 import { useServiceColumns, useServiceCommands } from "./ServiceControls";
 import { useDebounced, useServiceSync } from "../_lib/infra";
 
@@ -61,7 +61,16 @@ export function ServerServicesTab({ server }: { server: Server }) {
   );
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <NumberedSection
+      index={1}
+      title="Units"
+      caption="systemd units on this host, from the last read."
+      actions={
+        <PillLink href={`/infrastructure/services?server_id=${server.id}`}>
+          Open in Services
+        </PillLink>
+      }
+    >
       <HostSync
         syncedAt={syncedAt}
         server={server}
@@ -115,12 +124,6 @@ export function ServerServicesTab({ server }: { server: Server }) {
               }}
               label="Failed only"
             />
-            <Link
-              href={`/infrastructure/services?server_id=${server.id}`}
-              className="ml-auto rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-            >
-              Open in Services
-            </Link>
           </div>
         }
         page={page}
@@ -154,6 +157,6 @@ export function ServerServicesTab({ server }: { server: Server }) {
       />
 
       {commands.dialog}
-    </div>
+    </NumberedSection>
   );
 }

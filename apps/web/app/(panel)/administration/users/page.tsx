@@ -211,7 +211,9 @@ export default function UsersPage() {
   return (
     <>
       <ResourcePage<User>
+        eyebrow="Administration"
         title="Users"
+        lede="Everyone who can sign in to this panel, the roles they hold, and whether a second factor protects them."
         state={state}
         query={query}
         columns={columns}

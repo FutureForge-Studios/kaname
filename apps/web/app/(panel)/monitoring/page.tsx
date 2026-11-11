@@ -6,12 +6,13 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import {
   Activity,
+  ArrowDownToLine,
+  ArrowRight,
+  ArrowUpFromLine,
   BellRing,
   Check,
   Cpu,
-  Gauge,
   HardDrive,
-  LineChart as LineChartIcon,
   MemoryStick,
   Pencil,
   Plus,
@@ -49,6 +50,8 @@ import {
   LineChart,
   MetricTile,
   MonoText,
+  NumberedSection,
+  PageBody,
   PageHeader,
   RelativeTime,
   SectionCard,
@@ -56,6 +59,7 @@ import {
   Skeleton,
   Sparkline,
   StatusBadge,
+  StatusLine,
   Switch,
   Tab,
   TabList,
@@ -242,6 +246,8 @@ function formatterFor(unit: MetricSeries["unit"]): (value: number) => string {
 }
 
 interface FleetChartProps {
+  /** Section number, continuing the page's own count. */
+  index: number;
   title: string;
   metric: MetricName;
   range: TimeRange;
@@ -253,6 +259,7 @@ interface FleetChartProps {
 }
 
 function FleetChart({
+  index,
   title,
   metric,
   range,
@@ -277,11 +284,11 @@ function FleetChart({
 
   return (
     <SectionCard
+      index={index}
       title={title}
-      icon={LineChartIcon}
       actions={
         primary.data && (
-          <span className="text-xs text-[var(--kn-text-3)]">
+          <span className="kn-label-sm text-[var(--kn-text-3)]">
             {primary.data.resolution === "raw" ? "raw samples" : "5-minute rollup"}
           </span>
         )
@@ -351,11 +358,22 @@ function OverviewTab({ tabs }: { tabs: React.ReactNode }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Operations"
         title="Monitoring"
-        subtitle={
-          fleet
-            ? `${formatCount(fleet.servers_connected)}/${formatCount(fleet.servers_total)} agents connected · ${formatCount(fleet.open_alerts)} open alerts`
-            : undefined
+        status={
+          fleet ? (
+            <StatusLine
+              tone={
+                fleet.servers_unhealthy > 0
+                  ? "danger"
+                  : fleet.open_alerts > 0 || fleet.servers_connected < fleet.servers_total
+                    ? "warn"
+                    : "ok"
+              }
+            >
+              {`${formatCount(fleet.servers_connected)}/${formatCount(fleet.servers_total)} agents connected · ${formatCount(fleet.open_alerts)} open alerts`}
+            </StatusLine>
+          ) : undefined
         }
         tabs={tabs}
         actions={
@@ -369,7 +387,35 @@ function OverviewTab({ tabs }: { tabs: React.ReactNode }) {
         }
       />
 
-      <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+      <PageBody>
+        {overview.isError && (
+          <PageError
+            error={overview.error}
+            onRetry={() => void overview.refetch()}
+            context="Fleet rollup"
+          />
+        )}
+
+        <NumberedSection
+          index={1}
+          title="At a glance"
+          caption="The whole fleet, as of the last sample."
+        >
+          {overview.isLoading && (
+            <div className={ROLLUP_GRID}>
+              {Array.from({ length: 8 }, (_, index) => (
+                <Skeleton
+                  key={index}
+                  className="h-[70px] rounded-[var(--kn-r-lg)]"
+                  label={index === 0 ? "Loading fleet rollup" : undefined}
+                />
+              ))}
+            </div>
+          )}
+          {fleet && <FleetRollup fleet={fleet} />}
+        </NumberedSection>
+
+        {/* Scopes everything below it: the charts, the table. */}
         <div className="flex flex-wrap items-center gap-2">
           <TimeRangePicker
             value={{ kind: "preset", preset: range }}
@@ -381,30 +427,9 @@ function OverviewTab({ tabs }: { tabs: React.ReactNode }) {
           <ServerPicker selection={selection} allowAll allLabel="Whole fleet" />
         </div>
 
-        {overview.isError && (
-          <PageError
-            error={overview.error}
-            onRetry={() => void overview.refetch()}
-            context="Fleet rollup"
-          />
-        )}
-
-        {overview.isLoading && (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
-            {Array.from({ length: 7 }, (_, index) => (
-              <Skeleton
-                key={index}
-                className="h-16 rounded-[var(--kn-r-md)]"
-                label={index === 0 ? "Loading fleet rollup" : undefined}
-              />
-            ))}
-          </div>
-        )}
-
-        {fleet && <FleetRollup fleet={fleet} />}
-
         <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
           <FleetChart
+            index={2}
             title="CPU"
             metric="cpu"
             range={range}
@@ -412,12 +437,14 @@ function OverviewTab({ tabs }: { tabs: React.ReactNode }) {
             percentScale
           />
           <FleetChart
+            index={3}
             title="Memory used"
             metric="memory"
             range={range}
             serverId={selection.serverId}
           />
           <FleetChart
+            index={4}
             title="Disk, worst filesystem"
             metric="disk"
             range={range}
@@ -425,6 +452,7 @@ function OverviewTab({ tabs }: { tabs: React.ReactNode }) {
             percentScale
           />
           <FleetChart
+            index={5}
             title="Network"
             metric="network_rx"
             suffix="in"
@@ -433,20 +461,28 @@ function OverviewTab({ tabs }: { tabs: React.ReactNode }) {
             serverId={selection.serverId}
           />
           <FleetChart
+            index={6}
             title="Load average, 1 minute"
             metric="load1"
             range={range}
             serverId={selection.serverId}
           />
+          {/* Sixth cell of the grid: what is firing, beside what is loaded. */}
+          <OpenAlerts index={7} query={alerts} />
         </div>
 
-        <ServerTable rows={rows} loading={overview.isLoading} />
-
-        <OpenAlerts query={alerts} />
-      </div>
+        <ServerTable index={8} rows={rows} loading={overview.isLoading} />
+      </PageBody>
     </div>
   );
 }
+
+/**
+ * Eight tiles, four to a row: at seven across, the mono labels were cut
+ * off at ordinary laptop widths. Network is split by direction, which
+ * both fills the grid and says more than a sum did.
+ */
+const ROLLUP_GRID = "grid grid-cols-2 gap-3 lg:grid-cols-4";
 
 function FleetRollup({ fleet }: { fleet: MonitoringOverview["fleet"] }) {
   const memoryPercent = percentOf(fleet.memory_used, fleet.memory_total);
@@ -454,7 +490,7 @@ function FleetRollup({ fleet }: { fleet: MonitoringOverview["fleet"] }) {
   const offline = fleet.servers_total - fleet.servers_connected;
 
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+    <div className={ROLLUP_GRID}>
       <MetricTile
         size="sm"
         icon={ServerIcon}
@@ -468,6 +504,13 @@ function FleetRollup({ fleet }: { fleet: MonitoringOverview["fleet"] }) {
         label="Unhealthy"
         value={formatCount(fleet.servers_unhealthy)}
         tone={fleet.servers_unhealthy > 0 ? "danger" : "neutral"}
+      />
+      <MetricTile
+        size="sm"
+        icon={Siren}
+        label="Open alerts"
+        value={formatCount(fleet.open_alerts)}
+        tone={fleet.open_alerts > 0 ? "warn" : "neutral"}
       />
       <MetricTile
         size="sm"
@@ -494,16 +537,15 @@ function FleetRollup({ fleet }: { fleet: MonitoringOverview["fleet"] }) {
       />
       <MetricTile
         size="sm"
-        icon={Gauge}
-        label="Network"
-        value={formatRate(fleet.net_rx_rate + fleet.net_tx_rate)}
+        icon={ArrowDownToLine}
+        label="Network in"
+        value={formatRate(fleet.net_rx_rate)}
       />
       <MetricTile
         size="sm"
-        icon={Siren}
-        label="Open alerts"
-        value={formatCount(fleet.open_alerts)}
-        tone={fleet.open_alerts > 0 ? "warn" : "neutral"}
+        icon={ArrowUpFromLine}
+        label="Network out"
+        value={formatRate(fleet.net_tx_rate)}
       />
     </div>
   );
@@ -517,7 +559,15 @@ function usageTone(percent: number): Tone {
 
 type OverviewRow = MonitoringOverview["servers"][number];
 
-function ServerTable({ rows, loading }: { rows: readonly OverviewRow[]; loading: boolean }) {
+function ServerTable({
+  index,
+  rows,
+  loading,
+}: {
+  index: number;
+  rows: readonly OverviewRow[];
+  loading: boolean;
+}) {
   const router = useRouter();
 
   const columns = React.useMemo<DataTableColumn<OverviewRow>[]>(
@@ -599,7 +649,11 @@ function ServerTable({ rows, loading }: { rows: readonly OverviewRow[]; loading:
   );
 
   return (
-    <SectionCard title="Per server" icon={ServerIcon} padded={false}>
+    <NumberedSection
+      index={index}
+      title="Per server"
+      caption="The same readings, one row per host."
+    >
       <DataTable<OverviewRow>
         columns={columns}
         rows={rows}
@@ -618,9 +672,8 @@ function ServerTable({ rows, loading }: { rows: readonly OverviewRow[]; loading:
             size="sm"
           />
         }
-        className="rounded-none border-0"
       />
-    </SectionCard>
+    </NumberedSection>
   );
 }
 
@@ -640,20 +693,35 @@ function Usage({ percent }: { percent: number | null }) {
   );
 }
 
-function OpenAlerts({ query }: { query: UseQueryResult<ListResult<Alert>, ApiError> }) {
+function OpenAlerts({
+  index,
+  query,
+}: {
+  index: number;
+  query: UseQueryResult<ListResult<Alert>, ApiError>;
+}) {
   const rows = query.data?.data ?? [];
 
   return (
     <SectionCard
+      index={index}
       title="Firing alerts"
-      icon={Siren}
       padded={false}
       actions={
         <Link
           href="/monitoring?tab=alerts"
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
+          className={cn(
+            "kn-label-sm group/more inline-flex items-center gap-1.5 rounded-[var(--kn-r-xs)] text-[var(--kn-text-2)]",
+            "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)] hover:text-[var(--kn-text)]",
+            "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
+          )}
         >
           All alerts
+          <ArrowRight
+            size={12}
+            className="shrink-0 transition-transform duration-[var(--kn-dur)] ease-[var(--kn-ease)] group-hover/more:translate-x-0.5 motion-reduce:transition-none"
+            aria-hidden
+          />
         </Link>
       }
     >
@@ -704,7 +772,7 @@ function OpenAlerts({ query }: { query: UseQueryResult<ListResult<Alert>, ApiErr
             )}
             <RelativeTime
               value={alert.started_at}
-              className="shrink-0 text-xs text-[var(--kn-text-3)]"
+              className="kn-mono shrink-0 text-xs text-[var(--kn-text-3)]"
             />
           </li>
         ))}
@@ -819,6 +887,7 @@ function AlertsTab({ tabs }: { tabs: React.ReactNode }) {
 
   return (
     <ResourcePage<Alert>
+      eyebrow="Operations"
       title="Monitoring"
       tabs={tabs}
       state={state}
@@ -1043,6 +1112,7 @@ function RulesTab({ tabs }: { tabs: React.ReactNode }) {
   return (
     <>
       <ResourcePage<AlertRule>
+        eyebrow="Operations"
         title="Monitoring"
         tabs={tabs}
         state={state}

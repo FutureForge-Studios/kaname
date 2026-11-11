@@ -12,6 +12,7 @@ import {
   DrawerBody,
   DrawerHeader,
   Input,
+  MonoLabel,
   MonoText,
   PropertyList,
   PropertyRow,
@@ -116,7 +117,7 @@ export default function AuditPage() {
         locked: true,
         width: 132,
         cell: (row) => (
-          <span title={formatDateTime(row.ts)}>
+          <span className="kn-mono text-[var(--kn-text-2)]" title={formatDateTime(row.ts)}>
             <RelativeTime value={row.ts} />
           </span>
         ),
@@ -154,7 +155,7 @@ export default function AuditPage() {
         cell: (row) => (
           <span className="flex min-w-0 items-center gap-2">
             <MonoText truncate>{row.target_label}</MonoText>
-            <span className="shrink-0 text-xs text-[var(--kn-text-3)]">{row.target_type}</span>
+            <span className="kn-mono shrink-0 text-xs text-[var(--kn-text-3)]">{row.target_type}</span>
           </span>
         ),
       },
@@ -231,8 +232,10 @@ export default function AuditPage() {
   return (
     <>
       <ResourcePage<AuditEvent>
+        eyebrow="Security"
         title="Audit"
-        subtitle="Append-only and hash-chained. Nothing in the panel can edit or delete a row."
+        subtitle="append-only · hash-chained"
+        lede="Every change anyone made, in the order it happened. Nothing in the panel can edit or delete a row."
         headerActions={
           <>
             <TimeRangePicker
@@ -385,7 +388,7 @@ function ChainBanner({
   }
 
   if (!query.data) {
-    return <Skeleton className="h-12 rounded-[var(--kn-r-md)]" label="Verifying the audit chain" />;
+    return <Skeleton className="h-12 rounded-[var(--kn-r-lg)]" label="Verifying the audit chain" />;
   }
 
   const result = query.data;
@@ -395,7 +398,7 @@ function ChainBanner({
     <div
       role="status"
       className={cn(
-        "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--kn-r-md)] border px-3 py-2",
+        "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--kn-r-lg)] border px-3 py-2",
         verified
           ? "border-[var(--kn-border)] bg-[var(--kn-surface)]"
           : "border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]",
@@ -432,7 +435,7 @@ function ChainBanner({
             </p>
           </>
         )}
-        <p className="mt-0.5 text-xs text-[var(--kn-text-3)]">
+        <p className="kn-mono mt-0.5 text-xs text-[var(--kn-text-3)]">
           {result.first_event_at
             ? `Genesis ${formatDateTime(result.first_event_at)} · latest ${result.last_event_at ? formatDateTime(result.last_event_at) : "—"}`
             : "No event has been recorded yet."}
@@ -542,15 +545,19 @@ function EventDrawer({
 
             {Object.keys(event.metadata).length > 0 && (
               <section>
-                <h3 className="mb-2 font-medium text-[var(--kn-text)]">Metadata</h3>
-                <pre className="kn-mono overflow-x-auto rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] p-2 text-[var(--kn-text-2)]">
+                <MonoLabel as="h3" size="xs" tone="muted" className="mb-2">
+                  Metadata
+                </MonoLabel>
+                <pre className="kn-mono overflow-x-auto rounded-[var(--kn-r-md)] border border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] p-2 text-[var(--kn-text-2)]">
                   {JSON.stringify(event.metadata, null, 2)}
                 </pre>
               </section>
             )}
 
             <section>
-              <h3 className="mb-2 font-medium text-[var(--kn-text)]">Chain</h3>
+              <MonoLabel as="h3" size="xs" tone="muted" className="mb-2">
+                  Chain
+                </MonoLabel>
               <PropertyList dense labelWidth="sm">
                 <PropertyRow label="Previous" mono copyValue={event.prev_hash}>
                   <TruncatedText value={event.prev_hash} max={40} />
@@ -580,7 +587,9 @@ function DiffView({ diff }: { diff: AuditEvent["diff"] }) {
   if (!diff || (diff.before === null && diff.after === null)) {
     return (
       <section>
-        <h3 className="mb-2 font-medium text-[var(--kn-text)]">Change</h3>
+        <MonoLabel as="h3" size="xs" tone="muted" className="mb-2">
+                  Change
+                </MonoLabel>
         <p className="text-[var(--kn-text-2)]">
           This action recorded no field-level diff. Read-only and fan-out actions carry their detail
           in metadata instead.
@@ -595,8 +604,10 @@ function DiffView({ diff }: { diff: AuditEvent["diff"] }) {
 
   return (
     <section>
-      <h3 className="mb-2 font-medium text-[var(--kn-text)]">Change</h3>
-      <div className="overflow-hidden rounded-[var(--kn-r-sm)] border border-[var(--kn-border)]">
+      <MonoLabel as="h3" size="xs" tone="muted" className="mb-2">
+                  Change
+                </MonoLabel>
+      <div className="overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)]">
         {keys.map((key) => {
           const from = render(before[key]);
           const to = render(after[key]);

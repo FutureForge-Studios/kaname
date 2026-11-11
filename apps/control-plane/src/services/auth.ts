@@ -1,9 +1,19 @@
 import { and, eq, gt, isNull, lt, or, sql, type Database } from "@kaname/db";
-import { apiKeys, roleGrants, roles, sessions, userRoles, users } from "@kaname/db/schema";
+import {
+  accountLimits,
+  apiKeys,
+  roleGrants,
+  roles,
+  sessions,
+  userRoles,
+  users,
+} from "@kaname/db/schema";
 import {
   buildEffectiveGrants,
   can,
+  scopedAccountGrants,
   scopeFor,
+  type Audience,
   type EffectiveGrants,
   type Permission,
   type RoleGrant,
@@ -31,7 +41,27 @@ export interface Principal {
   grants: EffectiveGrants;
   /** True once TOTP has been satisfied, or when TOTP is not enabled. */
   mfaSatisfied: boolean;
+  /**
+   * Set for a reseller or client (KD-039), and then `grants` above is
+   * empty: every route that has not opted in to ownership scoping sees
+   * a principal that may do nothing. Only `authorize(..., true)` reads
+   * the grants in here.
+   */
+  scoped?: ScopedAccount;
 }
+
+export interface ScopedAccount {
+  audience: Exclude<Audience, "operator">;
+  /** A client's reseller; null for a reseller. */
+  resellerId: string | null;
+  /** Whose resources this account may reach: itself, and for a reseller its clients. */
+  ownerIds: readonly string[];
+  /** Where it may place something new. */
+  serverIds: readonly string[];
+  grants: EffectiveGrants;
+}
+
+const NO_GRANTS: EffectiveGrants = { map: new Map() };
 
 /** How often a session or key gets its "last seen" stamp refreshed. */
 const RECENCY_WRITE_MS = 60_000;
@@ -132,14 +162,74 @@ export class AuthService {
         });
     }
 
+    const scoped = await this.scopedAccountFor(row.user);
     return {
       kind: "user",
       id: row.user.id,
       name: row.user.name,
       email: row.user.email,
       sessionId: row.session.id,
-      grants: await this.grantsForUser(row.user.id),
+      grants: scoped ? NO_GRANTS : await this.grantsForUser(row.user.id),
       mfaSatisfied: !row.user.totpEnabled || row.session.mfaSatisfiedAt !== null,
+      ...(scoped ? { scoped } : {}),
+    };
+  }
+
+  /**
+   * What a reseller or client may reach, or null for an operator. A
+   * client takes its servers from its reseller, and loses them the
+   * moment that reseller is suspended, removed or stops being one.
+   */
+  async scopedAccountFor(user: {
+    id: string;
+    audience: Audience;
+    parentId: string | null;
+  }): Promise<ScopedAccount | null> {
+    if (user.audience === "operator") return null;
+
+    if (user.audience === "reseller") {
+      const [limits, clients] = await Promise.all([
+        this.db
+          .select({ serverIds: accountLimits.serverIds })
+          .from(accountLimits)
+          .where(eq(accountLimits.userId, user.id))
+          .limit(1),
+        this.db
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.parentId, user.id), eq(users.audience, "client"))),
+      ]);
+      const serverIds = limits[0]?.serverIds ?? [];
+      return {
+        audience: "reseller",
+        resellerId: null,
+        ownerIds: [user.id, ...clients.map((c) => c.id)],
+        serverIds,
+        grants: scopedAccountGrants(serverIds),
+      };
+    }
+
+    const parent = user.parentId
+      ? await this.db
+          .select({ serverIds: accountLimits.serverIds })
+          .from(users)
+          .innerJoin(accountLimits, eq(accountLimits.userId, users.id))
+          .where(
+            and(
+              eq(users.id, user.parentId),
+              eq(users.audience, "reseller"),
+              eq(users.status, "active"),
+            ),
+          )
+          .limit(1)
+      : [];
+    const serverIds = parent[0]?.serverIds ?? [];
+    return {
+      audience: "client",
+      resellerId: parent[0] ? user.parentId : null,
+      ownerIds: [user.id],
+      serverIds,
+      grants: scopedAccountGrants(serverIds),
     };
   }
 
@@ -181,11 +271,13 @@ export class AuthService {
      */
     if (!key.createdBy) return null;
     const creator = await this.db
-      .select({ status: users.status })
+      .select({ status: users.status, audience: users.audience })
       .from(users)
       .where(eq(users.id, key.createdBy))
       .limit(1);
     if (creator[0]?.status !== "active") return null;
+    // A scoped account has no role grants to delegate (KD-039).
+    if (creator[0].audience !== "operator") return null;
     const held = await this.grantsForUser(key.createdBy);
 
     // An API key can never carry more than the grants it was issued, nor
@@ -225,27 +317,50 @@ export class AuthService {
       .from(userRoles)
       .innerJoin(roles, eq(userRoles.roleId, roles.id))
       .innerJoin(roleGrants, eq(roleGrants.roleId, roles.id))
-      .where(eq(userRoles.userId, userId));
+      // Roles are an operator's authority. A role attached to a reseller
+      // or client by mistake must grant nothing (KD-039).
+      .innerJoin(users, eq(users.id, userRoles.userId))
+      .where(and(eq(userRoles.userId, userId), eq(users.audience, "operator")));
 
     return buildEffectiveGrants(rows.map((r) => ({ permission: r.permission, scope: r.scope })));
   }
 
   /* -------------------------- authorisation ------------------------ */
 
-  /** The single decision point. Throws rather than returning false. */
-  authorize(principal: Principal | null, permission: Permission, serverId?: string | null): void {
+  /**
+   * The single decision point. Throws rather than returning false.
+   *
+   * `ownershipScoped` is true only for a request whose route has called
+   * `ownership()` (routes/_ownership.ts) and so filters by owner. Only
+   * then do a reseller's or client's grants count; anywhere else they
+   * hold nothing.
+   */
+  authorize(
+    principal: Principal | null,
+    permission: Permission,
+    serverId?: string | null,
+    ownershipScoped = false,
+  ): void {
     if (!principal) throw unauthenticated();
     if (!principal.mfaSatisfied) {
       throw new ApiException("totp_required", "Two-factor authentication is required.");
     }
-    if (!can(principal.grants, permission, serverId)) {
+    if (!can(this.grantsOf(principal, ownershipScoped), permission, serverId)) {
       throw forbidden(permission);
     }
   }
 
   /** Server ids this principal may exercise `permission` on. */
-  scope(principal: Principal, permission: Permission): "global" | readonly string[] | null {
-    return scopeFor(principal.grants, permission);
+  scope(
+    principal: Principal,
+    permission: Permission,
+    ownershipScoped = false,
+  ): "global" | readonly string[] | null {
+    return scopeFor(this.grantsOf(principal, ownershipScoped), permission);
+  }
+
+  private grantsOf(principal: Principal, ownershipScoped: boolean): EffectiveGrants {
+    return principal.scoped && ownershipScoped ? principal.scoped.grants : principal.grants;
   }
 
   /* ------------------------------ TOTP ----------------------------- */

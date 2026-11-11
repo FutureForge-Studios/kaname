@@ -134,7 +134,7 @@ export default function ApiKeysPage() {
           <Tooltip
             content={key.scopes.length === 0 ? "No permission" : key.scopes.slice(0, 24).join(", ")}
           >
-            <span className="truncate text-[var(--kn-text-2)]">
+            <span className="kn-num truncate text-[var(--kn-text-2)]">
               {formatCount(key.scopes.length)} permissions
             </span>
           </Tooltip>
@@ -200,7 +200,9 @@ export default function ApiKeysPage() {
   return (
     <>
       <ResourcePage<ApiKey>
+        eyebrow="Administration"
         title="API"
+        lede="Keys for scripts and integrations. Each carries its own permissions and server scope; the secret is shown once, at creation."
         subtitle="Authorization: Bearer kn_live_…"
         state={state}
         query={query}

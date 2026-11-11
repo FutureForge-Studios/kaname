@@ -327,6 +327,7 @@ export default function FirewallPage() {
         id: "direction",
         header: "Direction",
         sortable: true,
+        mono: true,
         width: 96,
         accessor: (rule) => rule.direction,
       },
@@ -468,7 +469,9 @@ export default function FirewallPage() {
   return (
     <>
       <ResourcePage<FirewallRule>
+        eyebrow="Security"
         title="Firewall"
+        lede="Rules are staged here, then written to the host in one apply — with a rollback window in case the new set locks you out."
         subtitle={
           status.data
             ? `${status.data.backend} · default in ${status.data.default_inbound} / out ${status.data.default_outbound} · ${selection.server?.hostname ?? ""}`
@@ -634,7 +637,7 @@ export default function FirewallPage() {
         {status.data && status.data.pending_changes > 0 && (
           <div
             role="status"
-            className="flex flex-wrap items-center gap-3 rounded-[var(--kn-r-md)] border border-[var(--kn-warn)] bg-[var(--kn-warn-soft)] px-3 py-2"
+            className="flex flex-wrap items-center gap-3 rounded-[var(--kn-r-lg)] border border-[var(--kn-warn)] bg-[var(--kn-warn-soft)] px-3 py-2"
           >
             <span className="text-[var(--kn-text)]">
               {formatCount(status.data.pending_changes)}{" "}
@@ -742,7 +745,7 @@ function StatusSkeleton() {
       {[0, 1, 2, 3, 4].map((index) => (
         <Skeleton
           key={index}
-          className="h-16 rounded-[var(--kn-r-md)]"
+          className="h-16 rounded-[var(--kn-r-lg)]"
           label={index === 0 ? "Loading firewall status" : undefined}
         />
       ))}
@@ -1186,9 +1189,9 @@ function ApplyDialog({
               </FormField>
             </div>
 
-            <div className="rounded-[var(--kn-r-md)] border border-[var(--kn-border)]">
+            <div className="overflow-hidden rounded-[var(--kn-r-lg)] border border-[var(--kn-border)]">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--kn-border)] px-3 py-2">
-                <span className="font-medium text-[var(--kn-text)]">What changes</span>
+                <span className="kn-title text-[var(--kn-text)]">What changes</span>
                 <span className="text-[var(--kn-text-2)]">
                   {changed === 0
                     ? "No rule has been edited since the last apply."
@@ -1206,17 +1209,17 @@ function ApplyDialog({
                     Rules that will be written to {serverName}, in priority order
                   </caption>
                   <thead className="sticky top-0 bg-[var(--kn-surface-2)]">
-                    <tr className="text-left text-xs text-[var(--kn-text-2)]">
-                      <th scope="col" className="px-3 py-1 font-medium">
+                    <tr className="kn-label-sm text-left text-[var(--kn-text-3)]">
+                      <th scope="col" className="px-3 py-1.5 font-normal">
                         #
                       </th>
-                      <th scope="col" className="px-3 py-1 font-medium">
+                      <th scope="col" className="px-3 py-1.5 font-normal">
                         Rule
                       </th>
-                      <th scope="col" className="px-3 py-1 font-medium">
+                      <th scope="col" className="px-3 py-1.5 font-normal">
                         Comment
                       </th>
-                      <th scope="col" className="px-3 py-1 text-right font-medium">
+                      <th scope="col" className="px-3 py-1.5 text-right font-normal">
                         State
                       </th>
                     </tr>

@@ -20,7 +20,22 @@ import {
   type SetupHealth,
   type SetupState,
 } from "@kaname/contract";
-import { Button, FormField, Input, MonoText, Skeleton, cn, useToast } from "@kaname/ui";
+import {
+  Badge,
+  Button,
+  CardInset,
+  CheckItem,
+  CheckList,
+  FormField,
+  Input,
+  MonoLabel,
+  MonoText,
+  Skeleton,
+  StatusLine,
+  cn,
+  useToast,
+  type Tone,
+} from "@kaname/ui";
 import { api } from "@/lib/api";
 import { connectEventStream } from "@/lib/events";
 import {
@@ -87,12 +102,17 @@ export function WelcomeStep({ state, onAdvance, onStale }: StepProps) {
     };
 
     return (
-      <StepForm onSubmit={() => void claim()}>
-        <StepHeading
-          icon={KeyRound}
-          title="Enter your setup token"
-          hint="The installer printed it at the end of its run. It proves you are the person who installed this panel, so nobody else who can reach this address can claim it first."
-        />
+      <StepForm
+        onSubmit={() => void claim()}
+        heading={
+          <StepHeading
+            icon={KeyRound}
+            title="Enter your setup token"
+            accent="setup token"
+            hint="The installer printed it at the end of its run. It proves you are the person who installed this panel, so nobody else who can reach this address can claim it first."
+          />
+        }
+      >
 
         <FormField label="Setup token" error={tokenProblem ?? error?.fields.token} required>
           <Input
@@ -142,14 +162,19 @@ export function WelcomeStep({ state, onAdvance, onStale }: StepProps) {
   };
 
   return (
-    <StepForm onSubmit={() => void advance()}>
-      <StepHeading
-        icon={ShieldCheck}
-        title="Checking the install"
-        hint="Kaname has two halves: the control plane you are talking to, and an agent on each server. Both have to be answering before anything else is worth doing."
-      />
+    <StepForm
+      onSubmit={() => void advance()}
+      heading={
+        <StepHeading
+          icon={ShieldCheck}
+          title="Checking the install"
+          accent="the install"
+          hint="Kaname has two halves: the control plane you are talking to, and an agent on each server. Both have to be answering before anything else is worth doing."
+        />
+      }
+    >
 
-      <div className="flex flex-col gap-2" aria-busy={!checked}>
+      <CheckList divided="between" className="-my-3.5" aria-busy={!checked}>
         <HealthRow
           label="Control plane"
           status={health?.control_plane.status ?? "unknown"}
@@ -167,7 +192,7 @@ export function WelcomeStep({ state, onAdvance, onStale }: StepProps) {
           detail={health?.agent.detail ?? (checked ? "No answer yet." : "Checking…")}
           remediation={health?.agent.remediation ?? null}
         />
-      </div>
+      </CheckList>
 
       {blocked && (
         <Note tone="warn">
@@ -194,11 +219,11 @@ export function WelcomeStep({ state, onAdvance, onStale }: StepProps) {
   );
 }
 
-const HEALTH_TONE: Record<ComponentHealth, string> = {
-  healthy: "bg-[var(--kn-ok)]",
-  degraded: "bg-[var(--kn-warn)]",
-  unreachable: "bg-[var(--kn-danger)]",
-  unknown: "bg-[var(--kn-text-3)]",
+const HEALTH_TONE: Record<ComponentHealth, Tone> = {
+  healthy: "ok",
+  degraded: "warn",
+  unreachable: "danger",
+  unknown: "neutral",
 };
 
 const HEALTH_WORD: Record<ComponentHealth, string> = {
@@ -208,6 +233,11 @@ const HEALTH_WORD: Record<ComponentHealth, string> = {
   unknown: "Unknown",
 };
 
+/*
+ * One half of the install as a check: ticked once it answers, an open
+ * circle while this page is still asking, and the status word in the
+ * status colour either way.
+ */
 function HealthRow({
   label,
   status,
@@ -220,15 +250,20 @@ function HealthRow({
   remediation?: string | null;
 }) {
   return (
-    <div className="rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)] px-4 py-3">
-      <div className="flex items-center gap-2">
-        <span className={cn("h-2 w-2 shrink-0 rounded-full", HEALTH_TONE[status])} aria-hidden />
-        <span className="font-medium text-[var(--kn-text)]">{label}</span>
-        <span className="ml-auto text-sm text-[var(--kn-text-3)]">{HEALTH_WORD[status]}</span>
-      </div>
-      <p className="mt-1 text-sm text-[var(--kn-text-2)]">{detail}</p>
-      {remediation && <p className="mt-1 font-mono text-xs text-[var(--kn-text-3)]">{remediation}</p>}
-    </div>
+    <CheckItem
+      state={status === "healthy" ? "done" : "current"}
+      title={<span>{label}</span>}
+      description={detail}
+      action={
+        <Badge tone={HEALTH_TONE[status]} size="sm">
+          {HEALTH_WORD[status]}
+        </Badge>
+      }
+    >
+      {remediation && (
+        <p className="kn-mono m-0 mt-1.5 text-xs text-[var(--kn-text-3)]">{remediation}</p>
+      )}
+    </CheckItem>
   );
 }
 
@@ -294,12 +329,17 @@ export function OwnerStep({
   };
 
   return (
-    <StepForm onSubmit={() => void submit()}>
-      <StepHeading
-        icon={UserRound}
-        title="Create your account"
-        hint="The first account owns everything: every permission, on every server. You can invite other people later, with less."
-      />
+    <StepForm
+      onSubmit={() => void submit()}
+      heading={
+        <StepHeading
+          icon={UserRound}
+          title="Create your account"
+          accent="your account"
+          hint="The first account owns everything: every permission, on every server. You can invite other people later, with less."
+        />
+      }
+    >
 
       <FormField label="Name" error={show("name")} required>
         <Input
@@ -370,7 +410,7 @@ function PasswordMeter({ score, problems }: { score: number; problems: string[] 
           <span
             key={i}
             className={cn(
-              "h-1 flex-1 rounded-full transition-colors duration-[var(--kn-dur)]",
+              "h-1 flex-1 rounded-[var(--kn-r-pill)] transition-colors duration-[var(--kn-dur)]",
               i < score
                 ? score >= 4
                   ? "bg-[var(--kn-ok)]"
@@ -382,7 +422,7 @@ function PasswordMeter({ score, problems }: { score: number; problems: string[] 
           />
         ))}
       </div>
-      <p className="mt-1.5 text-sm text-[var(--kn-text-3)]">
+      <p className="m-0 mt-1.5 text-sm text-[var(--kn-text-3)]">
         {STRENGTH[Math.max(0, Math.min(4, score))]}
         {problems.length > 0 && <> — {problems.join(" ")}</>}
       </p>
@@ -411,12 +451,17 @@ export function InstanceStep({ onAdvance, onStale }: Omit<StepProps, "state">) {
   };
 
   return (
-    <StepForm onSubmit={() => void submit()}>
-      <StepHeading
-        icon={Tag}
-        title="Name this instance"
-        hint="Shown in the sidebar, in the browser tab and in two-factor apps. Useful once you run more than one."
-      />
+    <StepForm
+      onSubmit={() => void submit()}
+      heading={
+        <StepHeading
+          icon={Tag}
+          title="Name this instance"
+          accent="this instance"
+          hint="Shown in the sidebar, in the browser tab and in two-factor apps. Useful once you run more than one."
+        />
+      }
+    >
 
       <FormField label="Name" error={problem ?? error?.fields.instance_name} required>
         <Input
@@ -548,12 +593,17 @@ export function ServerStep({ onAdvance, onStale }: Omit<StepProps, "state">) {
   };
 
   return (
-    <StepForm onSubmit={() => void (showPairForm ? generate() : advance())}>
-      <StepHeading
-        icon={ServerIcon}
-        title="Your first server"
-        hint="Kaname manages a host through a small agent that dials out from it. Nothing on the server listens inbound for Kaname."
-      />
+    <StepForm
+      onSubmit={() => void (showPairForm ? generate() : advance())}
+      heading={
+        <StepHeading
+          icon={ServerIcon}
+          title="Your first server"
+          accent="first server"
+          hint="Kaname manages a host through a small agent that dials out from it. Nothing on the server listens inbound for Kaname."
+        />
+      }
+    >
 
       {servers === null && <Skeleton className="h-20 rounded-[var(--kn-r-md)]" label="Looking for servers" />}
 
@@ -639,16 +689,15 @@ export function ServerStep({ onAdvance, onStale }: Omit<StepProps, "state">) {
 
 function ServerCard({ server }: { server: SetupServer }) {
   return (
-    <div className="rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)] px-4 py-3">
-      <div className="flex items-center gap-2">
-        <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--kn-ok)]" aria-hidden />
-        <span className="font-medium text-[var(--kn-text)]">{server.name}</span>
-        <span className="truncate font-mono text-xs text-[var(--kn-text-3)]">{server.hostname}</span>
-        <span className="ml-auto shrink-0 text-sm text-[var(--kn-text-3)]">
+    <CardInset grid className="px-4 py-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="kn-title text-md text-[var(--kn-text)]">{server.name}</span>
+        <span className="kn-mono min-w-0 truncate text-xs text-[var(--kn-text-3)]">{server.hostname}</span>
+        <StatusLine className="ml-auto shrink-0">
           {server.simulated ? "Connected · simulated" : "Connected"}
-        </span>
+        </StatusLine>
       </div>
-      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
+      <dl className="m-0 mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
         <Fact label="OS" value={[server.os, server.os_version].filter(Boolean).join(" ") || "—"} />
         <Fact label="Arch" value={server.arch ?? "—"} />
         <Fact label="CPU" value={server.cpu_cores ? `${server.cpu_cores} cores` : "—"} />
@@ -658,17 +707,21 @@ function ServerCard({ server }: { server: SetupServer }) {
         />
       </dl>
       {server.agent_version && (
-        <p className="mt-2 text-xs text-[var(--kn-text-3)]">Agent {server.agent_version}</p>
+        <p className="m-0 mt-3 text-xs text-[var(--kn-text-3)]">
+          Agent <span className="kn-mono">{server.agent_version}</span>
+        </p>
       )}
-    </div>
+    </CardInset>
   );
 }
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <dt className="text-xs text-[var(--kn-text-3)]">{label}</dt>
-      <dd className="truncate text-[var(--kn-text-2)]">{value}</dd>
+      <MonoLabel as="dt" size="xs">
+        {label}
+      </MonoLabel>
+      <dd className="m-0 mt-0.5 truncate text-sm text-[var(--kn-text)]">{value}</dd>
     </div>
   );
 }
@@ -683,12 +736,11 @@ function WaitingCard({
   busy?: boolean;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-[var(--kn-r-md)] border border-dashed border-[var(--kn-border-strong)] px-4 py-3">
-      <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-[var(--kn-warn)]" aria-hidden />
-      <span className="font-medium text-[var(--kn-text)]">{server.name}</span>
-      <span className="text-sm text-[var(--kn-text-2)]" role="status">
+    <CardInset className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+      <span className="kn-title text-md text-[var(--kn-text)]">{server.name}</span>
+      <StatusLine tone="warn" pulse role="status">
         Waiting for the agent to connect…
-      </span>
+      </StatusLine>
       {onRegenerate && (
         <Button
           type="button"
@@ -702,7 +754,7 @@ function WaitingCard({
           New command
         </Button>
       )}
-    </div>
+    </CardInset>
   );
 }
 
@@ -748,11 +800,11 @@ function PairingBlock({
 
   return (
     <div className="flex flex-col gap-2">
-      <p className="text-[var(--kn-text-2)]">
+      <p className="m-0 text-[var(--kn-text-2)]">
         Run this as root on <span className="text-[var(--kn-text)]">{pairing.server_name}</span>:
       </p>
-      <div className="flex items-start gap-2 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] p-3">
-        <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs text-[var(--kn-text-2)]">
+      <CardInset padding="sm" className="flex items-start gap-2">
+        <code className="kn-mono min-w-0 flex-1 overflow-x-auto whitespace-pre-wrap break-all text-xs text-[var(--kn-text-2)]">
           {pairing.command}
         </code>
         <Button
@@ -765,7 +817,7 @@ function PairingBlock({
         >
           {copied ? "Copied" : "Copy"}
         </Button>
-      </div>
+      </CardInset>
       <p className="text-sm text-[var(--kn-text-3)]">
         Works once and expires in about {minutes} minute{minutes === 1 ? "" : "s"}. This page updates
         by itself when the agent connects.

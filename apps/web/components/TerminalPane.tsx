@@ -63,6 +63,11 @@ export interface TerminalPaneProps {
   onGeometry?: (geometry: TerminalGeometry) => void;
   /** Ctrl/Cmd+Shift+F, so the page can focus its own search field. */
   onRequestSearch?: () => void;
+  /**
+   * `true` (default) draws the pane's own hairline box. Pass `false` when
+   * a surrounding well already draws the frame.
+   */
+  framed?: boolean;
   className?: string;
 }
 
@@ -82,8 +87,10 @@ function token(styles: CSSStyleDeclaration, name: string, fallback: string): str
  * a stock 16-colour ramp: red is the same red as a failed job, green
  * the same green as a healthy host.
  */
-function buildTheme(): Record<string, string> {
-  const styles = getComputedStyle(document.documentElement);
+function buildTheme(scope: Element = document.documentElement): Record<string, string> {
+  // Read from the pane itself, not the root: a well can pin its own
+  // theme (data-theme on an ancestor), and the palette should follow it.
+  const styles = getComputedStyle(scope);
 
   const background = token(styles, "--kn-bg-inset", "#060608");
   const foreground = token(styles, "--kn-text", "#f4f4f5");
@@ -129,6 +136,7 @@ export function TerminalPane({
   onStatusChange,
   onGeometry,
   onRequestSearch,
+  framed = true,
   className,
 }: TerminalPaneProps) {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
@@ -161,7 +169,7 @@ export function TerminalPane({
       cursorStyle: "bar",
       scrollback: SCROLLBACK,
       macOptionIsMeta: true,
-      theme: buildTheme(),
+      theme: buildTheme(host),
       // The socket carries a real PTY, so the shell owns wrapping and
       // echo; xterm converting line endings would corrupt both.
       convertEol: false,
@@ -357,7 +365,7 @@ export function TerminalPane({
 
     // The panel's theme can change under a live session.
     const themeObserver = new MutationObserver(() => {
-      term.options.theme = buildTheme();
+      term.options.theme = buildTheme(host);
     });
     themeObserver.observe(document.documentElement, {
       attributes: true,
@@ -433,8 +441,8 @@ export function TerminalPane({
     <div
       ref={hostRef}
       className={cn(
-        "min-h-0 w-full flex-1 overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)]",
-        "bg-[var(--kn-bg-inset)] p-2",
+        "min-h-0 w-full flex-1 overflow-hidden bg-[var(--kn-bg-inset)]",
+        framed ? "rounded-[var(--kn-r-md)] border border-[var(--kn-border)] p-2" : "px-3 py-2",
         // xterm positions its viewport and screen absolutely, so the
         // element it mounts into collapses to zero height unless it is
         // told to fill its container — the rows render, correctly sized,

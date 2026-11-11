@@ -1,15 +1,15 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Box } from "lucide-react";
 import { containerState, type Container, type Server } from "@kaname/contract";
-import { DataTable, EmptyState, SearchInput, Select } from "@kaname/ui";
+import { DataTable, EmptyState, NumberedSection, SearchInput, Select } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
 import { useCan, useList } from "@/lib/queries";
 import { humanize } from "@/lib/format";
 import { HostSync } from "./HostSync";
+import { PillLink } from "./PillLink";
 import { PruneButton } from "./PruneButton";
 import { useContainerColumns, useContainerCommands } from "./ContainerControls";
 import { hasContainerRuntime, useContainerSync, useDebounced } from "../_lib/infra";
@@ -74,7 +74,19 @@ export function ServerContainersTab({ server }: { server: Server }) {
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <NumberedSection
+      index={1}
+      title="Containers"
+      caption="Everything the runtime reports, from the last read."
+      actions={
+        <>
+          <PruneButton server={server} size="xs" />
+          <PillLink href={`/infrastructure/containers?server_id=${server.id}`}>
+            Open in Containers
+          </PillLink>
+        </>
+      }
+    >
       <HostSync
         syncedAt={syncedAt}
         server={server}
@@ -118,13 +130,6 @@ export function ServerContainersTab({ server }: { server: Server }) {
               }}
               boxClassName="w-36"
             />
-            <PruneButton server={server} size="xs" />
-            <Link
-              href={`/infrastructure/containers?server_id=${server.id}`}
-              className="ml-auto rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-            >
-              Open in Containers
-            </Link>
           </div>
         }
         page={page}
@@ -162,6 +167,6 @@ export function ServerContainersTab({ server }: { server: Server }) {
       />
 
       {commands.dialog}
-    </div>
+    </NumberedSection>
   );
 }

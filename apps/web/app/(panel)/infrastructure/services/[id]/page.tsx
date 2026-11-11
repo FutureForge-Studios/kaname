@@ -14,16 +14,18 @@ import {
   IconButton,
   MenuItem,
   MenuSeparator,
+  NumberedSection,
   PropertyList,
   PropertyRow,
   RelativeTime,
-  ResourceHeader,
   SectionCard,
   Skeleton,
   StatusBadge,
+  StatusLine,
 } from "@kaname/ui";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { PageError } from "@/components/PageError";
+import { DetailHeader, DetailHeaderSkeleton } from "../../_components/DetailHeader";
 import { useResource } from "@/lib/queries";
 import { formatCount } from "@/lib/format";
 import { LogTailPanel } from "../../_components/LogTailPanel";
@@ -53,11 +55,11 @@ export default function ServiceDetailPage() {
   if (query.isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b border-[var(--kn-border)] px-6 pb-4 pt-4">
-          <Skeleton className="h-3 w-40" label="Loading unit" />
-          <Skeleton className="mt-3 h-6 w-64" />
-        </div>
-        <div className="px-6 py-4">
+        <DetailHeaderSkeleton>
+          <Skeleton className="h-5 w-40 rounded-[var(--kn-r-pill)]" label="Loading unit" />
+          <Skeleton className="mt-4 h-7 w-64" />
+        </DetailHeaderSkeleton>
+        <div className="px-6 py-6">
           <Skeleton className="h-64" />
         </div>
       </div>
@@ -67,10 +69,10 @@ export default function ServiceDetailPage() {
   if (query.isError || !service) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b border-[var(--kn-border)] px-6 pb-4 pt-4">
+        <DetailHeaderSkeleton>
           <Breadcrumbs />
-        </div>
-        <div className="px-6 py-4">
+        </DetailHeaderSkeleton>
+        <div className="px-6 py-6">
           <PageError
             error={query.error ?? new Error("This unit is no longer in the cached list.")}
             onRetry={() => void query.refetch()}
@@ -143,7 +145,8 @@ export default function ServiceDetailPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ResourceHeader
+      <DetailHeader
+        eyebrow="Unit"
         breadcrumb={<Breadcrumbs trailing={service.unit} />}
         name={service.unit}
         identity={`${service.server_name}${service.description ? ` · ${service.description}` : ""}`}
@@ -151,6 +154,24 @@ export default function ServiceDetailPage() {
         lastSeenAt={server?.last_seen_at}
         health={server?.health}
         healthReasons={server?.health_reasons}
+        status={
+          <StatusLine
+            tone={SERVICE_STATE_TONE[service.active_state]}
+            pulse={service.active_state === "active"}
+          >
+            {service.active_state} ({service.sub_state})
+            {service.active_since && (
+              <>
+                {" "}
+                since <RelativeTime value={service.active_since} />
+              </>
+            )}
+            {" · "}
+            {formatCount(service.restart_count)} restart{service.restart_count === 1 ? "" : "s"}
+            {" · "}
+            unit list read <RelativeTime value={service.last_synced_at} />
+          </StatusLine>
+        }
         badges={
           <>
             <StatusBadge tone={SERVICE_STATE_TONE[service.active_state]} size="xs">
@@ -196,10 +217,13 @@ export default function ServiceDetailPage() {
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col px-6 py-4">
+      <div className="flex min-h-0 flex-1 flex-col px-6 py-6">
         <DetailLayout rail={rail}>
-          <div className="flex min-w-0 flex-col gap-2">
-            <h2 className="font-medium text-[var(--kn-text)]">Journal</h2>
+          <NumberedSection
+            index={1}
+            title="Journal"
+            caption="Followed live from the host as it is written."
+          >
             <LogTailPanel
               path={`/services/${service.id}/logs`}
               label={`Journal for ${service.unit}`}
@@ -218,7 +242,7 @@ export default function ServiceDetailPage() {
                 )
               }
             />
-          </div>
+          </NumberedSection>
         </DetailLayout>
       </div>
 

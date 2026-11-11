@@ -37,6 +37,7 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const EVERYTHING = [
   "Command Center",
+  "Apps",
   "Infrastructure › Servers",
   "Infrastructure › Services",
   "Infrastructure › Processes",

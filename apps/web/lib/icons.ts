@@ -72,6 +72,7 @@ const ICONS: Record<string, IconComponent> = {
   Mail,
   MailCheck,
   Network,
+  PackageCheck,
   Rocket,
   ScrollText,
   Server,

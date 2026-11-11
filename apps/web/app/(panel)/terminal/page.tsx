@@ -26,6 +26,8 @@ import {
   IconButton,
   Input,
   MonoText,
+  NumberedSection,
+  PageBody,
   PageHeader,
   RelativeTime,
   SectionCard,
@@ -39,6 +41,7 @@ import type { TerminalController, TerminalStatus } from "@/components/TerminalPa
 import { PageError } from "@/components/PageError";
 import { RecordingNotice } from "@/components/RecordingNotice";
 import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
+import { TerminalWell } from "../infrastructure/_components/TerminalWell";
 import { api } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { useCan, useList, useResourceMutation, useServers } from "@/lib/queries";
@@ -61,9 +64,7 @@ const TerminalPane = dynamic(
   () => import("@/components/TerminalPane").then((module) => module.TerminalPane),
   {
     ssr: false,
-    loading: () => (
-      <Skeleton className="h-full w-full rounded-[var(--kn-r-md)]" label="Loading the terminal" />
-    ),
+    loading: () => <Skeleton className="h-full w-full rounded-none" label="Loading the terminal" />,
   },
 );
 
@@ -196,13 +197,78 @@ export default function TerminalPage() {
 
   const live = wanted && status !== "closed" && status !== "error";
 
+  const tools = (
+    <div className="flex shrink-0 items-center gap-1">
+      <Input
+        ref={searchRef}
+        size="xs"
+        mono
+        icon={Search}
+        value={query}
+        invalid={noMatch}
+        disabled={!live}
+        placeholder="Find in buffer"
+        aria-label="Find in the terminal buffer"
+        spellCheck={false}
+        boxClassName="w-32 sm:w-40"
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setNoMatch(false);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          runSearch(event.shiftKey ? "previous" : "next");
+        }}
+      />
+      <IconButton
+        icon={ChevronUp}
+        label="Previous match"
+        size="xs"
+        disabled={!live || query.length === 0}
+        onClick={() => runSearch("previous")}
+      />
+      <IconButton
+        icon={ChevronDown}
+        label="Next match"
+        size="xs"
+        disabled={!live || query.length === 0}
+        onClick={() => runSearch("next")}
+      />
+      <span aria-hidden className="mx-1 h-4 w-px bg-[var(--kn-border)]" />
+      <IconButton
+        icon={ClipboardCopy}
+        label="Copy selection"
+        size="xs"
+        disabled={!live}
+        onClick={() => void copy()}
+      />
+      <IconButton
+        icon={ClipboardPaste}
+        label="Paste"
+        size="xs"
+        disabled={!live}
+        onClick={() => void paste()}
+      />
+      <IconButton
+        icon={Eraser}
+        label="Clear the screen"
+        size="xs"
+        disabled={!live}
+        onClick={() => controller.current?.clear()}
+      />
+    </div>
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Operations"
         title="Terminal"
         subtitle={
           selection.server ? `${selection.server.hostname} · ${posixUser}` : "no host selected"
         }
+        lede="A shell on one host: ticketed, audited on open and close, and recorded where policy says so."
         actions={
           wanted && (
             <>
@@ -217,174 +283,134 @@ export default function TerminalPage() {
         }
       />
 
-      <div className="flex min-w-0 flex-col gap-3 px-6 py-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <ServerPicker selection={selection} />
+      <PageBody gap="lg">
+        <NumberedSection
+          index={1}
+          title="Session"
+          caption="One host, one POSIX user, one single-use ticket."
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <ServerPicker selection={selection} />
 
-          <Input
-            size="sm"
-            mono
-            aria-label="POSIX user to run as"
-            title="The POSIX user the shell runs as. Audited either way."
-            value={posixUser}
-            disabled={wanted}
-            spellCheck={false}
-            autoComplete="off"
-            boxClassName="w-28"
-            onChange={(event) => setPosixUser(event.target.value)}
-          />
-
-          {wanted ? (
-            <>
-              <Button variant="secondary" size="sm" icon={Unplug} onClick={disconnect}>
-                Disconnect
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                icon={PlugZap}
-                loading={status === "connecting"}
-                onClick={reconnect}
-              >
-                Reconnect
-              </Button>
-            </>
-          ) : (
-            <Button
-              variant="primary"
-              size="sm"
-              icon={Plug}
-              disabled={!selection.serverId || !allowed}
-              onClick={connectNow}
-            >
-              Connect
-            </Button>
-          )}
-
-          <div className="ml-auto flex items-center gap-1.5">
             <Input
-              ref={searchRef}
               size="sm"
               mono
-              icon={Search}
-              value={query}
-              invalid={noMatch}
-              disabled={!live}
-              placeholder="Find in buffer"
-              aria-label="Find in the terminal buffer"
+              aria-label="POSIX user to run as"
+              title="The POSIX user the shell runs as. Audited either way."
+              value={posixUser}
+              disabled={wanted}
               spellCheck={false}
-              boxClassName="w-44"
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setNoMatch(false);
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                runSearch(event.shiftKey ? "previous" : "next");
-              }}
+              autoComplete="off"
+              boxClassName="w-28"
+              onChange={(event) => setPosixUser(event.target.value)}
             />
-            <IconButton
-              icon={ChevronUp}
-              label="Previous match"
-              size="sm"
-              disabled={!live || query.length === 0}
-              onClick={() => runSearch("previous")}
-            />
-            <IconButton
-              icon={ChevronDown}
-              label="Next match"
-              size="sm"
-              disabled={!live || query.length === 0}
-              onClick={() => runSearch("next")}
-            />
-            <IconButton
-              icon={ClipboardCopy}
-              label="Copy selection"
-              size="sm"
-              disabled={!live}
-              onClick={() => void copy()}
-            />
-            <IconButton
-              icon={ClipboardPaste}
-              label="Paste"
-              size="sm"
-              disabled={!live}
-              onClick={() => void paste()}
-            />
-            <IconButton
-              icon={Eraser}
-              label="Clear the screen"
-              size="sm"
-              disabled={!live}
-              onClick={() => controller.current?.clear()}
-            />
+
+            <div className="ml-auto flex items-center gap-2">
+              {wanted ? (
+                <>
+                  <Button variant="secondary" size="sm" icon={Unplug} onClick={disconnect}>
+                    Disconnect
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={PlugZap}
+                    loading={status === "connecting"}
+                    onClick={reconnect}
+                  >
+                    Reconnect
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={Plug}
+                  arrow
+                  disabled={!selection.serverId || !allowed}
+                  onClick={connectNow}
+                >
+                  Connect
+                </Button>
+              )}
+            </div>
           </div>
-        </div>
 
-        {session && (
-          <RecordingNotice recorded={session.recorded} serverName={session.server_name} />
-        )}
+          {session && (
+            <RecordingNotice recorded={session.recorded} serverName={session.server_name} />
+          )}
 
-        {(status === "closed" || status === "error") && wanted && detail && (
-          <div
-            role="status"
-            className={cn(
-              "flex flex-wrap items-center gap-3 rounded-[var(--kn-r-sm)] border p-3",
-              status === "error"
-                ? "border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]"
-                : "border-[var(--kn-border)] bg-[var(--kn-surface)]",
-            )}
-          >
-            <span className="text-[var(--kn-text)]">The session ended: {detail}.</span>
-            <Button variant="secondary" size="xs" icon={PlugZap} onClick={reconnect}>
-              Reconnect
-            </Button>
-          </div>
-        )}
-
-        <div className="h-[420px] min-h-0 w-full lg:h-[560px] 2xl:h-[672px]">
-          {wanted ? (
-            <TerminalPane
-              key={generation}
-              connect={mintSession}
-              onSession={(next) => setSession(next as TerminalSessionTicket)}
-              onReady={(next) => {
-                controller.current = next;
-              }}
-              onStatusChange={(next, why) => {
-                setStatus(next);
-                setDetail(why ?? null);
-              }}
-              onGeometry={setGeometry}
-              onRequestSearch={() => searchRef.current?.focus()}
-              className="h-full"
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)]">
-              <EmptyState
-                icon={SquareTerminal}
-                title={selection.serverId ? "Not connected" : "Pick a server"}
-                description={
-                  allowed
-                    ? "A session opens with a single-use ticket that expires in 30 seconds, is bound to your address, and is written to the audit trail on open and on close."
-                    : "This account does not hold terminal.session:exec on that host, so it cannot open a shell there."
-                }
-                action={
-                  selection.serverId &&
-                  allowed && (
-                    <Button variant="primary" size="sm" icon={Plug} onClick={connectNow}>
-                      Connect to {selection.server?.name}
-                    </Button>
-                  )
-                }
-              />
+          {(status === "closed" || status === "error") && wanted && detail && (
+            <div
+              role="status"
+              className={cn(
+                "flex flex-wrap items-center gap-3 rounded-[var(--kn-r-lg)] border px-3 py-2",
+                status === "error"
+                  ? "border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]"
+                  : "border-[var(--kn-border)] bg-[var(--kn-surface)]",
+              )}
+            >
+              <span className="text-[var(--kn-text)]">The session ended: {detail}.</span>
+              <Button variant="secondary" size="xs" icon={PlugZap} onClick={reconnect}>
+                Reconnect
+              </Button>
             </div>
           )}
-        </div>
+
+          <TerminalWell
+            title={
+              selection.server
+                ? `${posixUser || "root"}@${selection.server.hostname}`
+                : "no host selected"
+            }
+            status={wanted ? status : null}
+            geometry={geometry}
+            extra={tools}
+            className="h-[420px] lg:h-[560px] 2xl:h-[672px]"
+          >
+            {wanted ? (
+              <TerminalPane
+                key={generation}
+                connect={mintSession}
+                onSession={(next) => setSession(next as TerminalSessionTicket)}
+                onReady={(next) => {
+                  controller.current = next;
+                }}
+                onStatusChange={(next, why) => {
+                  setStatus(next);
+                  setDetail(why ?? null);
+                }}
+                onGeometry={setGeometry}
+                onRequestSearch={() => searchRef.current?.focus()}
+                framed={false}
+                className="h-full"
+              />
+            ) : (
+              <div className="kn-grid flex h-full items-center justify-center [--kn-grid-size:24px]">
+                <EmptyState
+                  icon={SquareTerminal}
+                  title={selection.serverId ? "Not connected" : "Pick a server"}
+                  description={
+                    allowed
+                      ? "A session opens with a single-use ticket that expires in 30 seconds, is bound to your address, and is written to the audit trail on open and on close."
+                      : "This account does not hold terminal.session:exec on that host, so it cannot open a shell there."
+                  }
+                  action={
+                    selection.serverId &&
+                    allowed && (
+                      <Button variant="primary" size="sm" icon={Plug} onClick={connectNow}>
+                        Connect to {selection.server?.name}
+                      </Button>
+                    )
+                  }
+                />
+              </div>
+            )}
+          </TerminalWell>
+        </NumberedSection>
 
         <SessionHistory />
-      </div>
+      </PageBody>
     </div>
   );
 }
@@ -495,11 +521,10 @@ function SessionHistory() {
   );
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={2}
       title="Session history"
-      icon={History}
-      padded={false}
-      description="Every shell opened through the panel, whether or not it was recorded."
+      caption="Every shell opened through the panel, recorded or not."
     >
       <DataTable<TerminalSessionRecord>
         columns={columns}
@@ -567,8 +592,7 @@ function SessionHistory() {
             size="sm"
           />
         }
-        className="rounded-none border-0"
       />
-    </SectionCard>
+    </NumberedSection>
   );
 }

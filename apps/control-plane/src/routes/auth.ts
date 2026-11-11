@@ -258,7 +258,11 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const principal = helpers(req).requirePrincipal();
     const settings = await loadSettings(req.ctx);
 
-    const permissions = [...principal.grants.map.entries()].map(([permission, scope]) => ({
+    // For a reseller or client this is the fixed scoped list (KD-039). It
+    // tells the UI what to offer; the routes still decide, and only the
+    // ones that filter by owner honour it.
+    const held = principal.scoped ? principal.scoped.grants : principal.grants;
+    const permissions = [...held.map.entries()].map(([permission, scope]) => ({
       permission,
       scope:
         scope === "global"

@@ -1,30 +1,32 @@
 "use client";
 
 import * as React from "react";
-import { KeyRound, Laptop, LogOut, ShieldCheck, TriangleAlert, UserRound } from "lucide-react";
+import { KeyRound, Laptop, LogOut, ShieldCheck, TriangleAlert } from "lucide-react";
 import type { Session, TotpSetupResponse, User } from "@kaname/contract";
 import {
   Badge,
   Button,
+  Card,
   ConfirmDialog,
   CopyableCode,
   DataTable,
-  DetailLayout,
   EmptyState,
   FormField,
   Input,
   MonoText,
+  PageBody,
   PageHeader,
   PropertyList,
   PropertyRow,
   RelativeTime,
-  SectionCard,
+  SectionHeader,
   StatusBadge,
   Tag,
   cn,
   type DataTableColumn,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
+import { IndexedLayout, type SectionIndexEntry } from "../_components/SectionIndex";
 import { api, type ApiError } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { encodeQr } from "@/lib/qr";
@@ -44,19 +46,66 @@ import { useList, useResourceMutation, useSession } from "@/lib/queries";
 
 const SESSION_PAGE_SIZE = 20;
 
+/** Reading order; #two-factor is linked from Getting Started. */
+const ACCOUNT_SECTIONS: SectionIndexEntry[] = [
+  { id: "profile", title: "Profile" },
+  { id: "password", title: "Password" },
+  { id: "two-factor", title: "Two-factor authentication" },
+  { id: "sessions", title: "Active sessions" },
+];
+
+/**
+ * One numbered block of the long-form page: the 01 row with its caption
+ * and controls, then the content on a hairline card (or bare, for a
+ * table that is its own card).
+ */
+function AccountSection({
+  id,
+  title,
+  caption,
+  actions,
+  bare = false,
+  children,
+}: {
+  id: string;
+  title: string;
+  caption?: React.ReactNode;
+  actions?: React.ReactNode;
+  bare?: boolean;
+  children: React.ReactNode;
+}) {
+  const index = ACCOUNT_SECTIONS.findIndex((entry) => entry.id === id) + 1;
+  return (
+    <section id={id} className="flex min-w-0 scroll-mt-6 flex-col gap-3">
+      <SectionHeader
+        index={index > 0 ? index : undefined}
+        title={title}
+        caption={caption}
+        actions={actions}
+      />
+      {bare ? children : <Card>{children}</Card>}
+    </section>
+  );
+}
+
 export default function AccountPage() {
   const { session, isLoading, error, refresh } = useSession();
   const user = session?.user ?? null;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader title="Account" subtitle={user?.email} />
+      <PageHeader
+        eyebrow="Account"
+        title="Account"
+        subtitle={user?.email}
+        lede="Your own sign-in: the password, a second factor, and every browser holding a session for you."
+      />
 
-      <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+      <PageBody>
         {error && <PageError error={error} onRetry={refresh} context="Session" />}
 
         {session?.totp_required && (
-          <div className="flex items-start gap-2 rounded-[var(--kn-r-md)] border border-[var(--kn-warn)] bg-[var(--kn-warn-soft)] p-3">
+          <div className="flex max-w-[1152px] items-start gap-2 rounded-[var(--kn-r-lg)] border border-[var(--kn-warn)] bg-[var(--kn-warn-soft)] p-3">
             <TriangleAlert
               size={14}
               className="mt-0.5 shrink-0 text-[var(--kn-warn)]"
@@ -70,12 +119,13 @@ export default function AccountPage() {
           </div>
         )}
 
-        <DetailLayout rail={<ProfileCard user={user} loading={isLoading} />}>
+        <IndexedLayout entries={ACCOUNT_SECTIONS} className="max-w-[1152px]">
+          <ProfileCard user={user} loading={isLoading} />
           <PasswordCard />
           <TotpCard user={user} onChanged={refresh} />
           <SessionsCard />
-        </DetailLayout>
-      </div>
+        </IndexedLayout>
+      </PageBody>
     </div>
   );
 }
@@ -84,7 +134,7 @@ export default function AccountPage() {
 
 function ProfileCard({ user, loading }: { user: User | null; loading: boolean }) {
   return (
-    <SectionCard title="Profile" icon={UserRound}>
+    <AccountSection id="profile" title="Profile" caption="Who this panel thinks you are.">
       {loading && !user ? (
         <p className="text-[var(--kn-text-2)]">Loading your account…</p>
       ) : !user ? (
@@ -130,11 +180,11 @@ function ProfileCard({ user, loading }: { user: User | null; loading: boolean })
           </PropertyRow>
         </PropertyList>
       )}
-      <p className="mt-3 text-sm text-[var(--kn-text-3)]">
+      <p className="mt-3 border-t border-[var(--kn-border-subtle)] pt-3 text-sm text-[var(--kn-text-3)]">
         Name, email and roles are changed by an administrator in Administration → Users, so an
         account can never quietly rename itself in the audit trail.
       </p>
-    </SectionCard>
+    </AccountSection>
   );
 }
 
@@ -164,11 +214,11 @@ function PasswordCard() {
   });
 
   return (
-    <SectionCard
-      title="Password"
-      icon={KeyRound}
-      description="Changing it ends every session, including this one — the panel hands this tab a fresh cookie so you stay signed in here."
-    >
+    <AccountSection id="password" title="Password" caption="The first factor, and the one you can change here.">
+      <p className="mb-4 text-sm text-[var(--kn-text-2)]">
+        Changing it ends every session, including this one — the panel hands this tab a fresh
+        cookie so you stay signed in here.
+      </p>
       <form
         className="flex flex-col gap-4"
         onSubmit={(event) => {
@@ -230,7 +280,7 @@ function PasswordCard() {
           </Button>
         </div>
       </form>
-    </SectionCard>
+    </AccountSection>
   );
 }
 
@@ -278,12 +328,10 @@ function TotpCard({ user, onChanged }: { user: User | null; onChanged: () => voi
   const enabled = user?.totp_enabled ?? false;
 
   return (
-    <SectionCard
+    <AccountSection
       id="two-factor"
-      className="scroll-mt-4"
       title="Two-factor authentication"
-      icon={ShieldCheck}
-      description="A time-based code from an authenticator app, checked on every sign-in."
+      caption="A time-based code, checked on every sign-in."
       actions={
         enabled ? (
           <Badge tone="ok" size="sm" icon={ShieldCheck}>
@@ -355,7 +403,7 @@ function TotpCard({ user, onChanged }: { user: User | null; onChanged: () => voi
                 {setup.recovery_codes.map((recovery) => (
                   <li
                     key={recovery}
-                    className="rounded-[var(--kn-r-xs)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-2 py-1"
+                    className="rounded-[var(--kn-r-sm)] border border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] px-2 py-1"
                   >
                     <MonoText className="select-all">{recovery}</MonoText>
                   </li>
@@ -444,7 +492,7 @@ function TotpCard({ user, onChanged }: { user: User | null; onChanged: () => voi
           />
         </FormField>
       </ConfirmDialog>
-    </SectionCard>
+    </AccountSection>
   );
 }
 
@@ -584,11 +632,11 @@ function SessionsCard() {
   );
 
   return (
-    <SectionCard
+    <AccountSection
+      id="sessions"
       title="Active sessions"
-      icon={Laptop}
-      padded={false}
-      description="Every browser currently holding a valid cookie for this account."
+      caption="Every browser holding a valid cookie for you."
+      bare
       actions={
         <Button
           variant="secondary"
@@ -640,7 +688,6 @@ function SessionsCard() {
             size="sm"
           />
         }
-        className="rounded-none border-0"
       />
 
       <ConfirmDialog
@@ -666,7 +713,7 @@ function SessionsCard() {
         loading={revokeOthers.isPending}
         onConfirm={() => revokeOthers.mutate()}
       />
-    </SectionCard>
+    </AccountSection>
   );
 }
 

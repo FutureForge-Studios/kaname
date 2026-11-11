@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ExternalLink,
+  ArrowRight,
   Folder,
   LayoutDashboard,
   Link2,
@@ -32,6 +32,7 @@ import {
   Badge,
   Button,
   ByteSize,
+  CardInset,
   Checkbox,
   ConfirmDialog,
   DataTable,
@@ -44,6 +45,7 @@ import {
   MenuItem,
   MenuSeparator,
   MetricTile,
+  MonoLabel,
   MonoText,
   PropertyList,
   PropertyRow,
@@ -52,6 +54,7 @@ import {
   SectionCard,
   Select,
   Skeleton,
+  StatusLine,
   TabPanel,
   Tabs,
   type DataTableColumn,
@@ -66,9 +69,12 @@ import { DomainDialog } from "../../_components/DomainDialog";
 import { SiteDialog } from "../../_components/SiteDialog";
 import {
   DetailBody,
+  DetailEyebrow,
   DetailFailed,
+  DetailIdentity,
   DetailLoading,
   DetailTabList,
+  PillLink,
   useDetailTab,
   type DetailTabSpec,
 } from "../../_components/detail";
@@ -93,10 +99,15 @@ import {
   DnsProviderBadge,
   DomainStatusBadge,
   Expiry,
+  HostAxes,
   ProxiedBadge,
   RUNTIME_LABELS,
   SiteStatusBadge,
   VerificationBadge,
+  certificateStatusLabel,
+  certificateStatusTone,
+  lineTone,
+  siteStatusTone,
   useServerById,
 } from "../../_components/status";
 
@@ -175,8 +186,13 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
         className="flex min-h-0 flex-1 flex-col"
       >
         <ResourceHeader
+          breadcrumb={<DetailEyebrow kind="Site" />}
           name={site.name}
-          identity={site.primary_domain ?? site.webroot}
+          identity={
+            <DetailIdentity status={<SiteStatusLine site={site} />}>
+              {site.primary_domain ?? site.webroot}
+            </DetailIdentity>
+          }
           connection={server?.connection}
           lastSeenAt={server?.last_seen_at}
           health={server?.health}
@@ -367,6 +383,40 @@ function Panel({ value, children }: { value: string; children: React.ReactNode }
 
 /* ------------------------------ overview ---------------------------- */
 
+/** One sentence under the name: what this site is doing right now. */
+function SiteStatusLine({ site }: { site: Site }) {
+  const tone = lineTone(siteStatusTone(site.status));
+  const name = site.primary_domain ?? site.name;
+  const deployed = site.last_deployment?.finished_at ?? null;
+
+  let sentence: React.ReactNode;
+  switch (site.status) {
+    case "provisioning":
+      sentence = `Writing the vhost for ${name} on ${site.server_name}`;
+      break;
+    case "suspended":
+      sentence = `Suspended on ${site.server_name} · ${name} is not answering`;
+      break;
+    case "error":
+      sentence = `The last change to this vhost failed on ${site.server_name}`;
+      break;
+    default:
+      sentence = `Serving ${name} from ${site.server_name}`;
+  }
+
+  return (
+    <StatusLine tone={tone} pulse={site.status === "provisioning"}>
+      {sentence}
+      {deployed && (
+        <>
+          {" · last deploy "}
+          <RelativeTime value={deployed} />
+        </>
+      )}
+    </StatusLine>
+  );
+}
+
 function OverviewTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
   const deployments = useDeployments({
     site_id: site.id,
@@ -383,7 +433,7 @@ function OverviewTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
             <PropertyRow label="Server">
               <Link
                 href={`/infrastructure/servers/${site.server_id}`}
-                className="kn-mono rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline"
+                className="kn-mono rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]"
               >
                 {site.server_name}
               </Link>
@@ -443,35 +493,42 @@ function OverviewTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
       </div>
 
       <SectionCard
+        index={1}
+        title="Request path"
+        caption="How a request reaches this site."
+        headingLevel={3}
+      >
+        <RequestPath site={site} />
+      </SectionCard>
+
+      <SectionCard
+        index={2}
         title="Certificate"
-        icon={ShieldCheck}
+        caption={site.ssl ? undefined : "HTTPS needs one."}
         headingLevel={3}
         actions={
           site.ssl ? (
-            <Link
-              href={`/websites/ssl/${site.ssl.certificate_id}`}
-              className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-            >
-              Open certificate
-            </Link>
+            <PillLink href={`/websites/ssl/${site.ssl.certificate_id}`}>Open certificate</PillLink>
           ) : undefined
         }
       >
         {site.ssl ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <CertificateStatusBadge status={site.ssl.status} />
-            <Expiry days={site.ssl.days_remaining} at={site.ssl.expires_at} />
-            <span className="text-[var(--kn-text-2)]">
-              covering {site.primary_domain ?? site.name}
+          <StatusLine tone={lineTone(certificateStatusTone(site.ssl.status))}>
+            <span className="text-[var(--kn-text)]">
+              {certificateStatusLabel(site.ssl.status)}
             </span>
-          </div>
+            {" · "}
+            <Expiry days={site.ssl.days_remaining} at={site.ssl.expires_at} /> left · covering{" "}
+            <MonoText>{site.primary_domain ?? site.name}</MonoText>
+          </StatusLine>
         ) : (
           <EmptyState
+            icon={ShieldCheck}
             title="No certificate on this site"
             description="HTTPS will not answer until one is issued and installed."
             size="sm"
             action={
-              <Button variant="primary" size="sm" icon={ShieldCheck} onClick={onIssue}>
+              <Button variant="primary" size="sm" icon={ShieldCheck} arrow onClick={onIssue}>
                 Issue a certificate
               </Button>
             }
@@ -480,22 +537,89 @@ function OverviewTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
       </SectionCard>
 
       <SectionCard
+        index={3}
         title="Recent deployments"
-        icon={Rocket}
         headingLevel={3}
         padded={false}
         actions={
-          <Link
-            href={`/websites/deployments?site_id=${site.id}`}
-            className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-          >
-            All deployments
-          </Link>
+          <PillLink href={`/websites/deployments?site_id=${site.id}`}>All deployments</PillLink>
         }
       >
         <DeploymentMiniTable query={deployments} />
       </SectionCard>
     </DetailLayout>
+  );
+}
+
+/**
+ * Domain → host → runtime → webroot, drawn in the inset blueprint well.
+ * Each stop is real configuration, so the picture doubles as the answer
+ * to "where does this name end up".
+ */
+function RequestPath({ site }: { site: Site }) {
+  const server = useServerById(site.server_id);
+  const extra = site.domains.length - 1;
+  const runtime = `${RUNTIME_LABELS[site.runtime]}${site.runtime_version ? ` ${site.runtime_version}` : ""}`;
+
+  const stops: { label: string; value: React.ReactNode; detail?: React.ReactNode }[] = [
+    {
+      label: "Answers on",
+      value: site.primary_domain ? (
+        <MonoText truncate>{site.primary_domain}</MonoText>
+      ) : (
+        <span className="text-[var(--kn-text-3)]">No domain attached</span>
+      ),
+      detail:
+        extra > 0 ? `+${formatCount(extra)} more name${extra === 1 ? "" : "s"}` : undefined,
+    },
+    {
+      label: "Host",
+      value: <HostAxes server={server} fallbackName={site.server_name} />,
+      detail: site.force_https ? "HTTP redirects to HTTPS" : "Answers on plain HTTP too",
+    },
+    {
+      label: "Runtime",
+      value: <span className="text-[var(--kn-text)]">{runtime}</span>,
+      detail: site.upstream ? <MonoText muted>{site.upstream}</MonoText> : undefined,
+    },
+    {
+      label: "Serves from",
+      value: <MonoText truncate>{site.webroot}</MonoText>,
+      detail: site.owner ? (
+        <>
+          owned by <MonoText muted>{site.owner}</MonoText>
+        </>
+      ) : undefined,
+    },
+  ];
+
+  return (
+    <CardInset grid padding="sm">
+      <ol className="m-0 grid list-none grid-cols-1 gap-2 p-0 md:grid-cols-[repeat(4,minmax(0,1fr))]">
+        {stops.map((stop, index) => (
+          <li key={stop.label} className="relative flex min-w-0">
+            <div className="flex min-w-0 flex-1 flex-col gap-1 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] px-3 py-2.5">
+              <MonoLabel size="xs" tone="muted">
+                <span className="text-[var(--kn-accent-400)]">{`0${index + 1}`}</span> {stop.label}
+              </MonoLabel>
+              <div className="flex min-w-0 items-center">{stop.value}</div>
+              {stop.detail && (
+                <div className="min-w-0 truncate text-xs text-[var(--kn-text-3)]">
+                  {stop.detail}
+                </div>
+              )}
+            </div>
+            {index < stops.length - 1 && (
+              <ArrowRight
+                size={12}
+                aria-hidden
+                className="absolute -right-[11px] top-1/2 z-[1] hidden -translate-y-1/2 text-[var(--kn-text-3)] md:block"
+              />
+            )}
+          </li>
+        ))}
+      </ol>
+    </CardInset>
   );
 }
 
@@ -629,8 +753,9 @@ function DomainsTab({ site, onAttach }: { site: Site; onAttach: () => void }) {
 
   return (
     <SectionCard
+      index={1}
       title="Domains answering on this site"
-      icon={Link2}
+      caption="Every server_name on the vhost."
       padded={false}
       headingLevel={3}
       actions={
@@ -667,7 +792,7 @@ function DomainsTab({ site, onAttach }: { site: Site; onAttach: () => void }) {
             description="A site with no server_name answers on nothing. Attach a domain to route traffic to it."
             size="sm"
             action={
-              <Button variant="primary" size="sm" icon={Plus} onClick={onAttach}>
+              <Button variant="primary" size="sm" icon={Plus} arrow onClick={onAttach}>
                 Attach a domain
               </Button>
             }
@@ -754,8 +879,9 @@ function SslTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
 
   return (
     <SectionCard
+      index={1}
       title="Certificates covering this site"
-      icon={ShieldCheck}
+      caption="Issued for its domains on this host."
       padded={false}
       headingLevel={3}
       actions={
@@ -796,7 +922,7 @@ function SslTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
             description="HTTPS will not answer until one is issued and installed on the host."
             size="sm"
             action={
-              <Button variant="primary" size="sm" icon={ShieldCheck} onClick={onIssue}>
+              <Button variant="primary" size="sm" icon={ShieldCheck} arrow onClick={onIssue}>
                 Issue a certificate
               </Button>
             }
@@ -870,8 +996,9 @@ function DeploymentsTab({ site, onDeploy }: { site: Site; onDeploy: () => void }
 
   return (
     <SectionCard
+      index={1}
       title="Deployment history"
-      icon={Rocket}
+      caption="Newest first."
       padded={false}
       headingLevel={3}
       actions={
@@ -912,7 +1039,7 @@ function DeploymentsTab({ site, onDeploy }: { site: Site; onDeploy: () => void }
             description="Kaname builds from a git repository and swaps the release directory on success."
             size="sm"
             action={
-              <Button variant="primary" size="sm" icon={Rocket} onClick={onDeploy}>
+              <Button variant="primary" size="sm" icon={Rocket} arrow onClick={onDeploy}>
                 Deploy this site
               </Button>
             }
@@ -975,9 +1102,9 @@ function FilesTab({ site }: { site: Site }) {
 
   return (
     <SectionCard
+      index={1}
       title="Webroot"
-      icon={Folder}
-      description={site.webroot}
+      description={<MonoText muted>{site.webroot}</MonoText>}
       padded={false}
       headingLevel={3}
       actions={
@@ -992,13 +1119,11 @@ function FilesTab({ site }: { site: Site }) {
               void root.refetch();
             }}
           />
-          <Link
+          <PillLink
             href={`/files/manager?server_id=${site.server_id}&path=${encodeURIComponent(site.webroot)}`}
-            className="inline-flex items-center gap-1 rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
           >
             Open in File Manager
-            <ExternalLink size={12} aria-hidden />
-          </Link>
+          </PillLink>
         </>
       }
     >
@@ -1099,18 +1224,16 @@ function LogsTab({ site }: { site: Site }) {
 
   return (
     <SectionCard
+      index={1}
       title="Web server logs"
-      icon={ScrollText}
       padded={false}
       headingLevel={3}
       actions={
-        <Link
+        <PillLink
           href={`/logs?server_id=${site.server_id}${selected ? `&source=${encodeURIComponent(selected)}` : ""}`}
-          className="inline-flex items-center gap-1 rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
         >
           Open in Logs
-          <ExternalLink size={12} aria-hidden />
-        </Link>
+        </PillLink>
       }
     >
       {sources.isError && (

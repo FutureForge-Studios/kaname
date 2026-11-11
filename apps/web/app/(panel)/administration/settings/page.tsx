@@ -2,17 +2,9 @@
 
 import * as React from "react";
 import {
-  Archive,
-  ArrowUpCircle,
-  Bell,
-  Globe,
-  Mail,
   Plus,
-  RadioTower,
   Save,
   Send,
-  Settings as SettingsIcon,
-  ShieldCheck,
   Trash2,
   TriangleAlert,
 } from "lucide-react";
@@ -41,17 +33,21 @@ import {
   Button,
   Combobox,
   ConfirmDialog,
+  Card,
   FieldRow,
   IconButton,
   Input,
+  PageBody,
   PageHeader,
   RelativeTime,
+  SectionHeader,
   Select,
   Skeleton,
   Switch,
   cn,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
+import { IndexedLayout, type SectionIndexEntry } from "../../_components/SectionIndex";
 import {
   domainProblem,
   normalizeDomain,
@@ -59,7 +55,6 @@ import {
   type PanelAddressApplying,
 } from "@/lib/address";
 import { api, type ApiError } from "@/lib/api";
-import type { IconComponent } from "@/lib/icons";
 import { timeZoneOptions } from "@/lib/cron";
 import { pluralize } from "@/lib/format";
 import { useCan, useList, useResource, useResourceMutation, useSession } from "@/lib/queries";
@@ -77,6 +72,22 @@ import { useCan, useList, useResource, useResourceMutation, useSession } from "@
  * list is scannable, a column of large labelled inputs is not.
  * ------------------------------------------------------------------ */
 
+/**
+ * Reading order of the page. The ids are the anchors other pages link
+ * to (#notifications from Getting Started), derived from the titles.
+ */
+const SETTINGS_SECTIONS: SectionIndexEntry[] = [
+  { id: "panel", title: "Panel" },
+  { id: "address", title: "Address" },
+  { id: "updates", title: "Updates" },
+  { id: "security", title: "Security" },
+  { id: "agents", title: "Agents" },
+  { id: "acme", title: "ACME" },
+  { id: "backups", title: "Backups" },
+  { id: "outgoing-mail", title: "Outgoing mail" },
+  { id: "notifications", title: "Notifications" },
+];
+
 export default function SettingsPage() {
   const can = useCan();
   const readOnly = !can("admin.settings:write");
@@ -86,8 +97,10 @@ export default function SettingsPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Administration"
         title="Settings"
         subtitle={doc?.panel.url}
+        lede="How this installation names itself, keeps itself current, and tells you when something happens. Each section saves on its own."
         actions={
           readOnly && (
             <Badge tone="neutral" size="sm">
@@ -97,7 +110,7 @@ export default function SettingsPage() {
         }
       />
 
-      <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+      <PageBody>
         {settings.isError && (
           <PageError
             error={settings.error}
@@ -111,7 +124,7 @@ export default function SettingsPage() {
             {[0, 1, 2].map((index) => (
               <Skeleton
                 key={index}
-                className="h-56 rounded-[var(--kn-r-md)]"
+                className="h-56 rounded-[var(--kn-r-lg)]"
                 label={index === 0 ? "Loading settings" : undefined}
               />
             ))}
@@ -119,7 +132,7 @@ export default function SettingsPage() {
         )}
 
         {doc && (
-          <>
+          <IndexedLayout entries={SETTINGS_SECTIONS} className="max-w-[1152px]">
             <PanelSection value={doc.panel} readOnly={readOnly} />
             <AddressSection readOnly={readOnly} />
             <UpdatesSection readOnly={readOnly} />
@@ -129,9 +142,9 @@ export default function SettingsPage() {
             <BackupsSection value={doc.backups} readOnly={readOnly} />
             <SmtpSection value={doc.notifications.smtp} readOnly={readOnly} />
             <NotificationsSection value={doc.notifications.channels} readOnly={readOnly} />
-          </>
+          </IndexedLayout>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }
@@ -180,7 +193,6 @@ function useSection<T>(value: T): SectionState<T> {
 interface SettingsSectionProps {
   title: string;
   description: string;
-  icon: IconComponent;
   dirty: boolean;
   saving: boolean;
   readOnly: boolean;
@@ -193,7 +205,6 @@ interface SettingsSectionProps {
 function SettingsSection({
   title,
   description,
-  icon: Icon,
   dirty,
   saving,
   readOnly,
@@ -211,42 +222,38 @@ function SettingsSection({
     if (window.location.hash === `#${anchor}`) ref.current?.scrollIntoView({ block: "start" });
   }, [anchor]);
 
-  return (
-    <section
-      ref={ref}
-      id={anchor}
-      className="scroll-mt-4 overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)]"
-    >
-      <div className="flex min-h-9 items-center justify-between gap-3 border-b border-[var(--kn-border)] px-4 py-2">
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon size={14} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
-          <div className="min-w-0">
-            <h2 className="truncate font-medium text-[var(--kn-text)]">{title}</h2>
-            <p className="mt-0.5 text-sm text-[var(--kn-text-2)]">{description}</p>
-          </div>
-        </div>
-        {!readOnly && (
-          <div className="flex shrink-0 items-center gap-1.5">
-            {dirty && (
-              <Button variant="ghost" size="xs" onClick={onReset} disabled={saving}>
-                Discard
-              </Button>
-            )}
-            <Button
-              variant="primary"
-              size="xs"
-              icon={Save}
-              disabled={!dirty}
-              loading={saving}
-              onClick={onSave}
-            >
-              Save
-            </Button>
-          </div>
-        )}
-      </div>
+  const index = SETTINGS_SECTIONS.findIndex((entry) => entry.id === anchor) + 1;
 
-      <div className="px-4 py-1">
+  return (
+    <section ref={ref} id={anchor} className="flex min-w-0 scroll-mt-6 flex-col gap-3">
+      <SectionHeader
+        index={index > 0 ? index : undefined}
+        title={title}
+        caption={<span title={description}>{description}</span>}
+        actions={
+          !readOnly && (
+            <>
+              {dirty && (
+                <Button variant="ghost" size="xs" onClick={onReset} disabled={saving}>
+                  Discard
+                </Button>
+              )}
+              <Button
+                variant="primary"
+                size="xs"
+                icon={Save}
+                disabled={!dirty}
+                loading={saving}
+                onClick={onSave}
+              >
+                Save
+              </Button>
+            </>
+          )
+        }
+      />
+
+      <Card padding="none" className="px-4 py-1">
         {error && (
           <div className="py-3">
             <PageError error={error} onRetry={onSave} context={title} />
@@ -266,7 +273,7 @@ function SettingsSection({
           </div>
         )}
         {children}
-      </div>
+      </Card>
     </section>
   );
 }
@@ -359,7 +366,6 @@ function PanelSection({
     <SettingsSection
       title="Panel"
       description="How this installation identifies itself and renders time."
-      icon={SettingsIcon}
       dirty={section.dirty}
       saving={saving}
       readOnly={readOnly}
@@ -471,7 +477,6 @@ function AddressSection({ readOnly }: { readOnly: boolean }) {
       <SettingsSection
         title="Address"
         description="Where this panel answers, and how to give it a name."
-        icon={Globe}
         dirty={managed && domain !== stored && problem === null}
         saving={mutation.isPending}
         readOnly={readOnly || !managed}
@@ -504,7 +509,7 @@ function AddressSection({ readOnly }: { readOnly: boolean }) {
         {applied && (
           <div
             role="status"
-            className="mt-3 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-3 py-2 text-sm text-[var(--kn-text-2)]"
+            className="mt-3 rounded-[var(--kn-r-md)] border border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] px-3 py-2 text-sm text-[var(--kn-text-2)]"
           >
             {applied.domain
               ? `Applying ${applied.public_url}. The control plane is restarting and the certificate is being requested — reload this page in a minute.`
@@ -648,7 +653,6 @@ function SecuritySection({
     <SettingsSection
       title="Security"
       description="Session lifetime, two-factor policy, terminal recording and lockout."
-      icon={ShieldCheck}
       dirty={section.dirty}
       saving={saving}
       readOnly={readOnly}
@@ -768,7 +772,6 @@ function AgentsSection({
     <SettingsSection
       title="Agents"
       description="Heartbeat cadence, when a host counts as gone, and how long samples are kept."
-      icon={RadioTower}
       dirty={section.dirty}
       saving={saving}
       readOnly={readOnly}
@@ -828,7 +831,6 @@ function AcmeSection({ value, readOnly }: { value: SettingsDocument["acme"]; rea
     <SettingsSection
       title="ACME"
       description="Where certificates are issued from, and who the directory contacts."
-      icon={ShieldCheck}
       dirty={section.dirty}
       saving={saving}
       readOnly={readOnly}
@@ -902,7 +904,6 @@ function BackupsSection({
     <SettingsSection
       title="Backups"
       description="Defaults applied when a new schedule does not name a destination."
-      icon={Archive}
       dirty={section.dirty}
       saving={saving}
       readOnly={readOnly}
@@ -995,7 +996,6 @@ function SmtpSection({ value, readOnly }: { value: SmtpSettings; readOnly: boole
     <SettingsSection
       title="Outgoing mail"
       description="The SMTP server email notifications are sent through. Until it is set, email channels record an error instead of delivering."
-      icon={Mail}
       dirty={section.dirty}
       saving={saving}
       readOnly={readOnly}
@@ -1229,7 +1229,6 @@ function NotificationsSection({
     <SettingsSection
       title="Notifications"
       description="Where Kaname sends the things worth waking someone for. The list here is the whole set — removing a row deletes the channel."
-      icon={Bell}
       dirty={section.dirty}
       saving={saving}
       readOnly={readOnly}
@@ -1249,7 +1248,7 @@ function NotificationsSection({
           <div
             key={channel.id}
             className={cn(
-              "grid grid-cols-1 gap-3 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] p-3",
+              "grid grid-cols-1 gap-3 rounded-[var(--kn-r-md)] border border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] p-3",
               "sm:grid-cols-[minmax(0,1fr)_128px_minmax(0,1.4fr)_28px]",
             )}
           >
@@ -1409,7 +1408,7 @@ function UpdatesSection({ readOnly }: { readOnly: boolean }) {
   });
 
   if (overview.isLoading || !value) {
-    return <Skeleton className="h-56 rounded-[var(--kn-r-md)]" label="Loading update settings" />;
+    return <Skeleton className="h-56 rounded-[var(--kn-r-lg)]" label="Loading update settings" />;
   }
 
   const dirty =
@@ -1431,7 +1430,6 @@ function UpdatesSection({ readOnly }: { readOnly: boolean }) {
       <SettingsSection
         title="Updates"
         description="How this installation gets new versions of itself."
-        icon={ArrowUpCircle}
         dirty={dirty}
         saving={mutation.isPending}
         readOnly={readOnly}

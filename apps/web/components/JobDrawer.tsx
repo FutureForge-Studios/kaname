@@ -21,13 +21,7 @@ import {
 } from "@kaname/ui";
 import { api, type ApiError } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
-import {
-  useJobDrawer,
-  useJobLogs,
-  useList,
-  useResourceMutation,
-  useSession,
-} from "@/lib/queries";
+import { useJobDrawer, useJobLogs, useList, useResourceMutation, useSession } from "@/lib/queries";
 import { PageError } from "./PageError";
 
 /* ------------------------------------------------------------------ *
@@ -41,6 +35,10 @@ import { PageError } from "./PageError";
  * ------------------------------------------------------------------ */
 
 const TERMINAL = new Set<Job["status"]>(TERMINAL_JOB_STATUSES);
+
+/** Mono uppercase text link: the quiet action at the end of a row. */
+const ROW_LINK =
+  "kn-label-sm rounded-[var(--kn-r-xs)] text-[var(--kn-text-2)] outline-none transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)] hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]";
 
 export function JobDrawer() {
   const drawer = useJobDrawer();
@@ -86,7 +84,7 @@ export function JobDrawer() {
 
       <DrawerBody className="px-0 py-0">
         {jobs.isError && (
-          <div className="p-4">
+          <div className="p-5">
             <PageError
               error={jobs.error}
               onRetry={() => void jobs.refetch()}
@@ -98,7 +96,7 @@ export function JobDrawer() {
         {jobs.isLoading && rows.length === 0 && (
           <ul className="divide-y divide-[var(--kn-border-subtle)]">
             {[0, 1, 2, 3, 4].map((index) => (
-              <li key={index} className="flex items-center gap-3 px-4 py-2.5">
+              <li key={index} className="flex items-center gap-3 px-5 py-3">
                 <Skeleton className="h-4 w-20 rounded-[var(--kn-r-pill)]" />
                 <Skeleton className="h-3 flex-1" />
                 <Skeleton className="h-3 w-12" />
@@ -158,12 +156,12 @@ function JobRow({ job, expanded, onToggle, onNavigate }: JobRowProps) {
 
   return (
     <li>
-      <div className="flex items-start gap-2 px-4 py-2.5">
+      <div className="flex items-start gap-2.5 px-5 py-3">
         <button
           type="button"
           onClick={onToggle}
           aria-expanded={expanded}
-          className="mt-0.5 shrink-0 rounded-[var(--kn-r-xs)] text-[var(--kn-text-3)] outline-none transition-colors duration-[var(--kn-dur-fast)] hover:text-[var(--kn-text)]"
+          className="mt-0.5 shrink-0 rounded-[var(--kn-r-xs)] text-[var(--kn-text-3)] outline-none transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)] hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
         >
           <ChevronRight
             size={14}
@@ -178,7 +176,7 @@ function JobRow({ job, expanded, onToggle, onNavigate }: JobRowProps) {
 
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="min-w-0 truncate font-medium text-[var(--kn-text)]">{job.label}</span>
+            <span className="kn-title min-w-0 truncate text-[var(--kn-text)]">{job.label}</span>
             <JobStatusPill
               status={job.status}
               size="xs"
@@ -187,7 +185,7 @@ function JobRow({ job, expanded, onToggle, onNavigate }: JobRowProps) {
             />
           </div>
 
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--kn-text-2)]">
+          <div className="kn-mono mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--kn-text-3)]">
             {job.server_name && <MonoText muted>{job.server_name}</MonoText>}
             {job.target_label && (
               <>
@@ -244,11 +242,7 @@ function JobRow({ job, expanded, onToggle, onNavigate }: JobRowProps) {
               Cancel
             </Button>
           )}
-          <Link
-            href={`/jobs/${job.id}`}
-            onClick={onNavigate}
-            className="rounded-[var(--kn-r-xs)] px-1 text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-          >
+          <Link href={`/jobs/${job.id}`} onClick={onNavigate} className={cn(ROW_LINK, "px-1")}>
             Details
           </Link>
         </div>
@@ -282,27 +276,22 @@ function JobLog({ jobId, status }: { jobId: string; status: Job["status"] }) {
   );
 
   return (
-    <div className="border-t border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)]">
-      {logs.isLoading && (
-        <div className="px-4 py-2">
-          <Skeleton className="h-3 w-2/3" label="Loading job log" />
-        </div>
-      )}
+    <div className="border-t border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] px-5 py-3">
+      {logs.isLoading && <Skeleton className="h-3 w-2/3" label="Loading job log" />}
 
       {logs.isError && (
-        <div className="px-4 py-2">
-          <PageError
-            error={logs.error as ApiError}
-            onRetry={() => void logs.refetch()}
-            context="Job log"
-          />
-        </div>
+        <PageError
+          error={logs.error as ApiError}
+          onRetry={() => void logs.refetch()}
+          context="Job log"
+        />
       )}
 
       {!logs.isLoading && !logs.isError && (
         <LogViewer
           lines={lines}
           height={224}
+          className="rounded-[var(--kn-r-md)]"
           emptyLabel={
             running
               ? "No log lines yet. The agent writes them as the job progresses."

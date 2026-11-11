@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import type { LogSourceRow, Server } from "@kaname/contract";
-import { Combobox, Skeleton, type ComboboxOption } from "@kaname/ui";
+import { Combobox, NumberedSection, Skeleton, type ComboboxOption } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
 import { useList } from "@/lib/queries";
 import { LogTailPanel } from "./LogTailPanel";
+import { PillLink } from "./PillLink";
 
 /* ------------------------------------------------------------------ *
  * A host's logs.
@@ -60,7 +60,12 @@ export function ServerLogsTab({ server }: { server: Server }) {
   ) : undefined;
 
   return (
-    <div className="flex min-w-0 flex-col gap-4">
+    <NumberedSection
+      index={1}
+      title="Live tail"
+      caption="Sources the agent enumerates on this box, read live."
+      actions={<PillLink href={`/logs?server_id=${server.id}`}>Open in Logs</PillLink>}
+    >
       {sources.isError && (
         <PageError
           error={sources.error}
@@ -85,12 +90,6 @@ export function ServerLogsTab({ server }: { server: Server }) {
             className="w-72"
           />
         )}
-        <Link
-          href={`/logs?server_id=${server.id}`}
-          className="ml-auto rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-        >
-          Open in Logs
-        </Link>
       </div>
 
       <LogTailPanel
@@ -101,6 +100,6 @@ export function ServerLogsTab({ server }: { server: Server }) {
         label={`Logs on ${server.name}`}
         height={520}
       />
-    </div>
+    </NumberedSection>
   );
 }

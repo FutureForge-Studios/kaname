@@ -13,10 +13,11 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
+  ScrollText,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import type { Job, MailServer } from "@kaname/contract";
+import type { Job, MailDomain, MailServer } from "@kaname/contract";
 import {
   Badge,
   Button,
@@ -26,13 +27,20 @@ import {
   IconButton,
   MenuItem,
   MenuSeparator,
+  Card,
+  MonoLabel,
   MonoText,
+  NumberedSection,
+  PageBody,
   PageHeader,
   RelativeTime,
   SectionCard,
+  SectionHeader,
   Select,
   Skeleton,
+  StatusLine,
   cn,
+  type Tone,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
 import { serverPrerequisite, useOpenFromQuery } from "@/components/ResourcePage";
@@ -40,9 +48,11 @@ import { formatCount, pluralize } from "@/lib/format";
 import { useCan, useServers } from "@/lib/queries";
 import { HostCell } from "../_components/cells";
 import { JobActivityBar } from "../_components/JobActivity";
+import { DnsDrawer } from "./_components/DnsDrawer";
 import {
   MAIL_JOB_TYPES,
   useForgetMailServer,
+  useMailDomains,
   useMailServers,
   useRenewMailCertificate,
   useSyncMailServer,
@@ -133,7 +143,10 @@ export default function MailServersPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Email"
         title="Mail servers"
+        lede="Yunori Mail Server on hosts you own: Kaname installs it, checks its DNS and certificates, and keeps domains, mailboxes and aliases in one place."
+        status={fleetStatus(servers)}
         subtitle={
           servers.length > 0
             ? `${pluralize(servers.length, "host")} running Yunori Mail Server`
@@ -155,7 +168,7 @@ export default function MailServersPage() {
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
+      <PageBody className="*:shrink-0">
         {/* shrink-0: this column is a flex container with min-h-0, and with
          * more than one server card the panel (overflow-hidden) was squeezed
          * to nothing, its Reveal button with it. */}
@@ -168,30 +181,35 @@ export default function MailServersPage() {
         {/* shrink-0 for the same reason as the setup panel: squeezed to a hairline otherwise. */}
         <JobActivityBar types={MAIL_JOB_TYPES} className="shrink-0" />
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Select
-            size="sm"
-            aria-label="Verdict"
-            value={health}
-            onChange={(event) => setHealth(event.target.value)}
-            boxClassName="w-40"
-            options={HEALTH_OPTIONS}
-          />
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
-            {query.dataUpdatedAt > 0 && (
-              <span className="hidden items-center gap-1 text-xs text-[var(--kn-text-3)] md:inline-flex">
-                synced <RelativeTime value={query.dataUpdatedAt} />
-              </span>
-            )}
-            <IconButton
-              icon={RefreshCw}
-              label="Refresh"
-              size="sm"
-              disabled={query.isFetching}
-              onClick={() => void query.refetch()}
-            />
-          </div>
-        </div>
+        <SectionHeader
+          index={1}
+          title="Servers"
+          caption="One card per host, with both status axes: the host's agent, and Yunori's own verdict."
+          actions={
+            <>
+              {query.dataUpdatedAt > 0 && (
+                <span className="kn-mono hidden items-center gap-1 text-2xs text-[var(--kn-text-3)] md:inline-flex">
+                  synced <RelativeTime value={query.dataUpdatedAt} />
+                </span>
+              )}
+              <Select
+                size="sm"
+                aria-label="Verdict"
+                value={health}
+                onChange={(event) => setHealth(event.target.value)}
+                boxClassName="w-36"
+                options={HEALTH_OPTIONS}
+              />
+              <IconButton
+                icon={RefreshCw}
+                label="Refresh"
+                size="sm"
+                disabled={query.isFetching}
+                onClick={() => void query.refetch()}
+              />
+            </>
+          }
+        />
 
         {query.isError ? (
           <PageError error={query.error} onRetry={() => void query.refetch()} context="Mail servers" />
@@ -234,7 +252,7 @@ export default function MailServersPage() {
             )}
           </SectionCard>
         ) : (
-          <ul className="flex flex-col gap-4">
+          <ul className="m-0 flex list-none flex-col gap-4 p-0">
             {servers.map((server) => (
               <li key={server.id}>
                 <MailServerCard server={server} onForget={() => setForgetting(server)} />
@@ -242,7 +260,33 @@ export default function MailServersPage() {
             ))}
           </ul>
         )}
-      </div>
+
+        {servers.length > 0 && (
+          <>
+            <DomainsOverview />
+            <NumberedSection
+              index={3}
+              title="Deliverability"
+              caption="What receivers will make of your mail, and what the engine is doing now."
+            >
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <OverviewLink
+                  href={`/email/health${servers[0] ? `?server_id=${servers[0].server_id}` : ""}`}
+                  icon={BadgeCheck}
+                  title="Mail health"
+                  description="Every doctor check with the fix beside it, the TLS certificate, and an on-demand preflight of port 25, reverse DNS and blocklists."
+                />
+                <OverviewLink
+                  href={`/email/logs${servers[0] ? `?server_id=${servers[0].server_id}` : ""}`}
+                  icon={ScrollText}
+                  title="Mail logs"
+                  description="A live tail of the mail engine's log, read straight off the host and filtered there."
+                />
+              </div>
+            </NumberedSection>
+          </>
+        )}
+      </PageBody>
 
       <DeployDialog
         open={deploying}
@@ -375,17 +419,19 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
         </>
       }
     >
-      <div className="flex flex-col gap-4 p-4">
+      <div className="flex flex-col gap-5 p-5">
         {/* The verdict: one sentence, derived from the same checks listed below. */}
-        <p className={cn("font-medium", checkTextClass(server.health))}>{verdictSentence(server)}</p>
+        <StatusLine tone={verdictTone(server)} className={cn("text-sm", checkTextClass(server.health))}>
+          {verdictSentence(server)}
+        </StatusLine>
 
         {server.last_error && (
           <p className="text-sm text-[var(--kn-danger)]">{server.last_error}</p>
         )}
 
         <div className="grid grid-cols-1 gap-x-8 gap-y-3 md:grid-cols-2">
-          <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1.5 text-sm">
-            <dt className="text-[var(--kn-text-3)]">Hostname</dt>
+          <dl className="m-0 grid grid-cols-[7.5rem_1fr] items-baseline gap-x-3 gap-y-2 text-sm">
+            <dt className={TERM}>Hostname</dt>
             <dd className="flex min-w-0 flex-wrap items-center gap-2">
               {server.hostname ? (
                 <MonoText truncate className="min-w-0">
@@ -407,7 +453,7 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
               )}
             </dd>
 
-            <dt className="text-[var(--kn-text-3)]">Primary domain</dt>
+            <dt className={TERM}>Primary domain</dt>
             <dd>
               {server.primary_domain ? (
                 <MonoText>{server.primary_domain}</MonoText>
@@ -416,7 +462,7 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
               )}
             </dd>
 
-            <dt className="text-[var(--kn-text-3)]">Sending</dt>
+            <dt className={TERM}>Sending</dt>
             <dd>
               {server.sending_mode === "relay"
                 ? `Through a relay${server.relay_provider ? ` (${server.relay_provider})` : ""}`
@@ -425,7 +471,7 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
                   : "—"}
             </dd>
 
-            <dt className="text-[var(--kn-text-3)]">Certificate</dt>
+            <dt className={TERM}>Certificate</dt>
             <dd className="flex flex-wrap items-center gap-2">
               {server.certificate ? (
                 <>
@@ -444,13 +490,13 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
             </dd>
           </dl>
 
-          <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-1.5 text-sm">
-            <dt className="text-[var(--kn-text-3)]">Services</dt>
+          <dl className="m-0 grid grid-cols-[7.5rem_1fr] items-baseline gap-x-3 gap-y-2 text-sm">
+            <dt className={TERM}>Services</dt>
             <dd>
               <ServiceStates services={server.services} />
             </dd>
 
-            <dt className="text-[var(--kn-text-3)]">Hosting</dt>
+            <dt className={TERM}>Hosting</dt>
             <dd className="flex flex-wrap items-center gap-x-3">
               <Link
                 href={`/email/domains?server_id=${server.server_id}`}
@@ -468,7 +514,7 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
               </Link>
             </dd>
 
-            <dt className="text-[var(--kn-text-3)]">Checks</dt>
+            <dt className={TERM}>Checks</dt>
             <dd className="flex flex-wrap items-center gap-x-3">
               {server.checks.length === 0 ? (
                 <span className="text-[var(--kn-text-3)]">none yet</span>
@@ -492,7 +538,7 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
               </Link>
             </dd>
 
-            <dt className="text-[var(--kn-text-3)]">Synced</dt>
+            <dt className={TERM}>Synced</dt>
             <dd className="text-[var(--kn-text-2)]">
               {server.last_synced_at ? (
                 <RelativeTime value={server.last_synced_at} />
@@ -504,11 +550,11 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
         </div>
 
         {!server.install_complete && (
-          <div className="flex flex-col gap-2 border-t border-[var(--kn-border)] pt-3">
-            <div className="flex items-baseline justify-between gap-2">
-              <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--kn-text-3)]">
+          <div className="flex flex-col gap-1 border-t border-[var(--kn-border)] pt-4">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <MonoLabel as="h3" size="xs" tone="muted">
                 Install steps
-              </h3>
+              </MonoLabel>
               {waiting && (
                 <span className="text-xs text-[var(--kn-warn)]">
                   Waiting for you: {waiting.title}
@@ -520,10 +566,10 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
         )}
 
         {server.install_complete && counts.fail + counts.warn > 0 && (
-          <div className="flex flex-col gap-1 border-t border-[var(--kn-border)] pt-3">
-            <h3 className="text-xs font-medium uppercase tracking-wide text-[var(--kn-text-3)]">
+          <div className="flex flex-col gap-1 border-t border-[var(--kn-border)] pt-4">
+            <MonoLabel as="h3" size="xs" tone="muted">
               Needs a hand
-            </h3>
+            </MonoLabel>
             <ChecksList
               checks={server.checks.filter(
                 (check) => check.status === "fail" || check.status === "warn",
@@ -533,5 +579,165 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
         )}
       </div>
     </SectionCard>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Overview helpers
+ * ------------------------------------------------------------------ */
+
+const TERM = "kn-label-sm pt-px text-[var(--kn-text-3)]";
+
+function verdictTone(server: MailServer): Tone {
+  if (server.status === "error") return "danger";
+  if (server.status === "deploying" || server.status === "installing") return "info";
+  if (!server.install_complete) return "warn";
+  if (server.checks.length === 0) return "neutral";
+  const counts = countChecks(server.checks);
+  if (counts.fail > 0) return "danger";
+  if (counts.warn > 0) return "warn";
+  return "ok";
+}
+
+/** The fleet in one sentence, for the header. */
+function fleetStatus(servers: readonly MailServer[]): React.ReactNode {
+  if (servers.length === 0) return undefined;
+  const tones = servers.map(verdictTone);
+  const failing = tones.filter((tone) => tone === "danger").length;
+  const warning = tones.filter((tone) => tone === "warn").length;
+  if (failing > 0) {
+    return (
+      <StatusLine tone="danger">
+        {pluralize(failing, "server needs", "servers need")} a hand · {pluralize(servers.length, "host")}{" "}
+        in all
+      </StatusLine>
+    );
+  }
+  if (warning > 0) {
+    return (
+      <StatusLine tone="warn">
+        {pluralize(warning, "server wants", "servers want")} attention · {pluralize(servers.length, "host")}{" "}
+        in all
+      </StatusLine>
+    );
+  }
+  return <StatusLine>Every mail server checks out · {pluralize(servers.length, "host")}</StatusLine>;
+}
+
+const DOMAIN_PREVIEW = 8;
+
+/**
+ * The domains every server hosts, with the one thing that breaks mail
+ * setups — their DNS — one click from its records. The full list, with
+ * filters and actions, lives on the Domains page.
+ */
+function DomainsOverview() {
+  const query = useMailDomains();
+  const [dnsFor, setDnsFor] = React.useState<MailDomain | null>(null);
+  const domains = query.data?.data ?? [];
+  const shown = domains.slice(0, DOMAIN_PREVIEW);
+
+  // Out of scope or failing: the Domains page says why; this summary steps aside.
+  if (query.isError) return null;
+
+  return (
+    <NumberedSection
+      index={2}
+      title="Domains"
+      caption="Every domain your servers accept mail for, and whether its DNS resolves."
+      actions={
+        <Link
+          href="/email/domains"
+          className="kn-label-sm rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+        >
+          All domains →
+        </Link>
+      }
+    >
+      {query.isLoading ? (
+        <Skeleton className="h-24 rounded-[var(--kn-r-lg)]" label="Loading mail domains" />
+      ) : domains.length === 0 ? (
+        <Card padding="md" className="text-sm text-[var(--kn-text-2)]">
+          No domain hosts mail yet.{" "}
+          <Link href="/email/domains?new=1" className="text-[var(--kn-accent-400)] hover:underline">
+            Add one
+          </Link>{" "}
+          and Yunori tells you the DNS records to publish.
+        </Card>
+      ) : (
+        <Card padding="none">
+          <ul className="m-0 list-none p-0" aria-label="Mail domains overview">
+            {shown.map((domain) => (
+              <li
+                key={domain.id}
+                className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--kn-border)] px-4 py-2.5 last:border-b-0"
+              >
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <Globe size={14} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
+                  <MonoText truncate className="min-w-0 text-[var(--kn-text)]">
+                    {domain.domain_name}
+                  </MonoText>
+                  {domain.is_primary && (
+                    <Badge size="xs" tone="neutral">
+                      primary
+                    </Badge>
+                  )}
+                </span>
+                <MonoText muted className="hidden text-xs md:inline">
+                  {domain.server_name}
+                </MonoText>
+                <span className="kn-num w-28 text-right text-xs text-[var(--kn-text-2)]">
+                  {pluralize(domain.mailbox_count, "mailbox", "mailboxes")}
+                </span>
+                <MailCheckBadge status={domain.dns_status} label={`DNS ${CHECK_META[domain.dns_status].label.toLowerCase()}`} />
+                <Button variant="ghost" size="xs" onClick={() => setDnsFor(domain)}>
+                  Records
+                </Button>
+              </li>
+            ))}
+          </ul>
+          {domains.length > shown.length && (
+            <p className="kn-mono m-0 border-t border-[var(--kn-border)] px-4 py-2 text-2xs text-[var(--kn-text-3)]">
+              {pluralize(domains.length - shown.length, "more domain")} on the Domains page
+            </p>
+          )}
+        </Card>
+      )}
+      <DnsDrawer domain={dnsFor} onClose={() => setDnsFor(null)} />
+    </NumberedSection>
+  );
+}
+
+function OverviewLink({
+  href,
+  icon: Icon,
+  title,
+  description,
+}: {
+  href: string;
+  icon: React.ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean }>;
+  title: string;
+  description: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group rounded-[var(--kn-r-lg)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+    >
+      <Card interactive padding="md" className="flex h-full items-start gap-3">
+        <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--kn-r-md)] border border-[var(--kn-border)] text-[var(--kn-text-2)]">
+          <Icon size={14} aria-hidden />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="kn-title block text-md text-[var(--kn-text)]">
+            {title}
+            <span aria-hidden className="ml-1.5 inline-block text-[var(--kn-text-3)] transition-transform duration-[var(--kn-dur)] ease-[var(--kn-ease)] group-hover:translate-x-0.5">
+              →
+            </span>
+          </span>
+          <span className="mt-0.5 block text-sm text-[var(--kn-text-2)]">{description}</span>
+        </span>
+      </Card>
+    </Link>
   );
 }

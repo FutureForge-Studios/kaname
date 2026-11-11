@@ -36,9 +36,11 @@ import {
   RelativeTime,
   Select,
   StatusBadge,
+  StatusLine,
   Tab,
   TabList,
   Tabs,
+  cn,
   type DataTableColumn,
   type DataTableRowAction,
 } from "@kaname/ui";
@@ -62,7 +64,7 @@ import {
   type ResourcePrerequisite,
 } from "@/components/ResourcePage";
 import { describeCron } from "@/lib/cron";
-import { formatCount } from "@/lib/format";
+import { formatCount, pluralize } from "@/lib/format";
 import { api } from "@/lib/api";
 import {
   useCan,
@@ -105,6 +107,13 @@ const RUN_STATUS_OPTIONS = [
   { value: "cancelled", label: "Cancelled" },
 ] as const;
 
+/** One header for all four tabs: they are one workflow. */
+const HEADER = {
+  title: "Backups",
+  eyebrow: "Operations",
+  lede: "What is protected, where the snapshots go, and whether the last run proved it.",
+} as const;
+
 function isTab(value: string | null): value is TabValue {
   return TABS.some((tab) => tab.value === value);
 }
@@ -120,6 +129,46 @@ export default function BackupsPage() {
   if (active === "runs") return <RunsTab tabs={tabs} />;
   if (active === "restore-points") return <RestorePointsTab tabs={tabs} />;
   return <SchedulesTab tabs={tabs} />;
+}
+
+/*
+ * The whole area's condition in one sentence, above every tab: how many
+ * schedules, whether any last run failed, whether any destination is
+ * unreachable. Counts come from the list endpoints' totals (one row
+ * each), so the sentence is true for the fleet, not for the page shown.
+ */
+function BackupsOverview() {
+  const total = useList<BackupSchedule>("backups/schedules", { per_page: 1 });
+  const failed = useList<BackupSchedule>("backups/schedules", {
+    per_page: 1,
+    last_run_status: "failed",
+  });
+  const disabled = useList<BackupSchedule>("backups/schedules", { per_page: 1, enabled: "false" });
+  const destinations = useList<BackupDestination>("backups/destinations", { per_page: 1 });
+  const unreachable = useList<BackupDestination>("backups/destinations", {
+    per_page: 1,
+    status: "unreachable",
+  });
+
+  const count = (query: { data?: { meta?: { total?: number } } }) => query.data?.meta?.total;
+  const schedules = count(total);
+  if (schedules === undefined) return null;
+
+  const failing = count(failed) ?? 0;
+  const off = count(disabled) ?? 0;
+  const dests = count(destinations) ?? 0;
+  const down = count(unreachable) ?? 0;
+
+  const tone = failing > 0 ? "danger" : down > 0 || off > 0 ? "warn" : "ok";
+  const parts = [
+    pluralize(schedules, "schedule"),
+    failing > 0 ? `${formatCount(failing)} failed on the last run` : "every last run succeeded",
+    off > 0 ? `${formatCount(off)} disabled` : null,
+    pluralize(dests, "destination"),
+    down > 0 ? `${formatCount(down)} unreachable` : null,
+  ].filter(Boolean);
+
+  return <StatusLine tone={tone}>{parts.join(" · ")}</StatusLine>;
 }
 
 function BackupTabs({ active }: { active: TabValue }) {
@@ -159,6 +208,11 @@ function SchedulesTab({ tabs }: { tabs: React.ReactNode }) {
     sort: "name",
     order: "asc",
   });
+
+  const destinationsById = React.useMemo(
+    () => new Map((destinations.data?.data ?? []).map((row) => [row.id, row])),
+    [destinations.data],
+  );
 
   const [creating, setCreating] = React.useState(false);
   const [editing, setEditing] = React.useState<BackupSchedule | null>(null);
@@ -256,9 +310,30 @@ function SchedulesTab({ tabs }: { tabs: React.ReactNode }) {
       {
         id: "destination",
         header: "Destination",
-        minWidth: 140,
+        minWidth: 180,
         hideBelow: "md",
-        accessor: (schedule) => schedule.destination_name,
+        cell: (schedule) => {
+          const target = destinationsById.get(schedule.destination_id);
+          return (
+            <div className="flex min-w-0 flex-col">
+              <span className="flex min-w-0 items-center gap-1.5">
+                {target && (
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "size-1.5 shrink-0 rounded-full",
+                      DESTINATION_DOTS[target.status],
+                    )}
+                  />
+                )}
+                <span className="truncate text-[var(--kn-text)]">{schedule.destination_name}</span>
+              </span>
+              <MonoText muted truncate className="text-sm">
+                {target ? describeDestination(target) : "—"}
+              </MonoText>
+            </div>
+          );
+        },
       },
       {
         id: "retention",
@@ -270,14 +345,14 @@ function SchedulesTab({ tabs }: { tabs: React.ReactNode }) {
       {
         id: "last_run_at",
         header: "Last run",
-        width: 132,
+        width: 168,
         sortable: true,
         cell: (schedule) => (
           <div className="flex items-center gap-2">
             <RunStatusBadge status={schedule.last_run_status} size="xs" />
             <RelativeTime
               value={schedule.last_run_at}
-              className="text-xs text-[var(--kn-text-3)]"
+              className="kn-num text-xs text-[var(--kn-text-3)]"
             />
           </div>
         ),
@@ -298,7 +373,7 @@ function SchedulesTab({ tabs }: { tabs: React.ReactNode }) {
           ),
       },
     ],
-    [],
+    [destinationsById],
   );
 
   const rowActions = React.useCallback(
@@ -343,8 +418,9 @@ function SchedulesTab({ tabs }: { tabs: React.ReactNode }) {
   return (
     <>
       <ResourcePage<BackupSchedule>
-        title="Backups"
+        {...HEADER}
         tabs={tabs}
+        children={<BackupsOverview />}
         state={state}
         query={query}
         columns={columns}
@@ -499,6 +575,13 @@ const DESTINATION_STATUS_TONES = {
   untested: "neutral",
 } as const;
 
+/** The same three facts as a dot, for the schedules table's destination cell. */
+const DESTINATION_DOTS: Record<BackupDestination["status"], string> = {
+  ok: "bg-[var(--kn-ok)]",
+  unreachable: "bg-[var(--kn-danger)]",
+  untested: "bg-[var(--kn-text-3)]",
+};
+
 function DestinationsTab({ tabs }: { tabs: React.ReactNode }) {
   const router = useRouter();
   const can = useCan();
@@ -612,8 +695,9 @@ function DestinationsTab({ tabs }: { tabs: React.ReactNode }) {
   return (
     <>
       <ResourcePage<BackupDestination>
-        title="Backups"
+        {...HEADER}
         tabs={tabs}
+        children={<BackupsOverview />}
         state={state}
         query={query}
         columns={columns}
@@ -834,8 +918,9 @@ function RunsTab({ tabs }: { tabs: React.ReactNode }) {
 
   return (
     <ResourcePage<BackupRun>
-      title="Backups"
+      {...HEADER}
       tabs={tabs}
+      children={<BackupsOverview />}
       state={state}
       query={query}
       columns={columns}
@@ -1017,8 +1102,9 @@ function RestorePointsTab({ tabs }: { tabs: React.ReactNode }) {
   return (
     <>
       <ResourcePage<RestorePoint>
-        title="Backups"
+        {...HEADER}
         tabs={tabs}
+        children={<BackupsOverview />}
         state={state}
         query={query}
         columns={columns}

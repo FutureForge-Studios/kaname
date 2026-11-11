@@ -3,11 +3,14 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Ban, GitBranch, Globe, MoreHorizontal, RotateCcw, Rocket, ScrollText } from "lucide-react";
-import type { Deployment } from "@kaname/contract";
+import { Ban, Globe, MoreHorizontal, RotateCcw, Rocket, ScrollText, X } from "lucide-react";
+import type { Deployment, DeploymentStatus } from "@kaname/contract";
 import {
   Badge,
   Button,
+  CardInset,
+  CheckItem,
+  CheckList,
   ConfirmDialog,
   DetailLayout,
   DropdownMenu,
@@ -23,13 +26,21 @@ import {
   RelativeTime,
   ResourceHeader,
   SectionCard,
+  StatusLine,
+  type CheckItemState,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
 import { ApiError } from "@/lib/api";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useCan } from "@/lib/queries";
 import { DeployDialog } from "../../_components/DeployDialog";
-import { DetailBody, DetailFailed, DetailLoading } from "../../_components/detail";
+import {
+  DetailBody,
+  DetailEyebrow,
+  DetailFailed,
+  DetailIdentity,
+  DetailLoading,
+} from "../../_components/detail";
 import {
   useCancelDeployments,
   useDeployment,
@@ -41,6 +52,9 @@ import {
   DEPLOYMENT_IN_FLIGHT,
   DeploymentStatusBadge,
   HostAxes,
+  deploymentStatusLabel,
+  deploymentStatusTone,
+  lineTone,
   shortSha,
   useServerById,
 } from "../../_components/status";
@@ -94,8 +108,21 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
     <>
       <div className="flex min-h-0 flex-1 flex-col">
         <ResourceHeader
+          breadcrumb={<DetailEyebrow kind="Deployment" />}
           name={shortSha(deployment.commit_sha) ?? "Deployment"}
-          identity={`${deployment.site_name}${deployment.branch ? ` · ${deployment.branch}` : ""}`}
+          identity={
+            <DetailIdentity
+              status={
+                <DeploymentStatusLine
+                  deployment={deployment}
+                  status={status}
+                  serverName={site.data?.server_name ?? null}
+                />
+              }
+            >
+              {`${deployment.site_name}${deployment.branch ? ` · ${deployment.branch}` : ""}`}
+            </DetailIdentity>
+          }
           connection={server?.connection}
           lastSeenAt={server?.last_seen_at}
           health={server?.health}
@@ -175,6 +202,10 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
         <DetailBody>
           <DetailLayout
             rail={
+              <>
+              <SectionCard title="Phases" headingLevel={3}>
+                <DeploymentPhases deployment={deployment} status={status} />
+              </SectionCard>
               <SectionCard title="Run" headingLevel={3}>
                 <PropertyList dense labelWidth="sm">
                   <PropertyRow label="Site">
@@ -228,14 +259,14 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
                   </PropertyRow>
                 </PropertyList>
               </SectionCard>
+              </>
             }
           >
             <CommitCard deployment={deployment} />
 
             <SectionCard
+              index={2}
               title="Build log"
-              icon={ScrollText}
-              padded={false}
               headingLevel={3}
               actions={<LogStateBadge state={log.state} />}
               footer={
@@ -244,6 +275,7 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
                 ) : undefined
               }
             >
+              <CardInset padding="none" className="overflow-hidden">
               {log.progress != null && (
                 <Progress
                   value={log.progress}
@@ -296,6 +328,7 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
                   label={`${label} build log`}
                 />
               )}
+              </CardInset>
             </SectionCard>
           </DetailLayout>
         </DetailBody>
@@ -328,10 +361,156 @@ export default function DeploymentDetailPage({ params }: { params: Promise<{ id:
 
 /* ------------------------------------------------------------------ */
 
+/** One sentence under the revision: where the run is, or how it ended. */
+function DeploymentStatusLine({
+  deployment,
+  status,
+  serverName,
+}: {
+  deployment: Deployment;
+  status: DeploymentStatus;
+  serverName: string | null;
+}) {
+  const took = deployment.duration_ms == null ? null : formatDuration(deployment.duration_ms);
+  const on = serverName ? ` on ${serverName}` : "";
+
+  let sentence: React.ReactNode;
+  switch (status) {
+    case "queued":
+      sentence = `Queued${on} · waiting for the agent`;
+      break;
+    case "building":
+      sentence = `Building${on}`;
+      break;
+    case "deploying":
+      sentence = `Switching the release${on}`;
+      break;
+    case "failed":
+      sentence = `Failed${took ? ` after ${took}` : ""} · the build log says where`;
+      break;
+    case "cancelled":
+      sentence = `Cancelled${took ? ` after ${took}` : ""} · the live release was not touched`;
+      break;
+    default:
+      sentence = `${deploymentStatusLabel(status)}${took ? ` in ${took}` : ""}${on}`;
+  }
+
+  return (
+    <StatusLine
+      tone={lineTone(deploymentStatusTone(status))}
+      pulse={status === "queued" || status === "building" || status === "deploying"}
+    >
+      {sentence}
+      {deployment.finished_at && (
+        <>
+          {" · finished "}
+          <RelativeTime value={deployment.finished_at} />
+        </>
+      )}
+    </StatusLine>
+  );
+}
+
+/* ------------------------------ phases ------------------------------ */
+
+type PhaseState = CheckItemState | "failed";
+
+const PHASE_ORDER: Record<DeploymentStatus, number> = {
+  queued: 0,
+  building: 1,
+  deploying: 2,
+  succeeded: 4,
+  rolled_back: 4,
+  failed: -1,
+  cancelled: -1,
+};
+
+/**
+ * The run as four phases. The record says how far a successful or
+ * in-flight run got; a failed or cancelled one does not say which phase
+ * stopped it, so the phases it cannot vouch for stay open and the last
+ * row names the outcome and points at the log.
+ */
+function DeploymentPhases({
+  deployment,
+  status,
+}: {
+  deployment: Deployment;
+  status: DeploymentStatus;
+}) {
+  const reached = PHASE_ORDER[status];
+  const stopped = reached < 0;
+  const started = deployment.started_at !== null;
+
+  const phase = (index: number): PhaseState => {
+    if (stopped) return index === 0 && started ? "done" : "todo";
+    if (reached > index) return "done";
+    if (reached === index) return "current";
+    return "todo";
+  };
+
+  const source =
+    deployment.source === "git"
+      ? `Fetch ${deployment.branch ?? "the branch"} and run the build in a new release directory.`
+      : "Unpack the uploaded build into a new release directory.";
+
+  const rows: { title: string; description: string; state: PhaseState }[] = [
+    {
+      title: "Queued",
+      description: "Handed to the host's agent as a job.",
+      state: phase(0),
+    },
+    { title: "Build", description: source, state: phase(1) },
+    {
+      title: "Release",
+      description: "Point current at the new release and reload the web server.",
+      state: phase(2),
+    },
+    stopped
+      ? {
+          title: status === "failed" ? "Failed" : "Cancelled",
+          description:
+            status === "failed"
+              ? "The run stopped before going live. The build log has the failing step."
+              : "Stopped on request. The previous release kept serving.",
+          state: "failed",
+        }
+      : {
+          title: status === "rolled_back" ? "Rolled back" : "Live",
+          description:
+            status === "rolled_back"
+              ? "This release served, then the site was pointed back at an earlier one."
+              : "The site serves this release.",
+          state: phase(3),
+        },
+  ];
+
+  return (
+    <CheckList divided="between" aria-label="Deployment phases">
+      {rows.map((row) => (
+        <CheckItem
+          key={row.title}
+          title={row.title}
+          description={row.description}
+          state={row.state === "failed" ? "current" : row.state}
+          icon={row.state === "failed" ? X : undefined}
+          className={
+            row.state === "failed"
+              ? "py-2.5 [&>span:first-child]:border-[var(--kn-danger)] [&>span:first-child]:text-[var(--kn-danger)]"
+              : "py-2.5"
+          }
+        />
+      ))}
+    </CheckList>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+
 function CommitCard({ deployment }: { deployment: Deployment }) {
   if (!deployment.commit_sha && !deployment.commit_message) {
     return (
-      <SectionCard title="Revision" icon={GitBranch} headingLevel={3}>
+      <SectionCard index={1} title="Revision" headingLevel={3}>
         <p className="text-[var(--kn-text-2)]">
           This release came from an uploaded build, so there is no revision to attribute it to.
         </p>
@@ -341,8 +520,8 @@ function CommitCard({ deployment }: { deployment: Deployment }) {
 
   return (
     <SectionCard
+      index={1}
       title="Revision"
-      icon={GitBranch}
       headingLevel={3}
       actions={
         deployment.commit_sha ? (

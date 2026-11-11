@@ -139,6 +139,13 @@ export const user = z.object({
    * tell a locked account from a working one, or offer to unlock it.
    */
   locked_until: isoDate.nullable(),
+  /**
+   * Who the account is (KD-039). Anything but `operator` is a scoped
+   * account whose roles are ignored. Optional so a payload from before
+   * the field existed still parses.
+   */
+  audience: z.enum(["operator", "reseller", "client"]).default("operator"),
+  reseller_id: uuid.nullable().default(null),
   created_at: isoDate,
   updated_at: isoDate,
 });

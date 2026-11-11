@@ -54,7 +54,9 @@ export async function eventRoutes(app: FastifyInstance): Promise<void> {
     // suspended laptop or a NAT timeout is a subscriber that never leaves.
     req.raw.socket.setKeepAlive(true, 30_000);
 
-    const topicSet = new Set(topics);
+    // A reseller or client gets a quiet stream: the feed is fleet-wide
+    // and has no notion of who owns what (KD-039).
+    const topicSet = new Set(principal.scoped ? [] : topics);
     const write = (payload: {
       id: string;
       topic: string;
