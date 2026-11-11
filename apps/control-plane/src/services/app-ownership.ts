@@ -1,5 +1,6 @@
-import type { Database } from "@kaname/db";
-import type { AppInstallResourceKind } from "@kaname/contract";
+import { eq, type Database } from "@kaname/db";
+import { resourceOwners, users } from "@kaname/db/schema";
+import type { AppInstallResourceKind, ResourceKind } from "@kaname/contract";
 
 /* ------------------------------------------------------------------ *
  * The ownership hook for the app installer.
@@ -14,14 +15,13 @@ import type { AppInstallResourceKind } from "@kaname/contract";
  * it once per resource, right after the row exists, with the kind, the
  * id and the user the install belongs to.
  *
- * It is deliberately a no-op today: scoped accounts (resellers and
- * clients) are not granted `apps.installs:*`, the app routes do not opt
- * in to ownership, and an operator's resources belong to the install
- * itself, which is recorded by having no owner row at all. When the
- * installer is opened to scoped accounts, this is the only function
- * that has to change — insert into `resource_owners` for the kinds
- * that table models ("site", "domain", "database"), for a creator who
- * is a scoped account.
+ * For a scoped account (a reseller or client, KD-039) it records the
+ * site, domain and database in `resource_owners`, so the installer
+ * owns what it installed and its quota counts it. The other kinds
+ * (db_user, certificate, app_install) are not modelled there: they are
+ * reached through the site or the install row, whose `created_by` the
+ * app routes filter on. An operator's resources belong to the install
+ * itself, recorded by having no owner row at all.
  * ------------------------------------------------------------------ */
 
 export interface OwnershipRecord {
@@ -36,9 +36,32 @@ export interface OwnershipRecord {
 
 export type OwnershipRecorder = (db: Database, record: OwnershipRecord) => Promise<void>;
 
-let recorder: OwnershipRecorder | null = null;
+const OWNABLE: Partial<Record<AppInstallResourceKind, ResourceKind>> = {
+  site: "site",
+  domain: "domain",
+  database: "database",
+};
 
-/** Installs the real implementation. Called once at boot by whoever owns the ownership model. */
+/** The real recorder: owner rows for a scoped creator, nothing for an operator. */
+export const scopedOwnershipRecorder: OwnershipRecorder = async (db, record) => {
+  const kind = OWNABLE[record.kind];
+  if (!kind || !record.userId) return;
+  const rows = await db
+    .select({ audience: users.audience })
+    .from(users)
+    .where(eq(users.id, record.userId))
+    .limit(1);
+  const audience = rows[0]?.audience;
+  if (audience !== "reseller" && audience !== "client") return;
+  await db
+    .insert(resourceOwners)
+    .values({ kind, resourceId: record.resourceId, ownerId: record.userId, assignedBy: record.userId })
+    .onConflictDoNothing();
+};
+
+let recorder: OwnershipRecorder | null = scopedOwnershipRecorder;
+
+/** Replaces the recorder (tests). The default is `scopedOwnershipRecorder`. */
 export function setOwnershipRecorder(next: OwnershipRecorder | null): void {
   recorder = next;
 }

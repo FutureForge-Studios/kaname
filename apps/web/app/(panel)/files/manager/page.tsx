@@ -718,7 +718,7 @@ export default function FileManagerPage() {
         <div className="flex flex-wrap items-center gap-3">
           <ServerPicker selection={selection} />
           {/* The location bar: a recessed mono well, like an address field. */}
-          <div className="flex h-8 min-w-0 flex-1 items-center gap-1 rounded-[var(--kn-r-md)] border border-[var(--kn-field-border)] bg-[var(--kn-field-bg)] pl-1 pr-1.5">
+          <div className="flex h-8 min-w-[16rem] flex-1 items-center gap-1 rounded-[var(--kn-r-md)] border border-[var(--kn-field-border)] bg-[var(--kn-field-bg)] pl-1 pr-1.5">
             <IconButton
               icon={ArrowUp}
               label="Parent directory"

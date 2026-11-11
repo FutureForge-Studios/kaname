@@ -301,6 +301,11 @@ export const SCOPED_ACCOUNT_PERMISSIONS = [
   "databases.postgres:read",
   "databases.postgres:write",
   "databases.postgres:delete",
+  // The installer opts in to ownership: installs are filtered to the
+  // creator's, and what an install creates is recorded as theirs.
+  "apps.installs:read",
+  "apps.installs:write",
+  "apps.installs:delete",
 ] as const satisfies readonly Permission[];
 
 /** The grants a scoped account holds: the fixed list, on exactly these servers. */
