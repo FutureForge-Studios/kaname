@@ -36,6 +36,7 @@ import { helpers, item } from "../http/plugin.js";
 import { combine, scopeFilter, visibleServerIds } from "./_shared.js";
 import { domainScope } from "./domains.js";
 import { latestSamples, rollup } from "./monitoring.js";
+import { loadOsUpdates } from "../services/os-updates.js";
 
 /* ------------------------------------------------------------------ *
  * Command Center.
@@ -519,6 +520,80 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         href: `/infrastructure/servers/${server.id}`,
         since: server.updatedAt.toISOString(),
       });
+    }
+
+    /* --------------------------- OS updates -------------------------- */
+
+    /*
+     * From the per-host cache only (services/os-updates.ts) — never a
+     * live package-manager run. Security updates are one aggregated
+     * row, and so are pending reboots: twelve rows saying "apt has
+     * something" would bury everything else on this list.
+     */
+    {
+      const cached = await loadOsUpdates(
+        req.ctx.db,
+        liveRows.map((s) => s.id),
+      );
+      const withSecurity = liveRows
+        .map((server) => ({ server, stored: cached.get(server.id) }))
+        .filter(({ stored }) => stored && stored.packages.some((p) => p.security));
+      const fleetHref = holds(req, "admin.settings:read")
+        ? "/administration/updates#system-updates"
+        : null;
+
+      if (withSecurity.length > 0) {
+        const count = withSecurity.reduce(
+          (n, { stored }) => n + stored!.packages.filter((p) => p.security).length,
+          0,
+        );
+        const only = withSecurity.length === 1 ? withSecurity[0]!.server : null;
+        attention.push({
+          kind: "os_updates",
+          severity: "warning",
+          title: only
+            ? `${only.name} has ${count} pending security ${count === 1 ? "update" : "updates"}`
+            : `${withSecurity.length} servers have pending security updates`,
+          detail: only
+            ? "Operating-system packages marked as security fixes."
+            : `${count} security ${count === 1 ? "update" : "updates"} across ${withSecurity.length} servers.`,
+          server_id: only?.id ?? null,
+          server_name: only?.name ?? null,
+          href:
+            only || !fleetHref
+              ? `/infrastructure/servers/${(only ?? withSecurity[0]!.server).id}?tab=updates`
+              : fleetHref,
+          since:
+            withSecurity
+              .map(({ stored }) => stored!.checked_at)
+              .filter((t): t is string => Boolean(t))
+              .sort()[0] ?? new Date().toISOString(),
+        });
+      }
+
+      const needsReboot = liveRows.filter((server) => cached.get(server.id)?.reboot_required);
+      if (needsReboot.length > 0) {
+        const only = needsReboot.length === 1 ? needsReboot[0]! : null;
+        attention.push({
+          kind: "os_updates",
+          severity: "info",
+          title: only
+            ? `${only.name} needs a reboot`
+            : `${needsReboot.length} servers need a reboot`,
+          detail: "The last package upgrade left a kernel or core library waiting for a restart.",
+          server_id: only?.id ?? null,
+          server_name: only?.name ?? null,
+          href:
+            only || !fleetHref
+              ? `/infrastructure/servers/${(only ?? needsReboot[0]!).id}?tab=updates`
+              : fleetHref,
+          since:
+            needsReboot
+              .map((server) => cached.get(server.id)!.reboot_required_since)
+              .filter((t): t is string => Boolean(t))
+              .sort()[0] ?? new Date().toISOString(),
+        });
+      }
     }
 
     /* ------------------------------ audit ---------------------------- */

@@ -191,7 +191,7 @@ export function UninstallDialog({
   }
   const gone = [
     "the website and its configuration",
-    "the app's files",
+    install.app_port !== null ? "its containers, their network and their data" : "the app's files",
     install.database_id ? "its database and database user" : null,
     install.certificate_id ? "its HTTPS certificate" : null,
   ].filter(Boolean);

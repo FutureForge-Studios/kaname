@@ -67,6 +67,13 @@ const MARKS: Record<string, React.ReactNode> = {
       <path d="M16 16.5v15M32 21.5c0 7-16 5-16 10" />
     </>
   ),
+  // Rising bars on an axis: analytics.
+  plausible: (
+    <>
+      <path d="M10 38h28" />
+      <path d="M15 38V28M22 38V22M29 38V25M36 38V14" />
+    </>
+  ),
   // A server unit with an envelope in front of it: a mail server you host.
   "yunori-mail": (
     <>
