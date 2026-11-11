@@ -448,7 +448,7 @@ function DataTableInner<T>(
     <div
       ref={ref}
       className={cn(
-        "flex min-w-0 flex-col overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)]",
+        "flex min-w-0 flex-col overflow-hidden rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)] shadow-[var(--kn-shadow-sm)]",
         className,
       )}
       {...props}
@@ -581,7 +581,7 @@ function DataTableInner<T>(
                     }
                     style={style}
                     className={cn(
-                      "z-20 h-8 border-b border-[var(--kn-border)] bg-[var(--kn-surface)] font-medium text-xs text-[var(--kn-text-3)]",
+                      "kn-label-sm z-20 h-8 border-b border-[var(--kn-border)] bg-[var(--kn-surface)] tracking-[0.1em] text-[var(--kn-text-3)]",
                       pad,
                       variant(ALIGN, align, "left"),
                       (stickyHeader || left !== undefined || right !== undefined) && "sticky",
@@ -596,7 +596,7 @@ function DataTableInner<T>(
                         type="button"
                         onClick={() => cycleSort(col.id)}
                         className={cn(
-                          "-mx-1 inline-flex w-[calc(100%+8px)] items-center gap-1 rounded-[var(--kn-r-xs)] px-1 py-0.5",
+                          "-mx-1 inline-flex w-[calc(100%+8px)] items-center gap-1 rounded-[var(--kn-r-xs)] px-1 py-0.5 uppercase tracking-[inherit]",
                           "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
                           "hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]",
                           active && "text-[var(--kn-text)]",
@@ -804,7 +804,7 @@ function DataTableInner<T>(
       </div>
 
       {total !== undefined && (
-        <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-t border-[var(--kn-border)] px-3 text-xs text-[var(--kn-text-2)]">
+        <div className="kn-mono flex h-9 shrink-0 items-center justify-between gap-3 border-t border-[var(--kn-border)] px-3 text-xs text-[var(--kn-text-3)]">
           <span className="tabular-nums">
             {groupThousands(rangeFrom)}–{groupThousands(rangeTo)} of {groupThousands(total)}
           </span>

@@ -167,8 +167,8 @@ export const Toast = React.forwardRef<HTMLDivElement, ToastProps>(function Toast
         pausedRef.current = false;
       }}
       className={cn(
-        "relative overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)]",
-        "bg-[var(--kn-surface-2)] p-3 text-base shadow-[var(--kn-shadow-md)]",
+        "relative overflow-hidden rounded-[var(--kn-r-lg)] border border-[var(--kn-border-strong)]",
+        "bg-[var(--kn-surface-2)] px-3.5 py-3 text-base shadow-[var(--kn-shadow-md)]",
         "animate-[var(--animate-rise)]",
         className,
       )}

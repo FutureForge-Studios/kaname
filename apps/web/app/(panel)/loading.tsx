@@ -9,17 +9,17 @@ import { Skeleton } from "@kaname/ui";
 export default function PanelLoading() {
   return (
     <div className="flex min-h-0 flex-1 flex-col" aria-busy>
-      <div className="border-b border-[var(--kn-border)] px-6 py-4">
-        <Skeleton className="h-6 w-52" label="Loading page" />
-        <Skeleton className="mt-2 h-3 w-72" />
+      <div className="kn-crosshairs border-b border-[var(--kn-border)] px-6 pb-5 pt-6">
+        <Skeleton className="h-8 w-52" label="Loading page" />
+        <Skeleton className="mt-2.5 h-3 w-72" />
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
-        <div className="overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)]">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-5">
+        <div className="overflow-hidden rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)]">
           <div className="flex h-10 items-center gap-2 border-b border-[var(--kn-border)] px-2">
             <Skeleton className="h-7 w-48 rounded-[var(--kn-r-sm)]" />
             <Skeleton className="h-7 w-28 rounded-[var(--kn-r-sm)]" />
-            <Skeleton className="ml-auto h-7 w-7 rounded-[var(--kn-r-sm)]" />
+            <Skeleton className="ml-auto h-7 w-7 rounded-[var(--kn-r-pill)]" />
           </div>
           {[0, 1, 2, 3, 4, 5, 6, 7].map((row) => (
             <div

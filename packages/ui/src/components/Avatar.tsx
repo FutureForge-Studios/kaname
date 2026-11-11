@@ -16,10 +16,10 @@ import { cn, variant } from "../lib/cn.js";
 export type AvatarSize = "xs" | "sm" | "md" | "lg";
 
 const SIZES: Record<AvatarSize, string> = {
-  xs: "h-4 w-4 text-2xs rounded-[var(--kn-r-xs)]",
-  sm: "h-5 w-5 text-2xs rounded-[var(--kn-r-sm)]",
-  md: "h-6 w-6 text-xs rounded-[var(--kn-r-sm)]",
-  lg: "h-8 w-8 text-sm rounded-[var(--kn-r-md)]",
+  xs: "h-4 w-4 text-2xs rounded-[var(--kn-r-pill)]",
+  sm: "h-5 w-5 text-2xs rounded-[var(--kn-r-pill)]",
+  md: "h-6 w-6 text-xs rounded-[var(--kn-r-pill)]",
+  lg: "h-8 w-8 text-sm rounded-[var(--kn-r-pill)]",
 };
 
 const TONES = [

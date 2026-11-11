@@ -51,7 +51,7 @@ export const ErrorState = React.forwardRef<HTMLDivElement, ErrorStateProps>(func
       ref={ref}
       role="alert"
       className={cn(
-        "rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] p-4",
+        "rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)] p-4",
         className,
       )}
       {...props}
@@ -59,7 +59,7 @@ export const ErrorState = React.forwardRef<HTMLDivElement, ErrorStateProps>(func
       <div className="flex items-start gap-3">
         <span
           className={cn(
-            "mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--kn-r-sm)]",
+            "mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--kn-r-pill)]",
             HEAD_TONES[tone],
           )}
         >
@@ -165,7 +165,7 @@ export const CopyableCode = React.forwardRef<HTMLDivElement, CopyableCodeProps>(
         {...props}
       >
         {label && (
-          <div className="border-b border-[var(--kn-border)] px-2 py-1 text-xs text-[var(--kn-text-2)]">
+          <div className="kn-label-sm border-b border-[var(--kn-border)] px-2 py-1.5 text-[var(--kn-text-3)]">
             {label}
           </div>
         )}

@@ -78,12 +78,12 @@ export function fieldBox({
   fixedHeight = true,
 }: FieldBoxOptions = {}): string {
   return cn(
-    "relative flex w-full min-w-0 items-center border bg-[var(--kn-surface-2)] text-[var(--kn-text)]",
+    "relative flex w-full min-w-0 items-center border bg-[var(--kn-field-bg)] text-[var(--kn-text)]",
     "transition-[background-color,border-color,color,opacity] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
     "has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50",
     invalid
       ? "border-[var(--kn-danger)] hover:border-[var(--kn-danger)]"
-      : "border-[var(--kn-border)] hover:border-[var(--kn-border-strong)] has-[:disabled]:hover:border-[var(--kn-border)]",
+      : "border-[var(--kn-field-border)] hover:border-[var(--kn-line-control)] has-[:disabled]:hover:border-[var(--kn-field-border)]",
     variant(invalid ? FIELD_RING_INVALID : FIELD_RING, control, "input"),
     variant(FIELD_TEXT, size, "sm"),
     variant(FIELD_RADIUS, size, "sm"),

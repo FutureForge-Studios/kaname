@@ -91,8 +91,8 @@ function formatStamp(iso: string): string {
 export type TimeRangePickerSize = "xs" | "sm";
 
 const SEGMENT_SIZES: Record<TimeRangePickerSize, string> = {
-  xs: "h-5 px-1.5 text-2xs",
-  sm: "h-6 px-2 text-xs",
+  xs: "h-5 px-2 text-2xs",
+  sm: "h-6 px-2.5 text-2xs",
 };
 
 const FRAME_SIZES: Record<TimeRangePickerSize, string> = {
@@ -191,14 +191,14 @@ export const TimeRangePicker = React.forwardRef<HTMLDivElement, TimeRangePickerP
 
     const segmentClass = (selected: boolean) =>
       cn(
-        "inline-flex select-none items-center justify-center rounded-[var(--kn-r-xs)] font-medium",
+        "kn-mono inline-flex select-none items-center justify-center rounded-[var(--kn-r-pill)] font-medium uppercase tracking-[0.06em]",
         "transition-[background-color,color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]",
         "disabled:cursor-not-allowed disabled:opacity-50",
         variant(SEGMENT_SIZES, size, "sm"),
         selected
-          ? "bg-[var(--kn-surface-3)] text-[var(--kn-text)]"
-          : "text-[var(--kn-text-2)] hover:bg-[var(--kn-surface-2)] hover:text-[var(--kn-text)]",
+          ? "bg-[var(--kn-accent-soft-strong)] text-[var(--kn-text)]"
+          : "text-[var(--kn-text-3)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)]",
       );
 
     return (
@@ -208,7 +208,7 @@ export const TimeRangePicker = React.forwardRef<HTMLDivElement, TimeRangePickerP
         aria-label={label}
         onKeyDown={handleKeyDown}
         className={cn(
-          "inline-flex items-center gap-0.5 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-surface)] p-0.5",
+          "inline-flex items-center gap-0.5 rounded-[var(--kn-r-pill)] border border-[var(--kn-border-strong)] bg-transparent p-0.5",
           variant(FRAME_SIZES, size, "sm"),
           className,
         )}

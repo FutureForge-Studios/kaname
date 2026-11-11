@@ -164,7 +164,7 @@ export function Tooltip({
             style={style}
             className={cn(
               "pointer-events-none z-[70] max-w-64 text-sm text-[var(--kn-text)]",
-              "rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-surface-3)] px-2 py-1",
+              "rounded-[var(--kn-r-sm)] border border-[var(--kn-border-strong)] bg-[var(--kn-surface-2)] px-2 py-1",
               "shadow-[var(--kn-shadow-md)]",
               !reducedMotion && "animate-[var(--animate-fade-in)]",
               className,

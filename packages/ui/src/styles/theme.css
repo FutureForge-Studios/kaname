@@ -18,6 +18,8 @@
   --color-line: var(--kn-border);
   --color-line-strong: var(--kn-border-strong);
   --color-line-subtle: var(--kn-border-subtle);
+  --color-line-control: var(--kn-line-control);
+  --color-rail: var(--kn-rail);
 
   --color-fg: var(--kn-text);
   --color-muted: var(--kn-text-2);
@@ -46,6 +48,7 @@
   --radius-md: var(--kn-r-md);
   --radius-lg: var(--kn-r-lg);
   --radius-xl: var(--kn-r-xl);
+  --radius-pill: var(--kn-r-pill);
 
   --shadow-sm: var(--kn-shadow-sm);
   --shadow-md: var(--kn-shadow-md);
@@ -54,6 +57,11 @@
   --font-sans: var(--kn-font-sans);
   --font-mono: var(--kn-font-mono);
   --font-display: var(--kn-font-display);
+  --font-pixel: var(--kn-font-pixel);
+
+  --tracking-label: var(--kn-tracking-label);
+  --tracking-display: var(--kn-tracking-display);
+  --tracking-title: var(--kn-tracking-title);
 
   --text-2xs: 10px;
   --text-2xs--line-height: 14px;
@@ -71,6 +79,12 @@
   --text-xl--line-height: 28px;
   --text-2xl: 24px;
   --text-2xl--line-height: 32px;
+  --text-3xl: 28px;
+  --text-3xl--line-height: 32px;
+  --text-4xl: 40px;
+  --text-4xl--line-height: 42px;
+  --text-5xl: 56px;
+  --text-5xl--line-height: 56px;
 
   --animate-fade-in: kn-fade-in var(--kn-dur) var(--kn-ease);
   --animate-rise: kn-rise var(--kn-dur) var(--kn-ease);

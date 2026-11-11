@@ -31,7 +31,7 @@ import { useCommandPalette } from "./CommandPalette";
 import { JobActivityButton } from "./JobDrawer";
 
 /* ------------------------------------------------------------------ *
- * Topbar — 48px, and it never grows.
+ * Topbar — 52px, flat ink with a hairline, and it never grows.
  *
  * It carries only what has to be reachable from every page: where you
  * are, the way to get anywhere (the palette), what is running (jobs),
@@ -106,7 +106,7 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
   return (
     <header
       className={cn(
-        "flex h-[var(--kn-topbar-h)] shrink-0 items-center gap-2 kn-material border-b border-[var(--kn-border)] px-3",
+        "kn-material flex h-[var(--kn-topbar-h)] shrink-0 items-center gap-2 border-b border-[var(--kn-border)] pl-3 pr-3 lg:pl-6",
         className,
       )}
     >
@@ -125,15 +125,16 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
         onClick={() => palette.setOpen(true)}
         aria-label="Search and commands"
         className={cn(
-          "hidden h-7 min-w-0 items-center gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)]",
-          "bg-[var(--kn-surface)] pl-2 pr-1.5 text-[var(--kn-text-3)] outline-none sm:flex",
-          "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
-          "hover:border-[var(--kn-border-strong)] hover:text-[var(--kn-text-2)]",
+          "kn-label-sm hidden h-8 min-w-0 items-center gap-2.5 rounded-[var(--kn-r-sm)] border border-[var(--kn-border-strong)]",
+          "bg-transparent pl-2.5 pr-2 text-[var(--kn-text-3)] outline-none sm:flex",
+          "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
+          "hover:border-[var(--kn-line-control)] hover:text-[var(--kn-text)]",
+          "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
         )}
       >
-        <Search size={14} aria-hidden />
-        <span className="w-28 text-left md:w-40">Search</span>
-        <Kbd keys="mod+k" size="xs" />
+        <Search size={13} aria-hidden />
+        <span className="w-24 text-left md:w-36">Search</span>
+        <Kbd keys="mod+k" size="xs" className="tracking-normal" />
       </button>
 
       <IconButton
@@ -154,17 +155,18 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
             type="button"
             aria-label={`Account — ${identity}`}
             className={cn(
-              "inline-flex h-7 items-center gap-1.5 rounded-[var(--kn-r-sm)] px-1 outline-none",
-              "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
-              "hover:bg-[var(--kn-surface-2)]",
+              "inline-flex h-8 w-8 items-center justify-center rounded-[var(--kn-r-pill)] outline-none",
+              "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
+              "hover:bg-[var(--kn-neutral-soft)]",
+              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
             )}
           >
-            <Avatar name={identity} size="sm" />
+            <Avatar name={identity} size="md" />
           </button>
         }
       >
-        <MenuLabel>
-          <span className="block truncate text-[var(--kn-text)]">{identity}</span>
+        <MenuLabel className="font-[family-name:var(--kn-font-sans)] normal-case tracking-normal">
+          <span className="block truncate text-base text-[var(--kn-text)]">{identity}</span>
           {user?.email && (
             <span className="kn-mono block truncate text-[var(--kn-text-3)]">{user.email}</span>
           )}

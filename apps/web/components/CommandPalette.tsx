@@ -371,7 +371,7 @@ function CommandPalette({ open, onOpenChange, seed }: CommandPaletteProps) {
       label="Command palette"
       className="mt-[10vh] max-w-2xl self-start"
     >
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-[var(--kn-border)] px-3">
+      <div className="flex h-12 shrink-0 items-center gap-3 border-b border-[var(--kn-border)] px-4">
         <Search size={14} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
         <input
           data-autofocus=""
@@ -406,7 +406,7 @@ function CommandPalette({ open, onOpenChange, seed }: CommandPaletteProps) {
         )}
 
         {!search.error && items.length === 0 && (
-          <p className="px-3 py-6 text-center text-[var(--kn-text-2)]">
+          <p className="px-4 py-8 text-center text-[var(--kn-text-2)]">
             {debounced.length === 0
               ? "Type to search the fleet."
               : `Nothing matches “${debounced}”.`}
@@ -415,7 +415,7 @@ function CommandPalette({ open, onOpenChange, seed }: CommandPaletteProps) {
 
         {groups.map((group) => (
           <div key={group.label} role="group" aria-label={group.label}>
-            <div className="px-3 pb-1 pt-2 text-2xs font-medium uppercase tracking-wider text-[var(--kn-text-3)]">
+            <div className="kn-label-sm px-4 pb-1.5 pt-3 text-[var(--kn-text-3)]">
               {group.label}
             </div>
             {group.items.map(({ item, index }) => (
@@ -431,7 +431,7 @@ function CommandPalette({ open, onOpenChange, seed }: CommandPaletteProps) {
         ))}
       </div>
 
-      <div className="flex h-8 shrink-0 items-center gap-3 border-t border-[var(--kn-border)] px-3 text-xs text-[var(--kn-text-3)]">
+      <div className="kn-label-sm flex h-9 shrink-0 items-center gap-4 border-t border-[var(--kn-border)] px-4 tracking-[0.08em] text-[var(--kn-text-3)]">
         <span className="inline-flex items-center gap-1">
           <Kbd keys="up" size="xs" />
           <Kbd keys="down" size="xs" />
@@ -477,9 +477,11 @@ function PaletteRow({ id, item, active, onHover }: PaletteRowProps) {
       onMouseMove={onHover}
       onClick={item.run}
       className={cn(
-        "flex h-9 cursor-pointer items-center gap-2.5 px-3",
-        "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
-        active ? "bg-[var(--kn-accent-soft)]" : "bg-transparent",
+        "relative flex h-9 cursor-pointer items-center gap-3 px-4",
+        "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
+        active
+          ? "bg-[var(--kn-neutral-soft)] shadow-[inset_2px_0_0_var(--kn-accent-500)]"
+          : "bg-transparent",
       )}
     >
       <Icon
@@ -497,7 +499,7 @@ function PaletteRow({ id, item, active, onHover }: PaletteRowProps) {
         </span>
       )}
       <span className="ml-auto flex shrink-0 items-center gap-2">
-        {item.meta && <span className="text-xs text-[var(--kn-text-3)]">{item.meta}</span>}
+        {item.meta && <span className="kn-label-sm tracking-[0.08em] text-[var(--kn-text-3)]">{item.meta}</span>}
         {item.kbd && <Kbd keys={item.kbd} size="xs" />}
         {active && <ArrowRight size={12} className="text-[var(--kn-accent-400)]" aria-hidden />}
       </span>

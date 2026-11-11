@@ -14,8 +14,11 @@ import { Topbar } from "./Topbar";
 /* ------------------------------------------------------------------ *
  * AppShell — the frame every authenticated page renders inside.
  *
- * Desktop-first: a fixed 232px rail that collapses to 56px, a 48px
- * topbar, and one scroll container for the page body. Below 1024px the
+ * Desktop-first: a fixed 240px rail that collapses to 56px, a 52px
+ * topbar, and one scroll container for the page body. The body is the
+ * ffstudios canvas (`.kn-canvas`): the faint blueprint grid plus two
+ * vertical frame rails half a gutter in from each edge, which the page
+ * headers' crosshair marks register against. Below 1024px the
  * rail becomes a sheet, because a 232px column on a tablet costs a
  * quarter of a dense table's width for navigation that is not being
  * read.
@@ -72,7 +75,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!signedIn) {
     return (
-      <div className="flex h-dvh items-center justify-center bg-[var(--kn-bg)] px-4">
+      <div className="kn-grid flex h-dvh items-center justify-center bg-[var(--kn-bg)] px-4">
         {unreachable ? (
           <div className="w-full max-w-md">
             <PageError error={error} onRetry={refresh} context="Session" />
@@ -92,7 +95,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-dvh min-h-0 w-full overflow-hidden bg-[var(--kn-bg)]">
       <a href="#kn-main" className="kn-skip-link">
-        <span className="inline-flex h-8 items-center rounded-[var(--kn-r-md)] border border-[var(--kn-accent-500)] bg-[var(--kn-surface)] px-3 text-[var(--kn-text)]">
+        <span className="inline-flex h-8 items-center rounded-[var(--kn-r-pill)] border border-[var(--kn-accent-500)] bg-[var(--kn-surface)] px-4 text-[var(--kn-text)]">
           Skip to content
         </span>
       </a>
@@ -115,7 +118,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <Topbar onOpenNav={() => setNavOpen(true)} />
-        <main id="kn-main" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto outline-none">
+        <main id="kn-main" tabIndex={-1} className="kn-canvas flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto outline-none">
           {children}
         </main>
       </div>

@@ -143,8 +143,8 @@ export const Kbd = React.forwardRef<HTMLElement, KbdProps>(function Kbd(
   const apple = useApplePlatform();
 
   const chipClass = cn(
-    "inline-flex items-center justify-center border border-[var(--kn-border)]",
-    "rounded-[var(--kn-r-xs)] bg-[var(--kn-surface-2)] font-medium text-[var(--kn-text-2)]",
+    "inline-flex items-center justify-center border border-[var(--kn-border-strong)]",
+    "rounded-[var(--kn-r-xs)] bg-transparent font-medium text-[var(--kn-text-3)]",
     variant(KBD_SIZES, size, "sm"),
   );
 

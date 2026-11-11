@@ -30,7 +30,7 @@ const SUBMENU_CLOSE_DELAY = 150;
 
 const PANEL_CLASS = [
   "z-[70] min-w-48 overflow-y-auto p-1 text-base text-[var(--kn-text)] outline-none",
-  "rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)]",
+  "rounded-[var(--kn-r-lg)] border border-[var(--kn-border-strong)] bg-[var(--kn-surface-2)]",
   "shadow-[var(--kn-shadow-md)] animate-[var(--animate-scale-in)]",
 ].join(" ");
 
@@ -546,7 +546,7 @@ export const MenuLabel = React.forwardRef<HTMLDivElement, MenuLabelProps>(functi
     <div
       ref={ref}
       className={cn(
-        "px-2 py-1 text-2xs font-medium uppercase tracking-wide text-[var(--kn-text-3)]",
+        "kn-label-sm px-2 py-1.5 text-[var(--kn-text-3)]",
         className,
       )}
       {...props}

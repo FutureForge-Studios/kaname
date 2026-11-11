@@ -49,6 +49,9 @@ export * from "./components/PropertyList.js";
 export * from "./components/Primitives.js";
 export * from "./components/MetricTile.js";
 
+/* --------------------- editorial (ffstudios) ----------------------- */
+export * from "./components/Editorial.js";
+
 /* ------------------------------ data ------------------------------- */
 export * from "./components/DataTable.js";
 export * from "./components/Charts.js";
