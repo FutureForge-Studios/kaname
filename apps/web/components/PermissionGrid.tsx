@@ -311,9 +311,7 @@ export function PermissionGrid({
                 {ACTION_LABELS[action]}
               </span>
             ))}
-            {perPermissionScope && (
-              <span>Scope</span>
-            )}
+            {perPermissionScope && <span>Scope</span>}
           </div>
 
           {tree.length === 0 && (

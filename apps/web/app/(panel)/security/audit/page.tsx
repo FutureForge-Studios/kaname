@@ -155,7 +155,9 @@ export default function AuditPage() {
         cell: (row) => (
           <span className="flex min-w-0 items-center gap-2">
             <MonoText truncate>{row.target_label}</MonoText>
-            <span className="kn-mono shrink-0 text-xs text-[var(--kn-text-3)]">{row.target_type}</span>
+            <span className="kn-mono shrink-0 text-xs text-[var(--kn-text-3)]">
+              {row.target_type}
+            </span>
           </span>
         ),
       },
@@ -556,8 +558,8 @@ function EventDrawer({
 
             <section>
               <MonoLabel as="h3" size="xs" tone="muted" className="mb-2">
-                  Chain
-                </MonoLabel>
+                Chain
+              </MonoLabel>
               <PropertyList dense labelWidth="sm">
                 <PropertyRow label="Previous" mono copyValue={event.prev_hash}>
                   <TruncatedText value={event.prev_hash} max={40} />
@@ -588,8 +590,8 @@ function DiffView({ diff }: { diff: AuditEvent["diff"] }) {
     return (
       <section>
         <MonoLabel as="h3" size="xs" tone="muted" className="mb-2">
-                  Change
-                </MonoLabel>
+          Change
+        </MonoLabel>
         <p className="text-[var(--kn-text-2)]">
           This action recorded no field-level diff. Read-only and fan-out actions carry their detail
           in metadata instead.
@@ -605,8 +607,8 @@ function DiffView({ diff }: { diff: AuditEvent["diff"] }) {
   return (
     <section>
       <MonoLabel as="h3" size="xs" tone="muted" className="mb-2">
-                  Change
-                </MonoLabel>
+        Change
+      </MonoLabel>
       <div className="overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)]">
         {keys.map((key) => {
           const from = render(before[key]);

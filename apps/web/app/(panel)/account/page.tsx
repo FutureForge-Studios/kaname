@@ -214,10 +214,14 @@ function PasswordCard() {
   });
 
   return (
-    <AccountSection id="password" title="Password" caption="The first factor, and the one you can change here.">
+    <AccountSection
+      id="password"
+      title="Password"
+      caption="The first factor, and the one you can change here."
+    >
       <p className="mb-4 text-sm text-[var(--kn-text-2)]">
-        Changing it ends every session, including this one — the panel hands this tab a fresh
-        cookie so you stay signed in here.
+        Changing it ends every session, including this one — the panel hands this tab a fresh cookie
+        so you stay signed in here.
       </p>
       <form
         className="flex flex-col gap-4"

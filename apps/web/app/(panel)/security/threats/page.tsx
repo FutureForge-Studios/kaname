@@ -947,7 +947,12 @@ function BanAddressDialog({ open, defaultServerId, onClose, onQueued }: BanAddre
     setError(null);
   }, [open, defaultServerId]);
 
-  const ban = useMutationWithJob<{ target: string; serverId: string | null; reason: string; duration: number }>({
+  const ban = useMutationWithJob<{
+    target: string;
+    serverId: string | null;
+    reason: string;
+    duration: number;
+  }>({
     mutationFn: ({ target, serverId, reason: why, duration: seconds }) =>
       api.post<{ job: Job | null; jobs: Job[]; correlation_id: string }>(
         `/threats/${encodeURIComponent(target)}/ban`,
@@ -1019,7 +1024,11 @@ function BanAddressDialog({ open, defaultServerId, onClose, onQueued }: BanAddre
               />
             </FormField>
             <FormField label="Where">
-              <Select value={where} onChange={(event) => setWhere(event.target.value)} options={options} />
+              <Select
+                value={where}
+                onChange={(event) => setWhere(event.target.value)}
+                options={options}
+              />
             </FormField>
             <FormField
               label="Reason"
@@ -1027,7 +1036,11 @@ function BanAddressDialog({ open, defaultServerId, onClose, onQueued }: BanAddre
               error={reason.length > 0 && reasonMissing ? "a reason is required" : undefined}
               required
             >
-              <Input value={reason} onChange={(event) => setReason(event.target.value)} maxLength={200} />
+              <Input
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                maxLength={200}
+              />
             </FormField>
             <FormField label="Duration">
               <Select
@@ -1205,11 +1218,7 @@ function BansView() {
           description={`${lifting?.server_name ?? "Every server"} stops blocking it once the job has run.`}
         />
         <DialogFooter>
-          <Button
-            variant="secondary"
-            disabled={unban.isPending}
-            onClick={() => setLifting(null)}
-          >
+          <Button variant="secondary" disabled={unban.isPending} onClick={() => setLifting(null)}>
             Cancel
           </Button>
           <Button

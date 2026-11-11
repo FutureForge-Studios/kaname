@@ -1,13 +1,7 @@
 "use client";
 
 import * as React from "react";
-import {
-  Plus,
-  Save,
-  Send,
-  Trash2,
-  TriangleAlert,
-} from "lucide-react";
+import { Plus, Save, Send, Trash2, TriangleAlert } from "lucide-react";
 import {
   DEFAULT_NOTIFICATION_EVENTS,
   NOTIFICATION_EVENT_LABELS,

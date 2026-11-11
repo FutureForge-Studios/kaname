@@ -241,7 +241,9 @@ export default function ProcessesPage() {
   return (
     <>
       <ResourcePage<ProcessRow>
+        eyebrow="Infrastructure"
         title="Processes"
+        lede="The live process table of one host. Never cached: every read goes to the agent."
         subtitle={
           server
             ? `Read live from ${server.hostname}${auto ? `, refreshing every ${PROCESS_REFRESH_MS / 1000}s` : ""}`
@@ -256,6 +258,7 @@ export default function ProcessesPage() {
         searchPlaceholder="Search command, arguments or user"
         filters={
           <>
+            <ServerPicker selection={selection} />
             <Select
               size="sm"
               aria-label="Process view"
@@ -295,11 +298,7 @@ export default function ProcessesPage() {
             : "Processes are read live from one host at a time. Pick a server to start."
         }
         errorContext="Processes"
-      >
-        <div className="flex flex-wrap items-center gap-3">
-          <ServerPicker selection={selection} />
-        </div>
-      </ResourcePage>
+      ></ResourcePage>
 
       <ConfirmDialog
         open={pending !== null}

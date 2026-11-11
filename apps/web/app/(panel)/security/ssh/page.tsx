@@ -3,15 +3,7 @@
 import * as React from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
-import {
-  KeyRound,
-  Plus,
-  RefreshCw,
-  SlidersHorizontal,
-  Terminal,
-  Trash2,
-  Zap,
-} from "lucide-react";
+import { KeyRound, Plus, RefreshCw, SlidersHorizontal, Terminal, Trash2, Zap } from "lucide-react";
 import {
   identifier,
   openSshPublicKey,
@@ -665,8 +657,7 @@ function AddKeyDialog({ open, pending, onClose, onSubmit }: AddKeyDialogProps) {
     : posixUser.trim().length === 0
       ? "an account name is required"
       : (userCheck.error.issues[0]?.message ?? "not a valid account name");
-  const valid =
-    name.trim().length > 0 && !keyError && publicKey.trim().length > 0 && !userError;
+  const valid = name.trim().length > 0 && !keyError && publicKey.trim().length > 0 && !userError;
 
   return (
     <Dialog

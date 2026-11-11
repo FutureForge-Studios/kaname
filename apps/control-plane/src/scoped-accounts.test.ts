@@ -42,6 +42,7 @@ let bob = "";
 let otherReseller = "";
 
 let forgeId = "";
+let dbServerId = "";
 let resellerId = "";
 let aliceId = "";
 let bobId = "";
@@ -123,6 +124,8 @@ beforeAll(async () => {
 
   const [forge] = await handle.db.select().from(servers).where(eq(servers.name, "forge-01"));
   forgeId = forge!.id;
+  const [dbHost] = await handle.db.select().from(servers).where(eq(servers.name, "db-01"));
+  dbServerId = dbHost!.id;
   const [seedSite] = await handle.db.select().from(sites).where(eq(sites.serverId, forgeId));
   seedSiteId = seedSite!.id;
 
@@ -130,7 +133,7 @@ beforeAll(async () => {
   const created = await call(owner, "POST", "/resellers", {
     email: "reseller@scoped.test",
     name: "Northwind Hosting",
-    server_ids: [forgeId],
+    server_ids: [forgeId, dbServerId],
     quota: { max_sites: 2, max_domains: 10 },
     branding: {
       display_name: "Northwind",
@@ -239,7 +242,11 @@ describe("ownership filtering", () => {
       const res = await call(cookie, "GET", `/sites/${seedSiteId}`);
       expect(res.statusCode).toBe(404);
     }
-    const [seedDb] = await handle.db.select().from(dbDatabases).limit(1);
+    const [seedDb] = await handle.db
+      .select()
+      .from(dbDatabases)
+      .where(eq(dbDatabases.serverId, dbServerId))
+      .limit(1);
     expect((await call(alice, "GET", `/databases/${seedDb!.id}`)).statusCode).toBe(404);
     expect((await call(alice, "DELETE", `/databases/${seedDb!.id}`)).statusCode).toBe(404);
   });
@@ -249,7 +256,7 @@ describe("ownership filtering", () => {
     const [database] = await handle.db
       .select()
       .from(dbDatabases)
-      .where(eq(dbDatabases.serverId, forgeId))
+      .where(eq(dbDatabases.serverId, dbServerId))
       .limit(1);
     await handle.db.insert(resourceOwners).values([
       { kind: "mailbox", resourceId: box!.id, ownerId: aliceId },
@@ -258,7 +265,9 @@ describe("ownership filtering", () => {
 
     // The mailbox is hers, but its mail server is not one her reseller
     // was given, so the server scope still refuses it: both must hold.
-    expect(total(await call(alice, "GET", "/mailboxes"))).toBe(box!.serverId === forgeId ? 1 : 0);
+    expect(box!.serverId).not.toBe(forgeId);
+    expect(total(await call(alice, "GET", "/mailboxes"))).toBe(0);
+    expect((await call(alice, "GET", `/mailboxes/${box!.id}`)).statusCode).toBe(403);
 
     const dbs = await call(alice, "GET", "/databases");
     expect(data<any[]>(dbs).map((d) => d.id)).toEqual([database!.id]);
@@ -367,7 +376,7 @@ describe("operator-only routes stay operator-only", () => {
     "/deployments",
     "/ftp-accounts",
     "/backups/schedules",
-    "/security/audit",
+    "/audit",
     "/jobs",
     "/dashboard",
   ];
@@ -436,7 +445,8 @@ describe("operator-only routes stay operator-only", () => {
     expect(held).not.toContain("infra.servers:read");
     expect(held).not.toContain("admin.users:read");
     for (const p of session.permissions) {
-      expect(p.scope).toEqual({ kind: "servers", server_ids: [forgeId] });
+      expect(p.scope.kind).toBe("servers");
+      expect([...p.scope.server_ids].sort()).toEqual([forgeId, dbServerId].sort());
     }
     expect(session.user.audience).toBe("client");
   });
@@ -474,7 +484,7 @@ describe("quotas", () => {
     expect(me.quota.max_sites).toBe(1);
     expect(me.usage.sites).toBe(1);
     expect(me.branding).toMatchObject({ display_name: "Northwind", logo_text: "NW" });
-    expect(me.servers.map((s: any) => s.id)).toEqual([forgeId]);
+    expect(me.servers.map((s: any) => s.name)).toEqual(["db-01", "forge-01"]);
 
     const pool = data(await call(reseller, "GET", "/me"));
     expect(pool.audience).toBe("reseller");
@@ -578,7 +588,7 @@ describe("view mode preference", () => {
 
   it("changes nothing about what the API allows", async () => {
     await call(owner, "PUT", "/me/view-mode", { view_mode: "simplified" });
-    expect((await call(owner, "GET", "/security/audit")).statusCode).toBe(200);
+    expect((await call(owner, "GET", "/audit")).statusCode).toBe(200);
     await call(owner, "PUT", "/me/view-mode", { view_mode: "advanced" });
   });
 });
