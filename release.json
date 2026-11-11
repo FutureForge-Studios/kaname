@@ -4,5 +4,5 @@
   "security": false,
   "adds_config": [],
   "min_upgrade_from": null,
-  "summary": "The panel is redesigned in the FutureForge Studios language. New: Simplified and Advanced view modes, reseller and client accounts with owned resources, quotas and branding, and a one-click app installer (WordPress, DokuWiki). Migrations 0008 and 0009 are additive: 0008 adds users.view_mode, users.audience and users.parent_id with defaults plus the account_limits, reseller_branding and resource_owners tables; 0009 adds the app_installs table. Nothing is dropped or rewritten."
+  "summary": "Redesigned in the FutureForge Studios language. New: Simplified and Advanced view modes; reseller and client accounts with owned resources, quotas and branding; a one-click app installer (WordPress, DokuWiki) that also features Yunori Mail Server. Migrations 0008 and 0009 are additive: 0008 adds users.view_mode, audience and parent_id with defaults plus account_limits, reseller_branding and resource_owners; 0009 adds app_installs. Nothing is dropped."
 }
