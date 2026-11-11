@@ -7,6 +7,7 @@ import { buildServer } from "./server.js";
 import { Reconciler } from "./services/reconciler.js";
 import { AlertEvaluator } from "./services/alerts.js";
 import { BackupScheduler } from "./services/backup-scheduler.js";
+import { OsUpdateScheduler } from "./services/os-updates.js";
 import { registerJobHandlers } from "./jobs/handlers.js";
 import { bootstrap } from "./bootstrap.js";
 
@@ -65,6 +66,11 @@ async function main(): Promise<void> {
   const backupScheduler = new BackupScheduler(ctx);
   backupScheduler.start();
 
+  // Keeps each host's cached list of pending OS updates fresh (every
+  // 6h) and applies security-only upgrades where a server opted in.
+  const osUpdates = new OsUpdateScheduler(ctx);
+  osUpdates.start();
+
   const app = await buildServer(ctx);
   await app.listen({ port: config.PORT, host: config.HOST });
   log.info({ port: config.PORT }, "control plane listening");
@@ -92,6 +98,7 @@ async function main(): Promise<void> {
     reconciler.stop();
     alerts.stop();
     backupScheduler.stop();
+    osUpdates.stop();
     ctx.updates.stop();
     ctx.notifications.stop();
     // Jobs first, while their agent sockets are still up: a handler that

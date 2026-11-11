@@ -107,4 +107,5 @@ export const ATTENTION_ICONS: Record<AttentionKind, IconComponent> = {
   threat_spike: ShieldAlert,
   job_failed: AlertTriangle,
   update_available: PackageCheck,
+  os_updates: ShieldAlert,
 };

@@ -28,6 +28,7 @@ import { mailJobHandlers } from "./mail.js";
 import { websiteJobHandlers } from "./websites.js";
 import { appJobHandlers } from "./apps.js";
 import { banHandler, unbanHandler } from "./threats.js";
+import { recordUpgrade } from "../services/os-updates.js";
 import type { JobContext, JobHandler, JobWorker } from "./worker.js";
 
 /* ------------------------------------------------------------------ *
@@ -408,7 +409,15 @@ export function registerJobHandlers(worker: JobWorker): void {
   const handlers: Partial<Record<JobType, JobHandler>> = {
     /* system */
     "system.reboot": passthrough("system.reboot"),
-    "system.packages.upgrade": streaming("system.packages.upgrade"),
+    "system.packages.upgrade": async (ctx) => {
+      const serverId = requireServer(ctx);
+      const result = (await streaming("system.packages.upgrade")(ctx)) as MethodResult<"system.packages.upgrade">;
+      if (result.reboot_required) await ctx.log_("warn", "The host reports that a reboot is required.");
+      // The cached list is what the System updates tab shows; re-read it
+      // so the page says what is left, not what was there.
+      await recordUpgrade(ctx, serverId, result, { signal: ctx.signal });
+      return result;
+    },
     "system.sync": async (ctx) => {
       const serverId = requireServer(ctx);
       const info = await ctx.hub.call(serverId, "system.info", {}, { signal: ctx.signal });

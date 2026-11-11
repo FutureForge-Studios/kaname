@@ -396,6 +396,7 @@ export const commandCenterSummary = z.object({
         "threat_spike",
         "job_failed",
         "update_available",
+        "os_updates",
       ]),
       severity: alertSeverity,
       title: z.string(),

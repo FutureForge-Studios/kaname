@@ -29,6 +29,7 @@ import { searchRoutes } from "./search.js";
 import { dashboardRoutes } from "./dashboard.js";
 import { setupRoutes } from "./setup.js";
 import { updateRoutes } from "./updates.js";
+import { osUpdateRoutes } from "./os-updates.js";
 
 /* ------------------------------------------------------------------ *
  * /api/v1 — one module per nav section.
@@ -69,6 +70,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   await app.register(adminRoutes);
   await app.register(accountRoutes);
   await app.register(updateRoutes);
+  await app.register(osUpdateRoutes);
   await app.register(jobRoutes);
   await app.register(eventRoutes);
   await app.register(searchRoutes);
