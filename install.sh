@@ -549,8 +549,9 @@ fetch_release_agent() {
     die "could not download the release manifest from $KANAME_SOURCE_URL/versions.json."
   url="$(manifest_agent_field "$REQ_VERSION" "$manifest" url)"
   RELEASE_AGENT_SHA256="$(manifest_agent_field "$REQ_VERSION" "$manifest" sha256)"
-  [ -n "$url" ] && [ -n "$RELEASE_AGENT_SHA256" ] ||
+  if [ -z "$url" ] || [ -z "$RELEASE_AGENT_SHA256" ]; then
     die "the release manifest has no linux-$ARCH agent for $REQ_VERSION."
+  fi
   case "$url" in
     https://*) ;;
     *) die "the release manifest names a non-HTTPS agent URL ($url); refusing it." ;;
