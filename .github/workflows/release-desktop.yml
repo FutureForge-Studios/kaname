@@ -17,7 +17,15 @@
 # unsigned and the OS will warn on first launch:
 #   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
 #            APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
-#   Windows: (configure bundle.windows.certificateThumbprint in tauri.conf.json)
+#   Windows: WINDOWS_CERTIFICATE (base64 of a .pfx code-signing
+#            certificate) and WINDOWS_CERTIFICATE_PASSWORD. The
+#            certificate is imported into the runner's user store and
+#            its thumbprint handed to `tauri build --config`, so nothing
+#            signing-specific lives in tauri.conf.json.
+#            Note: OV/EV certificates issued since mid-2023 live on a
+#            hardware token or cloud HSM and cannot be exported as a
+#            .pfx. For those, use bundle.windows.signCommand (e.g. Azure
+#            Trusted Signing) instead of this step.
 # ==================================================================
 name: Release desktop
 
@@ -134,13 +142,46 @@ jobs:
             printf '%s<<%s\n%s\n%s\n' "$name" "$delim" "$value" "$delim" >>"$GITHUB_ENV"
           done
 
+      - name: Windows signing (if configured)
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) {
+            Write-Host "No WINDOWS_CERTIFICATE secret: building unsigned."
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "kaname-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          if (-not $cert) { throw "The certificate in WINDOWS_CERTIFICATE could not be imported." }
+
+          # Merged over tauri.conf.json for this build only.
+          $config = @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $cert.Thumbprint
+                digestAlgorithm = "sha256"
+                timestampUrl = "http://timestamp.digicert.com"
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+          $path = Join-Path $env:RUNNER_TEMP "tauri.signing.json"
+          Set-Content -Path $path -Value $config -Encoding utf8NoBOM
+          "SIGNING_ARGS=--config $path" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Signing with certificate $($cert.Subject) ($($cert.Thumbprint))."
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
-          args: ${{ matrix.args }}
+          args: ${{ matrix.args }} ${{ env.SIGNING_ARGS }}
           tagName: ${{ github.ref_name }}
           releaseName: Kaname Desktop ${{ needs.version.outputs.version }}
           releaseBody: |
