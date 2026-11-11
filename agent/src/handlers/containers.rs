@@ -6,7 +6,7 @@ use crate::providers::managed::{self, MANAGED_APPS_ROOT};
 use crate::providers::{
     ContainerExecParams, ContainerIdParams, ContainerListParams, ContainerListResult, ContainerLogsParams,
     ContainerPruneParams, ContainerRemoveParams, ContainerStopParams, ImageListResult, ImagePullParams,
-    LogRecordsResult, ManagedAppRemoveParams, ManagedContainerSpec, ManagedInstallParams, OK,
+    LogRecordsResult, ManagedAppRemoveParams, ManagedContainerSpec, ManagedInstallParams, ManagedTaskParams, OK,
 };
 use crate::registry::{Registry, Request, StreamMode};
 use crate::wire::WireError;
@@ -186,6 +186,22 @@ pub(super) fn register(r: &mut Registry, h: &Arc<Handlers>) {
                 mount.source = h.paths.check(&mount.source)?;
             }
             reply(h.provider.containers().create_managed(&ctx, spec).await?)
+        },
+    ));
+
+    r.register(method(
+        "container.task.run",
+        StreamMode::None,
+        NEEDS_DOCKER,
+        h,
+        |h, ctx, req| async move {
+            let mut p: ManagedTaskParams = decode(&req)?;
+            p.timeout_seconds = or_default(p.timeout_seconds, 600);
+            managed::validate_task(&mut p.spec, p.timeout_seconds, MANAGED_APPS_ROOT)?;
+            for mount in &mut p.spec.mounts {
+                mount.source = h.paths.check(&mount.source)?;
+            }
+            reply(h.provider.containers().run_task(&ctx, p).await?)
         },
     ));
 
