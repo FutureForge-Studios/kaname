@@ -251,6 +251,95 @@ export const updateRunListQuery = listQuery.extend({
 });
 
 /* ------------------------------------------------------------------ *
+ * Operating-system packages
+ *
+ * Not Kaname's own releases: the host's apt/dnf/apk/pacman updates, as
+ * the agent reports them through `system.packages.list`. The control
+ * plane caches the last answer per server (KD-047) so a page never fans
+ * a package-manager run across the fleet; a refresh is explicit, and a
+ * background pass keeps the cache from going stale.
+ * ------------------------------------------------------------------ */
+
+export const osPackageUpdate = z.object({
+  name: z.string(),
+  installed_version: z.string(),
+  available_version: z.string(),
+  security: z.boolean(),
+});
+export type OsPackageUpdate = z.infer<typeof osPackageUpdate>;
+
+/**
+ * - `unknown`: never checked (or the host has not been reachable).
+ * - `current`: checked, nothing to install.
+ * - `pending`: checked, updates waiting.
+ * - `unsupported`: the host has no package manager the agent drives.
+ * - `error`: the last check failed; `error` says why, and the previous
+ *   package list (if any) is kept.
+ */
+export const osUpdateState = z.enum(["unknown", "current", "pending", "unsupported", "error"]);
+export type OsUpdateState = z.infer<typeof osUpdateState>;
+
+export const serverOsUpdatesSummary = z.object({
+  server_id: uuid,
+  server_name: z.string(),
+  hostname: z.string(),
+  connection: z.string(),
+  simulated: z.boolean(),
+  state: osUpdateState,
+  checked_at: isoDate.nullable(),
+  error: z.string().nullable(),
+  total: z.number().int(),
+  security: z.number().int(),
+  /**
+   * Only known after an upgrade: the agent reports it from that run
+   * (`/var/run/reboot-required` and friends), so it is a fact about the
+   * last upgrade rather than a live probe. Cleared when the host
+   * reconnects after a reboot.
+   */
+  reboot_required: z.boolean(),
+  reboot_required_since: isoDate.nullable(),
+  last_upgrade_at: isoDate.nullable(),
+  /** Apply security-only upgrades automatically, at most once a day. */
+  auto_security: z.boolean(),
+});
+export type ServerOsUpdatesSummary = z.infer<typeof serverOsUpdatesSummary>;
+
+export const serverOsUpdates = serverOsUpdatesSummary.extend({
+  packages: z.array(osPackageUpdate),
+});
+export type ServerOsUpdates = z.infer<typeof serverOsUpdates>;
+
+export const osUpdatesFleet = z.object({
+  totals: z.object({
+    servers: z.number().int(),
+    servers_with_updates: z.number().int(),
+    servers_with_security_updates: z.number().int(),
+    packages: z.number().int(),
+    security: z.number().int(),
+    reboot_required: z.number().int(),
+    unchecked: z.number().int(),
+  }),
+  servers: z.array(serverOsUpdatesSummary),
+});
+export type OsUpdatesFleet = z.infer<typeof osUpdatesFleet>;
+
+export const upgradeOsPackagesInput = z.object({
+  /** Only packages the package manager marks as security fixes. */
+  security_only: z.boolean().default(false),
+});
+export type UpgradeOsPackagesInput = z.infer<typeof upgradeOsPackagesInput>;
+
+export const bulkUpgradeOsPackagesInput = upgradeOsPackagesInput.extend({
+  server_ids: z.array(uuid).min(1).max(500),
+});
+export type BulkUpgradeOsPackagesInput = z.infer<typeof bulkUpgradeOsPackagesInput>;
+
+export const osUpdateSettingsInput = z.object({
+  auto_security: z.boolean(),
+});
+export type OsUpdateSettingsInput = z.infer<typeof osUpdateSettingsInput>;
+
+/* ------------------------------------------------------------------ *
  * Version arithmetic
  *
  * Shared so the control plane's decision to apply and the UI's
