@@ -59,8 +59,12 @@ interface DesktopError {
                               // "not_signed_in", "terminal_needs_user"
   message: string;
   status: number | null;      // HTTP status when it came from the panel
-  remediation: { summary: string; actions: { label: string; href?: string; action?: string }[] } | null;
+  remediation: { summary: string; actions: { label: string; href?: string; action?: string; copy?: string }[] } | null;
+  fields?: Record<string, string>; // per-field messages from the panel's `validation_failed`; omitted when empty
 }
+// Further local codes: "storage" (connections.json unreadable/unwritable), "invalid_response"
+// (non-JSON body, or a login with no session cookie). When the panel's error body cannot be read
+// the code is derived from the HTTP status ("unavailable", "rate_limited", ...).
 
 type LoginResult =
   | { status: "ok"; session: unknown }                 // body of GET /api/v1/auth/session
@@ -95,7 +99,7 @@ type TerminalEvent =
 | `connections_list` | — | `Connection[]` |
 | `connection_save` | `{ input: ConnectionInput }` | `Connection` |
 | `connection_delete` | `{ id }` | `null` (also deletes its keyring entries and closes its terminals) |
-| `connection_test` | `{ baseUrl, acceptInvalidCerts }` | `{ reachable: boolean, version: string \| null, setup_required: boolean }` — uses `GET /api/v1/setup/state` (or the health endpoint the control plane exposes) |
+| `connection_test` | `{ baseUrl, acceptInvalidCerts }` | `{ reachable: boolean, version: string \| null, setup_required: boolean }` — `setup_required` is `needs_onboarding` from `GET /api/v1/setup/state`, `version` comes from `GET /health`. Resolves `reachable: false` only when nothing answered; **rejects** with `tls` on a certificate problem and `not_found` when the address answers but is not a Kaname panel |
 
 ### Auth
 
@@ -151,3 +155,18 @@ with `{ data: { job } }` — follow them with `GET /jobs/:id` polling.
 - `GET /processes?server_id=`
 - `GET /jobs?…`, `GET /jobs/:id`, `POST /jobs/:id/cancel`
 - `GET /monitoring/overview`
+
+## Behaviour notes (as implemented)
+
+- `auth_login` with `remember: false` keeps the session in memory only; it is gone when the app quits.
+- A successful login answers `{ status: "ok", user }` from the panel, so Rust follows up with
+  `GET /auth/session` to fill `session`.
+- Any response that rotates the session cookie replaces the stored token; a cleared cookie is forgotten.
+- `auth_logout` on an `api_key` connection deletes the stored key. A 401 on an `api_key`
+  connection does **not** delete it — only session tokens are cleared.
+- Changing a connection's `base_url` drops its stored credentials and closes its terminals.
+- Redirects are never followed, so a credential cannot leave the panel's origin.
+- `terminal_close` on an already-closed terminal succeeds. A `TerminalEvent` of kind `error` is
+  informational; only `closed` ends the session.
+- Links open in the system browser through `tauri-plugin-opener`:
+  `invoke("plugin:opener|open_url", { url })`.
