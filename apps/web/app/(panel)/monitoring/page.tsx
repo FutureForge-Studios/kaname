@@ -515,7 +515,7 @@ function FleetRollup({ fleet }: { fleet: MonitoringOverview["fleet"] }) {
       <MetricTile
         size="sm"
         icon={Cpu}
-        label="CPU, fleet average"
+        label="CPU average"
         value={formatPercent(fleet.cpu_percent_avg)}
         tone={usageTone(fleet.cpu_percent_avg)}
       />

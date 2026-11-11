@@ -37,7 +37,12 @@ import {
   type Tone,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
-import { ResourcePage, useOpenFromQuery, useResourceListState } from "@/components/ResourcePage";
+import {
+  LinkButton,
+  ResourcePage,
+  useOpenFromQuery,
+  useResourceListState,
+} from "@/components/ResourcePage";
 import { api, type ApiError } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { useCan, useList, useResourceMutation, useSession } from "@/lib/queries";
@@ -136,7 +141,10 @@ export default function UsersPage() {
         minWidth: 200,
         cell: (user) => (
           <div className="flex min-w-0 flex-wrap items-center gap-1">
-            {user.roles.length === 0 ? (
+            {user.audience !== "operator" ? (
+              // Scoped accounts (KD-039) hold no roles by design.
+              <Tag size="xs">{user.audience}</Tag>
+            ) : user.roles.length === 0 ? (
               <span className="text-[var(--kn-warn)]">no role</span>
             ) : (
               user.roles.map((role) => (
@@ -226,7 +234,16 @@ export default function UsersPage() {
         emptyIcon={Users}
         emptyTitle="No users match"
         emptyDescription="Every account that can sign in to this panel is listed here."
-        primaryAction={inviteButton}
+        primaryAction={
+          <>
+            {can("admin.users:read") && (
+              <LinkButton href="/administration/resellers" variant="ghost">
+                Resellers
+              </LinkButton>
+            )}
+            {inviteButton}
+          </>
+        }
         emptyAction={inviteButton}
         filters={
           <>

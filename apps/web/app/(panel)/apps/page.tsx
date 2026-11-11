@@ -72,7 +72,7 @@ export default function AppsCatalogPage() {
           />
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-0 overflow-x-auto">
               <SegmentedControl<Filter>
                 label="Category"
                 value={filter}

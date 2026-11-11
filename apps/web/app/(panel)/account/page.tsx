@@ -31,6 +31,7 @@ import { api, type ApiError } from "@/lib/api";
 import { formatCount } from "@/lib/format";
 import { encodeQr } from "@/lib/qr";
 import { useList, useResourceMutation, useSession } from "@/lib/queries";
+import { ViewModeSettings } from "@/components/modes/ViewModeSettings";
 
 /* ------------------------------------------------------------------ *
  * Your account.
@@ -52,6 +53,7 @@ const ACCOUNT_SECTIONS: SectionIndexEntry[] = [
   { id: "password", title: "Password" },
   { id: "two-factor", title: "Two-factor authentication" },
   { id: "sessions", title: "Active sessions" },
+  { id: "display", title: "Display" },
 ];
 
 /**
@@ -124,6 +126,11 @@ export default function AccountPage() {
           <PasswordCard />
           <TotpCard user={user} onChanged={refresh} />
           <SessionsCard />
+          {user && (
+            <AccountSection id="display" title="Display" caption="How much of the panel you see.">
+              <ViewModeSettings />
+            </AccountSection>
+          )}
         </IndexedLayout>
       </PageBody>
     </div>

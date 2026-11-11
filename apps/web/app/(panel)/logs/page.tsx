@@ -288,12 +288,12 @@ export default function LogsPage() {
             placeholder={selection.serverId ? "Every source on this host" : "Pick a host first"}
             emptyMessage="No source matches that name."
             aria-label="Log source"
-            className="w-64"
+            className="w-full sm:w-64"
           />
 
           <Select
             size="sm"
-            boxClassName="w-44"
+            boxClassName="w-full sm:w-44"
             aria-label="Minimum level"
             value={level ?? ""}
             onChange={(event) => update({ level: event.target.value || null })}
@@ -308,7 +308,7 @@ export default function LogsPage() {
             placeholder={useRegex ? "nginx\\[\\d+\\]" : "Search on the host"}
             aria-label="Search log lines on the host"
             spellCheck={false}
-            boxClassName="w-64"
+            boxClassName="w-full sm:w-64"
             trailing={
               <IconButton
                 icon={Regex}
