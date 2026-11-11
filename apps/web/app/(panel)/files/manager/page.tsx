@@ -794,18 +794,18 @@ export default function FileManagerPage() {
                 <MonoLabel size="xs">Folders</MonoLabel>
               </div>
               <div className="-ml-1 min-h-0 flex-1 overflow-auto pt-1">
-                  <FileTree
-                    nodes={treeNodes}
-                    expandedPaths={expanded}
-                    onExpandedChange={setExpanded}
-                    selectedPath={path}
-                    onSelect={(node) => {
-                      if (node.kind === "directory") setPath(node.path);
-                    }}
-                    onLoadChildren={(node) => loadInto(node.path)}
-                    label="Directory tree"
-                    emptyLabel="Nothing readable here"
-                  />
+                <FileTree
+                  nodes={treeNodes}
+                  expandedPaths={expanded}
+                  onExpandedChange={setExpanded}
+                  selectedPath={path}
+                  onSelect={(node) => {
+                    if (node.kind === "directory") setPath(node.path);
+                  }}
+                  onLoadChildren={(node) => loadInto(node.path)}
+                  label="Directory tree"
+                  emptyLabel="Nothing readable here"
+                />
               </div>
             </aside>
 

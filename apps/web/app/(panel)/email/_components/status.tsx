@@ -151,7 +151,9 @@ export function countChecks(checks: readonly MailCheck[]): CheckCounts {
  * rather than restated from the host — so the sentence and the rows
  * below it can never disagree.
  */
-export function verdictSentence(server: Pick<MailServer, "checks" | "install_complete" | "status" | "last_synced_at">): string {
+export function verdictSentence(
+  server: Pick<MailServer, "checks" | "install_complete" | "status" | "last_synced_at">,
+): string {
   if (server.status === "deploying" || server.status === "installing") {
     return "Yunori Mail Server is being installed. The steps below say where it is.";
   }
@@ -338,9 +340,7 @@ export function InstallSteps({ steps, className }: InstallStepsProps) {
           <CheckItem
             key={`${index}-${step.title}`}
             state={STEP_STATE[step.status]}
-            icon={
-              failed ? X : waiting ? Clock : step.status === "skipped" ? Minus : undefined
-            }
+            icon={failed ? X : waiting ? Clock : step.status === "skipped" ? Minus : undefined}
             className="py-2"
             title={
               <span className="inline-flex min-w-0 items-baseline gap-2.5">
@@ -436,10 +436,15 @@ export function ServiceStates({
   className?: string;
 }) {
   if (services.length === 0) {
-    return <span className={cn("text-sm text-[var(--kn-text-3)]", className)}>No services reported</span>;
+    return (
+      <span className={cn("text-sm text-[var(--kn-text-3)]", className)}>No services reported</span>
+    );
   }
   return (
-    <ul className={cn("flex flex-wrap items-center gap-x-4 gap-y-1", className)} aria-label="Services">
+    <ul
+      className={cn("flex flex-wrap items-center gap-x-4 gap-y-1", className)}
+      aria-label="Services"
+    >
       {services.map((service) => (
         <li key={service.name} className="flex items-center gap-1.5 text-sm">
           <Dot tone={service.active ? "ok" : "danger"} hollow={!service.active} />
@@ -548,15 +553,21 @@ const CERT_STATE_META: Record<string, { label: string; tone: Tone; title: string
   test: {
     label: "Staging",
     tone: "warn",
-    title: "Issued by the staging authority after a failure; browsers and mail apps do not trust it.",
+    title:
+      "Issued by the staging authority after a failure; browsers and mail apps do not trust it.",
   },
   self_signed: {
     label: "Self-signed",
     tone: "warn",
-    title: "The temporary certificate the console starts with. Clients will warn until a real one arrives.",
+    title:
+      "The temporary certificate the console starts with. Clients will warn until a real one arrives.",
   },
   expired: { label: "Expired", tone: "danger", title: "Mail apps will refuse to connect." },
-  missing: { label: "Missing", tone: "danger", title: "No certificate at all; TLS cannot be offered." },
+  missing: {
+    label: "Missing",
+    tone: "danger",
+    title: "No certificate at all; TLS cannot be offered.",
+  },
   unknown: { label: "Unknown", tone: "neutral", title: "The host did not say." },
 };
 
@@ -710,11 +721,15 @@ export function MailServerPicker({
     return entries;
   }, [allowAll, servers]);
 
-  const resolved = servers.find((server) => server.id === value || server.server_id === value)?.id ?? "";
+  const resolved =
+    servers.find((server) => server.id === value || server.server_id === value)?.id ?? "";
 
   if (query.isLoading) {
     return (
-      <Skeleton className={cn("h-7 w-56 rounded-[var(--kn-r-sm)]", className)} label="Loading mail servers" />
+      <Skeleton
+        className={cn("h-7 w-56 rounded-[var(--kn-r-sm)]", className)}
+        label="Loading mail servers"
+      />
     );
   }
 

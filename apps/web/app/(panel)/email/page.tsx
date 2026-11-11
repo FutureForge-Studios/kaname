@@ -212,7 +212,11 @@ export default function MailServersPage() {
         />
 
         {query.isError ? (
-          <PageError error={query.error} onRetry={() => void query.refetch()} context="Mail servers" />
+          <PageError
+            error={query.error}
+            onRetry={() => void query.refetch()}
+            context="Mail servers"
+          />
         ) : query.isLoading ? (
           <div className="flex flex-col gap-4" aria-busy>
             <Skeleton className="h-40 rounded-[var(--kn-r-md)]" label="Loading mail servers" />
@@ -421,7 +425,10 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
     >
       <div className="flex flex-col gap-5 p-5">
         {/* The verdict: one sentence, derived from the same checks listed below. */}
-        <StatusLine tone={verdictTone(server)} className={cn("text-sm", checkTextClass(server.health))}>
+        <StatusLine
+          tone={verdictTone(server)}
+          className={cn("text-sm", checkTextClass(server.health))}
+        >
           {verdictSentence(server)}
         </StatusLine>
 
@@ -521,12 +528,18 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
               ) : (
                 <>
                   {counts.fail > 0 && (
-                    <span className="text-[var(--kn-danger)]">{pluralize(counts.fail, "failing", "failing")}</span>
+                    <span className="text-[var(--kn-danger)]">
+                      {pluralize(counts.fail, "failing", "failing")}
+                    </span>
                   )}
                   {counts.warn > 0 && (
-                    <span className="text-[var(--kn-warn)]">{pluralize(counts.warn, "warning")}</span>
+                    <span className="text-[var(--kn-warn)]">
+                      {pluralize(counts.warn, "warning")}
+                    </span>
                   )}
-                  <span className="text-[var(--kn-text-2)]">{pluralize(counts.pass, "passing", "passing")}</span>
+                  <span className="text-[var(--kn-text-2)]">
+                    {pluralize(counts.pass, "passing", "passing")}
+                  </span>
                 </>
               )}
               <Link
@@ -608,20 +621,22 @@ function fleetStatus(servers: readonly MailServer[]): React.ReactNode {
   if (failing > 0) {
     return (
       <StatusLine tone="danger">
-        {pluralize(failing, "server needs", "servers need")} a hand · {pluralize(servers.length, "host")}{" "}
-        in all
+        {pluralize(failing, "server needs", "servers need")} a hand ·{" "}
+        {pluralize(servers.length, "host")} in all
       </StatusLine>
     );
   }
   if (warning > 0) {
     return (
       <StatusLine tone="warn">
-        {pluralize(warning, "server wants", "servers want")} attention · {pluralize(servers.length, "host")}{" "}
-        in all
+        {pluralize(warning, "server wants", "servers want")} attention ·{" "}
+        {pluralize(servers.length, "host")} in all
       </StatusLine>
     );
   }
-  return <StatusLine>Every mail server checks out · {pluralize(servers.length, "host")}</StatusLine>;
+  return (
+    <StatusLine>Every mail server checks out · {pluralize(servers.length, "host")}</StatusLine>
+  );
 }
 
 const DOMAIN_PREVIEW = 8;
@@ -689,7 +704,10 @@ function DomainsOverview() {
                 <span className="kn-num w-28 text-right text-xs text-[var(--kn-text-2)]">
                   {pluralize(domain.mailbox_count, "mailbox", "mailboxes")}
                 </span>
-                <MailCheckBadge status={domain.dns_status} label={`DNS ${CHECK_META[domain.dns_status].label.toLowerCase()}`} />
+                <MailCheckBadge
+                  status={domain.dns_status}
+                  label={`DNS ${CHECK_META[domain.dns_status].label.toLowerCase()}`}
+                />
                 <Button variant="ghost" size="xs" onClick={() => setDnsFor(domain)}>
                   Records
                 </Button>
@@ -731,7 +749,10 @@ function OverviewLink({
         <span className="min-w-0 flex-1">
           <span className="kn-title block text-md text-[var(--kn-text)]">
             {title}
-            <span aria-hidden className="ml-1.5 inline-block text-[var(--kn-text-3)] transition-transform duration-[var(--kn-dur)] ease-[var(--kn-ease)] group-hover:translate-x-0.5">
+            <span
+              aria-hidden
+              className="ml-1.5 inline-block text-[var(--kn-text-3)] transition-transform duration-[var(--kn-dur)] ease-[var(--kn-ease)] group-hover:translate-x-0.5"
+            >
               →
             </span>
           </span>

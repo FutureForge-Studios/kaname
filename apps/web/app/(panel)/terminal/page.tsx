@@ -8,7 +8,6 @@ import {
   ClipboardCopy,
   ClipboardPaste,
   Eraser,
-  History,
   Plug,
   PlugZap,
   Search,
@@ -30,7 +29,6 @@ import {
   PageBody,
   PageHeader,
   RelativeTime,
-  SectionCard,
   Select,
   Skeleton,
   cn,
@@ -44,7 +42,7 @@ import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { TerminalWell } from "../infrastructure/_components/TerminalWell";
 import { api } from "@/lib/api";
 import { formatCount } from "@/lib/format";
-import { useCan, useList, useResourceMutation, useServers } from "@/lib/queries";
+import { useCan, useList, useServers } from "@/lib/queries";
 
 /* ------------------------------------------------------------------ *
  * Terminal (KD-013).

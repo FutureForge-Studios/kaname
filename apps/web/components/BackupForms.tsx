@@ -363,262 +363,286 @@ export function DestinationDialog({
         <DialogBody>
           <FormError error={error} onRetry={() => save.mutate()} />
 
-          <div className="flex flex-col gap-4">
-            <FormField label="Name" required error={fieldError(error, "name")}>
-              <Input
-                value={draft.name}
-                onChange={(event) => patch({ name: event.target.value })}
-                placeholder="offsite-s3"
-                autoComplete="off"
-                data-autofocus=""
-              />
-            </FormField>
-
-            <FormField
-              label="Kind"
-              required
-              description={
-                editing
-                  ? "A destination's kind is fixed — a different transport is a different destination."
-                  : undefined
-              }
+          <div className="flex flex-col gap-6">
+            <NumberedSection
+              index={1}
+              title="Destination"
+              caption="What it is called, and how it is reached."
+              headingLevel={3}
             >
-              <Select
-                value={draft.kind}
-                disabled={editing}
-                onChange={(event) => patch({ kind: event.target.value as DestinationKind })}
-                options={(Object.keys(DESTINATION_KIND_LABELS) as DestinationKind[]).map(
-                  (kind) => ({ value: kind, label: DESTINATION_KIND_LABELS[kind] }),
-                )}
-              />
-            </FormField>
+              <FormField label="Name" required error={fieldError(error, "name")}>
+                <Input
+                  value={draft.name}
+                  onChange={(event) => patch({ name: event.target.value })}
+                  placeholder="offsite-s3"
+                  autoComplete="off"
+                  data-autofocus=""
+                />
+              </FormField>
 
-            {editing && (
-              <Switch
-                checked={rotate}
-                onChange={(event) => setRotate(event.target.checked)}
-                label="Replace credentials"
-                description="Sending a target again is the only way to rotate a stored credential."
-              />
-            )}
+              <FormField
+                label="Kind"
+                required
+                description={
+                  editing
+                    ? "A destination's kind is fixed — a different transport is a different destination."
+                    : undefined
+                }
+              >
+                <Select
+                  value={draft.kind}
+                  disabled={editing}
+                  onChange={(event) => patch({ kind: event.target.value as DestinationKind })}
+                  options={(Object.keys(DESTINATION_KIND_LABELS) as DestinationKind[]).map(
+                    (kind) => ({ value: kind, label: DESTINATION_KIND_LABELS[kind] }),
+                  )}
+                />
+              </FormField>
 
-            {draft.kind === "local" && (
-              <>
-                <FormField label="Server" required error={fieldError(error, "target.server_id")}>
-                  <Combobox
-                    options={
-                      servers.data?.data.map((server) => ({
-                        value: server.id,
-                        label: server.name,
-                        description: server.hostname,
-                        mono: true,
-                      })) ?? []
-                    }
-                    value={draft.serverId}
-                    onValueChange={(next) => patch({ serverId: next ?? "" })}
-                    loading={servers.isLoading}
-                    placeholder="Select a server"
-                    emptyMessage="No server matches that name."
-                    mono
-                  />
-                </FormField>
-                <FormField
-                  label="Directory"
-                  required
-                  description="Only schedules on this same server can write here."
-                  error={fieldError(error, "target.path")}
-                >
-                  <Input
-                    mono
-                    value={draft.path}
-                    onChange={(event) => patch({ path: event.target.value })}
-                    placeholder="/var/backups/kaname"
-                  />
-                </FormField>
-              </>
-            )}
+              {editing && (
+                <Switch
+                  checked={rotate}
+                  onChange={(event) => setRotate(event.target.checked)}
+                  label="Replace credentials"
+                  description="Sending a target again is the only way to rotate a stored credential."
+                />
+              )}
+            </NumberedSection>
 
-            {(draft.kind === "s3" || draft.kind === "b2") && (
-              <>
-                {draft.kind === "s3" && (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <FormField
-                      label="Endpoint"
-                      description="Leave empty for AWS."
-                      error={fieldError(error, "target.endpoint")}
-                    >
-                      <Input
-                        mono
-                        value={draft.endpoint}
-                        onChange={(event) => patch({ endpoint: event.target.value })}
-                        placeholder="s3.eu-central-1.wasabisys.com"
-                      />
-                    </FormField>
-                    <FormField label="Region" required error={fieldError(error, "target.region")}>
-                      <Input
-                        mono
-                        value={draft.region}
-                        onChange={(event) => patch({ region: event.target.value })}
-                      />
-                    </FormField>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <FormField label="Bucket" required error={fieldError(error, "target.bucket")}>
-                    <Input
+            <NumberedSection
+              index={2}
+              title={draft.kind === "local" ? "Location" : "Location and access"}
+              caption={
+                draft.kind === "local"
+                  ? "A directory on one managed server."
+                  : secretsShown
+                    ? "Credentials are write-only once saved."
+                    : "Stored credentials are kept as they are."
+              }
+              headingLevel={3}
+            >
+              {draft.kind === "local" && (
+                <>
+                  <FormField label="Server" required error={fieldError(error, "target.server_id")}>
+                    <Combobox
+                      options={
+                        servers.data?.data.map((server) => ({
+                          value: server.id,
+                          label: server.name,
+                          description: server.hostname,
+                          mono: true,
+                        })) ?? []
+                      }
+                      value={draft.serverId}
+                      onValueChange={(next) => patch({ serverId: next ?? "" })}
+                      loading={servers.isLoading}
+                      placeholder="Select a server"
+                      emptyMessage="No server matches that name."
                       mono
-                      value={draft.bucket}
-                      onChange={(event) => patch({ bucket: event.target.value })}
                     />
                   </FormField>
                   <FormField
-                    label="Prefix"
-                    description="Repositories are created under it, one per schedule."
-                    error={fieldError(error, "target.prefix")}
+                    label="Directory"
+                    required
+                    description="Only schedules on this same server can write here."
+                    error={fieldError(error, "target.path")}
                   >
-                    <Input
-                      mono
-                      value={draft.prefix}
-                      onChange={(event) => patch({ prefix: event.target.value })}
-                      placeholder="kaname"
-                    />
-                  </FormField>
-                </div>
-
-                {secretsShown && (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <FormField
-                      label={draft.kind === "b2" ? "Key ID" : "Access key ID"}
-                      required
-                      error={fieldError(error, "target.access_key_id")}
-                    >
-                      <Input
-                        mono
-                        autoComplete="off"
-                        value={draft.accessKeyId}
-                        onChange={(event) => patch({ accessKeyId: event.target.value })}
-                      />
-                    </FormField>
-                    <FormField
-                      label={draft.kind === "b2" ? "Application key" : "Secret access key"}
-                      required
-                      error={fieldError(error, "target.secret_access_key")}
-                    >
-                      <Input
-                        mono
-                        type="password"
-                        autoComplete="new-password"
-                        value={draft.secretAccessKey}
-                        onChange={(event) => patch({ secretAccessKey: event.target.value })}
-                      />
-                    </FormField>
-                  </div>
-                )}
-              </>
-            )}
-
-            {draft.kind === "sftp" && (
-              <>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_96px]">
-                  <FormField label="Host" required error={fieldError(error, "target.host")}>
-                    <Input
-                      mono
-                      value={draft.host}
-                      onChange={(event) => patch({ host: event.target.value })}
-                      placeholder="backup.example.com"
-                    />
-                  </FormField>
-                  <FormField label="Port" required error={fieldError(error, "target.port")}>
-                    <Input
-                      mono
-                      inputMode="numeric"
-                      value={draft.port}
-                      onChange={(event) => patch({ port: event.target.value })}
-                    />
-                  </FormField>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <FormField label="Username" required error={fieldError(error, "target.username")}>
-                    <Input
-                      mono
-                      autoComplete="off"
-                      value={draft.username}
-                      onChange={(event) => patch({ username: event.target.value })}
-                    />
-                  </FormField>
-                  <FormField label="Path" required error={fieldError(error, "target.path")}>
                     <Input
                       mono
                       value={draft.path}
                       onChange={(event) => patch({ path: event.target.value })}
-                      placeholder="/srv/backups"
+                      placeholder="/var/backups/kaname"
                     />
                   </FormField>
-                </div>
+                </>
+              )}
 
-                {secretsShown && (
-                  <>
-                    <FormField label="Authentication" required>
-                      <Select
-                        value={draft.authMethod}
-                        onChange={(event) =>
-                          patch({ authMethod: event.target.value as "password" | "key" })
-                        }
-                        options={[
-                          { value: "password", label: "Password" },
-                          { value: "key", label: "Private key" },
-                        ]}
-                      />
-                    </FormField>
-
-                    {draft.authMethod === "password" ? (
+              {(draft.kind === "s3" || draft.kind === "b2") && (
+                <>
+                  {draft.kind === "s3" && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <FormField
-                        label="Password"
-                        required
-                        error={fieldError(error, "target.auth.password")}
+                        label="Endpoint"
+                        description="Leave empty for AWS."
+                        error={fieldError(error, "target.endpoint")}
                       >
                         <Input
-                          type="password"
-                          autoComplete="new-password"
-                          value={draft.password}
-                          onChange={(event) => patch({ password: event.target.value })}
+                          mono
+                          value={draft.endpoint}
+                          onChange={(event) => patch({ endpoint: event.target.value })}
+                          placeholder="s3.eu-central-1.wasabisys.com"
                         />
                       </FormField>
-                    ) : (
-                      <>
+                      <FormField label="Region" required error={fieldError(error, "target.region")}>
+                        <Input
+                          mono
+                          value={draft.region}
+                          onChange={(event) => patch({ region: event.target.value })}
+                        />
+                      </FormField>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <FormField label="Bucket" required error={fieldError(error, "target.bucket")}>
+                      <Input
+                        mono
+                        value={draft.bucket}
+                        onChange={(event) => patch({ bucket: event.target.value })}
+                      />
+                    </FormField>
+                    <FormField
+                      label="Prefix"
+                      description="Repositories are created under it, one per schedule."
+                      error={fieldError(error, "target.prefix")}
+                    >
+                      <Input
+                        mono
+                        value={draft.prefix}
+                        onChange={(event) => patch({ prefix: event.target.value })}
+                        placeholder="kaname"
+                      />
+                    </FormField>
+                  </div>
+
+                  {secretsShown && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <FormField
+                        label={draft.kind === "b2" ? "Key ID" : "Access key ID"}
+                        required
+                        error={fieldError(error, "target.access_key_id")}
+                      >
+                        <Input
+                          mono
+                          autoComplete="off"
+                          value={draft.accessKeyId}
+                          onChange={(event) => patch({ accessKeyId: event.target.value })}
+                        />
+                      </FormField>
+                      <FormField
+                        label={draft.kind === "b2" ? "Application key" : "Secret access key"}
+                        required
+                        error={fieldError(error, "target.secret_access_key")}
+                      >
+                        <Input
+                          mono
+                          type="password"
+                          autoComplete="new-password"
+                          value={draft.secretAccessKey}
+                          onChange={(event) => patch({ secretAccessKey: event.target.value })}
+                        />
+                      </FormField>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {draft.kind === "sftp" && (
+                <>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_96px]">
+                    <FormField label="Host" required error={fieldError(error, "target.host")}>
+                      <Input
+                        mono
+                        value={draft.host}
+                        onChange={(event) => patch({ host: event.target.value })}
+                        placeholder="backup.example.com"
+                      />
+                    </FormField>
+                    <FormField label="Port" required error={fieldError(error, "target.port")}>
+                      <Input
+                        mono
+                        inputMode="numeric"
+                        value={draft.port}
+                        onChange={(event) => patch({ port: event.target.value })}
+                      />
+                    </FormField>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <FormField
+                      label="Username"
+                      required
+                      error={fieldError(error, "target.username")}
+                    >
+                      <Input
+                        mono
+                        autoComplete="off"
+                        value={draft.username}
+                        onChange={(event) => patch({ username: event.target.value })}
+                      />
+                    </FormField>
+                    <FormField label="Path" required error={fieldError(error, "target.path")}>
+                      <Input
+                        mono
+                        value={draft.path}
+                        onChange={(event) => patch({ path: event.target.value })}
+                        placeholder="/srv/backups"
+                      />
+                    </FormField>
+                  </div>
+
+                  {secretsShown && (
+                    <>
+                      <FormField label="Authentication" required>
+                        <Select
+                          value={draft.authMethod}
+                          onChange={(event) =>
+                            patch({ authMethod: event.target.value as "password" | "key" })
+                          }
+                          options={[
+                            { value: "password", label: "Password" },
+                            { value: "key", label: "Private key" },
+                          ]}
+                        />
+                      </FormField>
+
+                      {draft.authMethod === "password" ? (
                         <FormField
-                          label="Private key"
+                          label="Password"
                           required
-                          description="PEM, including the BEGIN and END lines."
-                          error={fieldError(error, "target.auth.private_key")}
-                        >
-                          <Textarea
-                            mono
-                            rows={4}
-                            spellCheck={false}
-                            value={draft.privateKey}
-                            onChange={(event) => patch({ privateKey: event.target.value })}
-                          />
-                        </FormField>
-                        <FormField
-                          label="Passphrase"
-                          error={fieldError(error, "target.auth.passphrase")}
+                          error={fieldError(error, "target.auth.password")}
                         >
                           <Input
                             type="password"
                             autoComplete="new-password"
-                            value={draft.passphrase}
-                            onChange={(event) => patch({ passphrase: event.target.value })}
+                            value={draft.password}
+                            onChange={(event) => patch({ password: event.target.value })}
                           />
                         </FormField>
-                      </>
-                    )}
-                  </>
-                )}
-              </>
-            )}
+                      ) : (
+                        <>
+                          <FormField
+                            label="Private key"
+                            required
+                            description="PEM, including the BEGIN and END lines."
+                            error={fieldError(error, "target.auth.private_key")}
+                          >
+                            <Textarea
+                              mono
+                              rows={4}
+                              spellCheck={false}
+                              value={draft.privateKey}
+                              onChange={(event) => patch({ privateKey: event.target.value })}
+                            />
+                          </FormField>
+                          <FormField
+                            label="Passphrase"
+                            error={fieldError(error, "target.auth.passphrase")}
+                          >
+                            <Input
+                              type="password"
+                              autoComplete="new-password"
+                              value={draft.passphrase}
+                              onChange={(event) => patch({ passphrase: event.target.value })}
+                            />
+                          </FormField>
+                        </>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </NumberedSection>
 
             <TestResult result={test} />
           </div>
