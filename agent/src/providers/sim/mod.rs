@@ -11,6 +11,7 @@
 //! `simulated` is always in the capability list: a fake fleet that can be
 //! mistaken for a real one is worse than no fake fleet.
 
+pub mod app_backup;
 pub mod backups;
 pub mod certs;
 pub mod containers;
@@ -59,6 +60,7 @@ pub struct SimProvider {
     backups: backups::SimBackups,
     pty: pty::SimPty,
     ftp: ftp::SimFtp,
+    app_backup: app_backup::SimAppBackup,
 }
 
 impl SimProvider {
@@ -81,6 +83,7 @@ impl SimProvider {
             backups: backups::SimBackups(sim.clone()),
             pty: pty::SimPty(sim.clone()),
             ftp: ftp::SimFtp::new(sim.clone()),
+            app_backup: app_backup::SimAppBackup(sim.clone()),
             sim,
         }
     }
@@ -188,6 +191,9 @@ impl Provider for SimProvider {
     }
     fn ftp(&self) -> &dyn super::ftp::Ftp {
         &self.ftp
+    }
+    fn app_backup(&self) -> &dyn super::app_backup::AppBackup {
+        &self.app_backup
     }
 
     async fn close(&self) {

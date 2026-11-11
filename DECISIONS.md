@@ -923,3 +923,49 @@ file verb. Images are not removed on uninstall (they may be shared). Podman host
 host after allocation surfaces as a failed container start and a rolled-back install, not as a
 reallocation. Upgrading an installed app's image is not covered.
 
+## KD-041 — OS package updates are a cached read and an ordinary job
+
+**Decision.** A host's pending package updates (`system.packages.list`) are cached per server in
+`settings` under `os_updates:<server id>` and every page reads the cache. The control plane
+refreshes a connected host's cache when it is older than six hours (a background pass every ten
+minutes, one host at a time), on an explicit **Check now**, and after every upgrade. Upgrading is
+the existing `system.packages.upgrade` job — all packages or `security_only` — under the
+permission it was always specced with: `infra.servers:read` to look, `infra.servers:write` to
+upgrade or opt a server in to automatic security updates (security-only, at most once a day, never
+stacked on an upgrade in flight). "Reboot required" is learned only from an upgrade's result and
+cleared by a refresh that sees a later `boot_time`; Kaname never reboots a host by itself.
+
+**Why.** `apt-get update` across a fleet on page load is the KD-012 mistake at its most expensive.
+A cache row in `settings` needs no migration and merges atomically (`value || patch`), so a refresh
+and a settings change cannot overwrite each other. No new permission: the job spec already named
+`infra.servers:write`, which also guards rebooting the same host, and scoped accounts hold neither.
+
+**Cost accepted.** The list can be up to six hours old (the page says how old). Rows for a removed
+server linger in `settings` until overwritten; they are never read because every read joins the
+fleet. A reboot pending from outside Kaname (an upgrade run over SSH) is not detected.
+
+## KD-042 — App health is probed from the control plane; app alerts are ordinary alert rules
+
+**Decision.** Each active app install gets an HTTP(S) probe of its own address and a configurable
+path (default: the recipe's health endpoint, else `/`) once a minute, **from the control plane**,
+10 s timeout, eight at a time; a final 2xx is up, anything else (status, timeout, refusal, TLS)
+is a failure. Image recipes additionally get one `container.list` with stats **per server** every
+other minute (grouped by the `io.kaname.install` label), and one `fs.usage` of the managed data
+directory every six hours. Samples live in `app_health_samples` (eight days), the running verdict
+in `app_monitors`. Alerting on them is not a second engine: an app rule is an `alert_rules` row
+with an app kind as `metric`, `{ kind: "app" }` as scope and `app_install_id` set, evaluated in the
+same pass and through the same pending → firing → resolved lifecycle, open-alert key and
+notification path as a server rule. Defaults (app down after 3 failed checks; restart loop for
+image recipes; certificate expiring for HTTPS) are created once an install is active and cascade
+away with it.
+
+**Why.** The control plane is where a visitor stands: a probe from the host itself would pass with
+DNS, the firewall or the certificate broken, and needs a new agent verb. One poll per server, not
+per install, keeps container stats off the agent's back. Reusing the rule engine means mute,
+tune, dedup and channels already work, and Monitoring lists app alerts with no special case.
+
+**Cost accepted.** A control plane that cannot reach the internet (or its own apps' names) sees
+every app as down — the probe can be paused per app. A simulated host answers its probe from its
+container state (KD-010). The certificate-expiring app rule only marks the app; the certificate
+sweep keeps sending the one notification. App rules notify the operator's alert channels — there
+is no per-user channel, so a client sees its apps' alerts in the panel, not in its inbox.

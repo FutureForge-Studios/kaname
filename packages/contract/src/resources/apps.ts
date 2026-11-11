@@ -31,6 +31,7 @@ export const appCategory = z.enum([
   "storage",
   "developer",
   "analytics",
+  "media",
 ]);
 export type AppCategory = z.infer<typeof appCategory>;
 
@@ -42,6 +43,7 @@ export const APP_CATEGORY_LABELS: Record<AppCategory, string> = {
   storage: "Files",
   developer: "Developer",
   analytics: "Analytics",
+  media: "Media",
 };
 
 export const appAvailability = z.enum(["available", "coming_soon"]);
@@ -60,6 +62,7 @@ export const appConfigTemplate = z.enum([
   "n8n",
   "gitea",
   "plausible",
+  "jellyfin",
 ]);
 export type AppConfigTemplate = z.infer<typeof appConfigTemplate>;
 
@@ -348,6 +351,41 @@ export const APP_CATALOG: readonly AppRecipe[] = [
     config: "uptime-kuma",
     writable_paths: [],
     finish: "Open the site to create the administrator account.",
+  },
+  {
+    id: "jellyfin",
+    name: "Jellyfin",
+    tagline: "A media server for your films, shows and music.",
+    description:
+      "Streams your own library to a browser, phone or TV, with no account outside your server. Its configuration, metadata and cache live in its data directory, and your media goes in the media folder beside them.",
+    category: "media",
+    version: "12.4",
+    homepage: "https://jellyfin.org",
+    license: "GPL-2.0",
+    availability: "available",
+    unavailable_reason: null,
+    requirements: {
+      runtime: "container",
+      runtime_version: null,
+      capabilities: ["nginx", "docker"],
+      database: null,
+      min_memory_mb: 1024,
+      min_disk_mb: 2048,
+    },
+    source: {
+      kind: "image",
+      image: "jellyfin/jellyfin:12.4",
+      port: 8096,
+      // One managed directory; JELLYFIN_*_DIR point its parts inside it.
+      data_path: "/jellyfin",
+      data_uid: null,
+      companions: [],
+      init: [],
+    },
+    config: "jellyfin",
+    writable_paths: [],
+    finish:
+      "Open the site to run Jellyfin's setup wizard and create the administrator. Put your media in the install's media folder and add /jellyfin/media as a library.",
   },
   {
     id: "n8n",

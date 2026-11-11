@@ -21,15 +21,19 @@ import {
   Siren,
   Trash2,
 } from "lucide-react";
-import type {
-  Alert,
-  AlertRule,
-  AlertRuleChannel,
-  MetricName,
-  MetricSeries,
-  MonitoringOverview,
-  TimeRange,
+import {
+  APP_ALERT_KIND_LABELS,
+  isAppAlertKind,
+  type Alert,
+  type AlertRule,
+  type AlertRuleChannel,
+  type MetricName,
+  type MetricSeries,
+  type MonitoringOverview,
+  type TimeRange,
 } from "@kaname/contract";
+import { useAppInstalls } from "@/components/installer/queries";
+import { describeAppRule } from "@/lib/app-health";
 import {
   AgentConnectionIndicator,
   AreaChart,
@@ -790,9 +794,10 @@ function AlertsTab({ tabs }: { tabs: React.ReactNode }) {
   const servers = useServers();
   const state = useResourceListState({
     defaultSort: { id: "started_at", order: "desc" },
-    filterKeys: ["state", "severity", "acknowledged", "server_id"],
+    filterKeys: ["state", "severity", "acknowledged", "server_id", "app_install_id"],
   });
   const query = useList<Alert>("alerts", state.params, { path: "/monitoring/alerts" });
+  const appOptions = useAppFilterOptions();
 
   const acknowledge = useResourceMutation<string[], unknown>({
     mutationFn: (ids) =>
@@ -843,6 +848,18 @@ function AlertsTab({ tabs }: { tabs: React.ReactNode }) {
             {alert.message}
           </span>
         ),
+      },
+      {
+        id: "app",
+        header: "App",
+        width: 168,
+        hideBelow: "lg",
+        cell: (alert) =>
+          alert.app_install_id ? (
+            <AppLink id={alert.app_install_id} label={alert.app_name ?? "app"} />
+          ) : (
+            <span className="text-[var(--kn-text-3)]">—</span>
+          ),
       },
       {
         id: "server",
@@ -966,6 +983,14 @@ function AlertsTab({ tabs }: { tabs: React.ReactNode }) {
               })),
             ]}
           />
+          <Select
+            size="sm"
+            boxClassName="w-48"
+            aria-label="Filter by app"
+            value={state.filters.app_install_id ?? ""}
+            onChange={(event) => state.setFilter("app_install_id", event.target.value || null)}
+            options={appOptions}
+          />
         </>
       }
       rowActions={(alert) => [
@@ -1002,11 +1027,12 @@ function RulesTab({ tabs }: { tabs: React.ReactNode }) {
   const can = useCan();
   const state = useResourceListState({
     defaultSort: { id: "name", order: "asc" },
-    filterKeys: ["enabled", "severity"],
+    filterKeys: ["enabled", "severity", "app_install_id"],
   });
   const query = useList<AlertRule>("alert-rules", state.params, {
     path: "/monitoring/alert-rules",
   });
+  const appOptions = useAppFilterOptions();
   const channels = useAlertChannels();
   const channelNames = React.useMemo(
     () => new Map((channels.data?.data ?? []).map((channel) => [channel.id, channel.name])),
@@ -1081,6 +1107,8 @@ function RulesTab({ tabs }: { tabs: React.ReactNode }) {
             <Badge tone="accent" size="xs">
               whole fleet
             </Badge>
+          ) : rule.scope.kind === "app" ? (
+            <AppLink id={rule.scope.app_install_id} label={rule.app_name ?? "app"} />
           ) : (
             <span className="kn-num text-[var(--kn-text-2)]">
               {formatCount(rule.scope.server_ids.length)}{" "}
@@ -1168,6 +1196,14 @@ function RulesTab({ tabs }: { tabs: React.ReactNode }) {
                 { value: "false", label: "Disabled" },
               ]}
             />
+            <Select
+              size="sm"
+              boxClassName="w-48"
+              aria-label="Filter by app"
+              value={state.filters.app_install_id ?? ""}
+              onChange={(event) => state.setFilter("app_install_id", event.target.value || null)}
+              options={appOptions}
+            />
           </>
         }
         rowActions={(rule) => [
@@ -1236,6 +1272,7 @@ function RulesTab({ tabs }: { tabs: React.ReactNode }) {
 }
 
 function describeRule(rule: AlertRule): string {
+  if (isAppAlertKind(rule.metric)) return describeAppRule(rule.metric, rule);
   const metric = METRIC_LABELS[rule.metric];
   const comparator = COMPARATOR_LABELS[rule.comparator];
   const threshold =
@@ -1249,11 +1286,42 @@ function describeRule(rule: AlertRule): string {
   return `${metric} ${comparator} ${threshold} for ${duration}`;
 }
 
+/** "Any app", "Apps only", then each install — the filter both lists share. */
+function useAppFilterOptions() {
+  const installs = useAppInstalls({ status: "active" });
+  return React.useMemo(
+    () => [
+      { value: "", label: "Servers and apps" },
+      { value: "any", label: "Apps only" },
+      ...(installs.data?.data ?? []).map((install) => ({
+        value: install.id,
+        label: `${install.app_name} · ${install.domain}`,
+      })),
+    ],
+    [installs.data],
+  );
+}
+
+function AppLink({ id, label }: { id: string; label: string }) {
+  return (
+    <Link
+      href={`/apps/installs/${id}`}
+      onClick={(event) => event.stopPropagation()}
+      className="truncate text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+      title={label}
+    >
+      {label}
+    </Link>
+  );
+}
+
 /* --------------------------- rule editor ---------------------------- */
 
 interface RuleDraft {
   name: string;
-  metric: MetricName;
+  metric: AlertRule["metric"];
+  /** Set when editing an app rule: its kind and target are fixed. */
+  appInstallId: string | null;
   comparator: AlertRule["comparator"];
   threshold: string;
   durationSeconds: string;
@@ -1279,6 +1347,7 @@ function ruleDraft(rule: AlertRule | null): RuleDraft {
   return {
     name: rule?.name ?? "",
     metric: rule?.metric ?? "cpu",
+    appInstallId: rule && rule.scope.kind === "app" ? rule.scope.app_install_id : null,
     comparator: rule?.comparator ?? "gt",
     threshold: String(rule?.threshold ?? 90),
     durationSeconds: String(rule?.duration_seconds ?? 300),
@@ -1323,9 +1392,11 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
         threshold: Number(draft.threshold),
         duration_seconds: Number(draft.durationSeconds),
         severity: draft.severity,
-        scope: draft.fleet
-          ? { kind: "fleet" as const }
-          : { kind: "servers" as const, server_ids: draft.serverIds },
+        scope: draft.appInstallId
+          ? { kind: "app" as const, app_install_id: draft.appInstallId }
+          : draft.fleet
+            ? { kind: "fleet" as const }
+            : { kind: "servers" as const, server_ids: draft.serverIds },
         // Always sent, so clearing the list on an edit really clears it.
         channels: draft.channelIds,
         enabled: draft.enabled,
@@ -1348,9 +1419,15 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
     threshold: Number(draft.threshold) || 0,
     duration_seconds: Number(draft.durationSeconds) || 0,
     severity: draft.severity,
-    scope: draft.fleet ? { kind: "fleet" } : { kind: "servers", server_ids: draft.serverIds },
+    scope: draft.appInstallId
+      ? { kind: "app", app_install_id: draft.appInstallId }
+      : draft.fleet
+        ? { kind: "fleet" }
+        : { kind: "servers", server_ids: draft.serverIds },
     enabled: draft.enabled,
     channels: draft.channelIds,
+    app_install_id: draft.appInstallId,
+    app_name: rule?.app_name ?? null,
     created_at: rule?.created_at ?? new Date().toISOString(),
     updated_at: rule?.updated_at ?? new Date().toISOString(),
   };
@@ -1387,14 +1464,23 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_128px_112px]">
               <FormField label="Metric" required error={error?.fields.metric}>
-                <Select
-                  value={draft.metric}
-                  onChange={(event) => patch({ metric: event.target.value as MetricName })}
-                  options={(Object.keys(METRIC_LABELS) as MetricName[]).map((metric) => ({
-                    value: metric,
-                    label: METRIC_LABELS[metric],
-                  }))}
-                />
+                {isAppAlertKind(draft.metric) ? (
+                  // An app rule's kind is what the app's Health section added; it stays.
+                  <Select
+                    value={draft.metric}
+                    disabled
+                    options={[{ value: draft.metric, label: APP_ALERT_KIND_LABELS[draft.metric] }]}
+                  />
+                ) : (
+                  <Select
+                    value={draft.metric}
+                    onChange={(event) => patch({ metric: event.target.value as MetricName })}
+                    options={(Object.keys(METRIC_LABELS) as MetricName[]).map((metric) => ({
+                      value: metric,
+                      label: METRIC_LABELS[metric],
+                    }))}
+                  />
+                )}
               </FormField>
               <FormField label="Comparator" required>
                 <Select
@@ -1446,14 +1532,16 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
               </FormField>
             </div>
 
-            <Switch
-              checked={draft.fleet}
-              onChange={(event) => patch({ fleet: event.target.checked })}
-              label="Apply to the whole fleet"
-              description="A fleet rule covers servers added later, and needs monitoring.alerts:write across the whole fleet."
-            />
+            {!draft.appInstallId && (
+              <Switch
+                checked={draft.fleet}
+                onChange={(event) => patch({ fleet: event.target.checked })}
+                label="Apply to the whole fleet"
+                description="A fleet rule covers servers added later, and needs monitoring.alerts:write across the whole fleet."
+              />
+            )}
 
-            {!draft.fleet && (
+            {!draft.appInstallId && !draft.fleet && (
               <FormField label="Servers" required error={error?.fields.scope}>
                 <Combobox
                   multiple
@@ -1521,7 +1609,9 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
               </p>
               <p className="mt-1 text-[var(--kn-text)]">
                 {describeRule(preview)} on{" "}
-                {draft.fleet
+                {draft.appInstallId
+                  ? (rule?.app_name ?? "this app")
+                  : draft.fleet
                   ? "every server"
                   : `${formatCount(draft.serverIds.length)} selected server${draft.serverIds.length === 1 ? "" : "s"}`}
                 , raising a {draft.severity} alert

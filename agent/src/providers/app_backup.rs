@@ -68,10 +68,14 @@ pub struct NoAppBackup;
 #[async_trait]
 impl AppBackup for NoAppBackup {
     async fn db_dump(&self, _ctx: &Ctx, _p: AppDbParams) -> PResult<AppDbDumpResult> {
-        Err(ProviderError::unsupported_because("app backups are not available on this host"))
+        Err(ProviderError::unsupported_because(
+            "app backups are not available on this host",
+        ))
     }
     async fn db_restore(&self, _ctx: &Ctx, _p: AppDbParams) -> PResult<AppDbRestoreResult> {
-        Err(ProviderError::unsupported_because("app backups are not available on this host"))
+        Err(ProviderError::unsupported_because(
+            "app backups are not available on this host",
+        ))
     }
 }
 
@@ -98,12 +102,18 @@ pub fn validate(p: &mut AppDbParams) -> PResult<()> {
     let role_ok = !p.role.is_empty()
         && p.role.len() <= 16
         && p.role.as_bytes()[0].is_ascii_lowercase()
-        && p.role.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        && p.role
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
     if !role_ok {
-        return Err(invalid("role must be 1-16 lowercase letters or digits, starting with a letter"));
+        return Err(invalid(
+            "role must be 1-16 lowercase letters or digits, starting with a letter",
+        ));
     }
     if p.role == "app" || p.role.starts_with("init") {
-        return Err(invalid("role must name a companion database container, not the app"));
+        return Err(invalid(
+            "role must name a companion database container, not the app",
+        ));
     }
     if !ENGINES.contains(&p.engine.as_str()) {
         return Err(invalid(format!("engine must be one of {}", ENGINES.join(", "))));
@@ -188,7 +198,9 @@ fn identifier_ok(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 63
         && (value.as_bytes()[0].is_ascii_alphabetic() || value.as_bytes()[0] == b'_')
-        && value.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 
 pub fn identity_from_env(engine: &str, env: &[String]) -> PResult<DbIdentity> {
@@ -288,8 +300,18 @@ pub fn restore_argv(engine: &str, id: &DbIdentity, file: &str) -> Vec<String> {
             &format!("--dbname={}", id.database),
             file,
         ]),
-        "mariadb" => v(&["mariadb", "--user=root", &id.database, &format!("--execute=source {file}")]),
-        _ => v(&["mysql", "--user=root", &id.database, &format!("--execute=source {file}")]),
+        "mariadb" => v(&[
+            "mariadb",
+            "--user=root",
+            &id.database,
+            &format!("--execute=source {file}"),
+        ]),
+        _ => v(&[
+            "mysql",
+            "--user=root",
+            &id.database,
+            &format!("--execute=source {file}"),
+        ]),
     }
 }
 
@@ -328,7 +350,8 @@ mod tests {
 
     #[test]
     fn anything_outside_the_closed_values_is_refused() {
-        let cases: Vec<Box<dyn Fn(&mut AppDbParams)>> = vec![
+        type Patch = Box<dyn Fn(&mut AppDbParams)>;
+        let cases: Vec<Patch> = vec![
             Box::new(|p| p.install_id = "../etc".into()),
             Box::new(|p| p.install_id = String::new()),
             Box::new(|p| p.install_id = "ABC".into()),
@@ -400,9 +423,12 @@ mod tests {
 
     #[test]
     fn the_data_mount_must_be_the_installs_own() {
-        let own = (data_source(ROOT, ID, "db"), "/var/lib/postgresql/data".to_string());
+        let own = (
+            data_source(ROOT, ID, "db"),
+            "/var/lib/postgresql/data".to_string(),
+        );
         assert_eq!(
-            data_mount_target(&[own.clone()], ROOT, ID, "db").unwrap(),
+            data_mount_target(std::slice::from_ref(&own), ROOT, ID, "db").unwrap(),
             "/var/lib/postgresql/data"
         );
         for mounts in [
@@ -421,10 +447,17 @@ mod tests {
     fn identity_comes_from_the_containers_environment() {
         let pg = identity_from_env(
             "postgres",
-            &["POSTGRES_DB=n8n".into(), "POSTGRES_USER=n8n".into(), "POSTGRES_PASSWORD=x".into()],
+            &[
+                "POSTGRES_DB=n8n".into(),
+                "POSTGRES_USER=n8n".into(),
+                "POSTGRES_PASSWORD=x".into(),
+            ],
         )
         .unwrap();
-        assert_eq!((pg.database.as_str(), pg.user.as_str(), pg.password), ("n8n", "n8n", None));
+        assert_eq!(
+            (pg.database.as_str(), pg.user.as_str(), pg.password),
+            ("n8n", "n8n", None)
+        );
 
         let my = identity_from_env(
             "mysql",
@@ -437,11 +470,19 @@ mod tests {
         assert!(identity_from_env("mysql", &["MYSQL_DATABASE=ghost".into()]).is_err());
         assert!(identity_from_env("postgres", &["MYSQL_DATABASE=ghost".into()]).is_err());
         assert!(
-            identity_from_env("postgres", &["POSTGRES_USER=a b".into(), "POSTGRES_PASSWORD=x".into()]).is_err(),
+            identity_from_env(
+                "postgres",
+                &["POSTGRES_USER=a b".into(), "POSTGRES_PASSWORD=x".into()]
+            )
+            .is_err(),
             "a name with a space is refused"
         );
         assert!(
-            identity_from_env("postgres", &["POSTGRES_USER=--help".into(), "POSTGRES_PASSWORD=x".into()]).is_err(),
+            identity_from_env(
+                "postgres",
+                &["POSTGRES_USER=--help".into(), "POSTGRES_PASSWORD=x".into()]
+            )
+            .is_err(),
             "a name that would read as a flag is refused"
         );
     }
@@ -466,6 +507,9 @@ mod tests {
         assert!(restore_argv("postgres", &id, "/f").contains(&"--single-transaction".to_string()));
         assert_eq!(dump_argv("mysql", &id, "/f")[0], "mysqldump");
         assert_eq!(dump_argv("mariadb", &id, "/f")[0], "mariadb-dump");
-        assert_eq!(restore_argv("mysql", &id, "/f").last().unwrap(), "--execute=source /f");
+        assert_eq!(
+            restore_argv("mysql", &id, "/f").last().unwrap(),
+            "--execute=source /f"
+        );
     }
 }

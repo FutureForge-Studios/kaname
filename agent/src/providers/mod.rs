@@ -11,6 +11,7 @@
 //! injection structurally impossible rather than a code-review
 //! responsibility.
 
+pub mod app_backup;
 pub mod ftp;
 pub mod managed;
 pub mod payloads;
@@ -590,6 +591,10 @@ pub trait Provider: Send + Sync {
     /// than every test double having to grow a fifth empty impl.
     fn ftp(&self) -> &dyn ftp::Ftp {
         &ftp::NO_FTP
+    }
+    /// App backup dumps (`app.db_*`). Defaulted to a refusing stub, as ftp is.
+    fn app_backup(&self) -> &dyn app_backup::AppBackup {
+        &app_backup::NO_APP_BACKUP
     }
 
     async fn close(&self);

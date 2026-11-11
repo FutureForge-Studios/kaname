@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, ne, or, sql } from "@kaname/db";
 import {
+  appInstalls,
+  appMonitors,
   alertRules,
   alerts,
   auditEvents,
@@ -235,6 +237,50 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
           server_name: row.serverName,
           href: `/websites/ssl?certificate_id=${row.id}`,
           since: expiresAt.toISOString(),
+        });
+      }
+    }
+
+    /* ------------------------------ apps ----------------------------- */
+
+    // An installed app whose own address stopped answering (the app
+    // monitor's probe, services/app-health.ts). One line per app.
+    if (holds(req, "apps.installs:read")) {
+      const down = await req.ctx.db
+        .select({
+          id: appInstalls.id,
+          appName: appInstalls.appName,
+          domain: appInstalls.domain,
+          serverId: appInstalls.serverId,
+          serverName: servers.name,
+          error: appMonitors.lastError,
+          failures: appMonitors.consecutiveFailures,
+          since: appMonitors.lastCheckedAt,
+        })
+        .from(appMonitors)
+        .innerJoin(appInstalls, eq(appMonitors.appInstallId, appInstalls.id))
+        .innerJoin(servers, eq(appInstalls.serverId, servers.id))
+        .where(
+          combine(
+            scopeFilter(req, "apps.installs:read", appInstalls.serverId),
+            eq(appInstalls.status, "active"),
+            eq(appMonitors.probeEnabled, true),
+            eq(appMonitors.status, "down"),
+            // One failed probe is noise; the default rule waits for three.
+            gte(appMonitors.consecutiveFailures, 3),
+          ),
+        )
+        .limit(10);
+      for (const row of down) {
+        attention.push({
+          kind: "app_down",
+          severity: "critical",
+          title: `${row.appName} on ${row.domain} is not answering`,
+          detail: `${row.failures} health checks failed in a row${row.error ? ` — ${row.error}` : ""}.`,
+          server_id: row.serverId,
+          server_name: row.serverName,
+          href: `/apps/installs/${row.id}`,
+          since: (row.since ?? new Date()).toISOString(),
         });
       }
     }

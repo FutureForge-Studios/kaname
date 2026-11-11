@@ -4,5 +4,5 @@
   "security": false,
   "adds_config": [],
   "min_upgrade_from": null,
-  "summary": "Container apps in the one-click installer: Ghost, Nextcloud, Uptime Kuma, n8n, Gitea and Plausible Analytics CE install on a private network with companion databases, loopback-only ports, a proxied HTTPS site and a health check. New typed agent verbs create containers under agent-side guards (KD-040). Migration 0010 is additive: app_installs.app_port, unique per server. Nothing is dropped."
+  "summary": "Container apps in the one-click installer: Ghost, Nextcloud, Uptime Kuma, n8n, Gitea and Plausible CE install on a private network with companion databases, loopback-only ports and a proxied HTTPS site. New typed agent verbs create containers under agent-side guards (KD-040). Migrations 0010-0011 are additive (app_installs.app_port; app health tables, alert_rules.app_install_id); nothing is dropped. Also: OS package updates, an in-panel update notice, and app health alerts (KD-042)."
 }

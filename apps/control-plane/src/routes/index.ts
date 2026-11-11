@@ -19,6 +19,7 @@ import { databaseRoutes } from "./databases.js";
 import { securityRoutes } from "./security.js";
 import { backupRoutes } from "./backups.js";
 import { monitoringRoutes } from "./monitoring.js";
+import { appHealthRoutes } from "./app-health.js";
 import { logRoutes } from "./logs.js";
 import { terminalRoutes } from "./terminal.js";
 import { adminRoutes } from "./admin.js";
@@ -64,6 +65,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   await app.register(backupRoutes);
 
   await app.register(monitoringRoutes);
+  await app.register(appHealthRoutes);
   await app.register(logRoutes);
   await app.register(terminalRoutes);
 

@@ -1,4 +1,4 @@
-import { and, eq, inArray, lt, sql } from "@kaname/db";
+import { and, eq, lt, sql } from "@kaname/db";
 import { alertRules, appHealthSamples, appInstalls, appMonitors, servers } from "@kaname/db/schema";
 import {
   APP_ALERT_KIND_LABELS,
@@ -13,7 +13,7 @@ import {
 import type { AppContext } from "../context.js";
 
 /* ------------------------------------------------------------------ *
- * The app monitor (KD-041).
+ * The app monitor (KD-042).
  *
  * Once a minute, for every active install:
  *   - an HTTP(S) GET of its own address and probe path, from the
@@ -443,10 +443,4 @@ async function pool<T>(items: readonly T[], size: number, run: (item: T) => Prom
     }
   });
   await Promise.all(workers);
-}
-
-/** Every install that still has an app rule; used by the routes for "Add rule". */
-export async function rulesForInstall(ctx: AppContext, installIds: readonly string[]) {
-  if (installIds.length === 0) return [];
-  return ctx.db.select().from(alertRules).where(inArray(alertRules.appInstallId, [...installIds]));
 }

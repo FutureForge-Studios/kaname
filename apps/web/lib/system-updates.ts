@@ -18,7 +18,7 @@ import {
 /* ------------------------------------------------------------------ *
  * Operating-system updates — the host's packages, not Kaname's.
  *
- * Every read is the control plane's cache (KD-040); the only live call
+ * Every read is the control plane's cache (KD-041); the only live call
  * is the explicit refresh. Upgrading is a job like any other, so the
  * drawer and the in-page activity strip carry it to completion, and its
  * success re-reads the cache through the `system.packages.` job family.

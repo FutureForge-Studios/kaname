@@ -49,6 +49,14 @@ const MARKS: Record<string, React.ReactNode> = {
       <path d="M14 26h6l3-7 4 12 3-5h4" />
     </>
   ),
+  // A screen with a play mark: a media server.
+  jellyfin: (
+    <>
+      <rect x="9" y="12" width="30" height="20" rx="3" />
+      <path d="M21 17l8 5-8 5z" />
+      <path d="M18 37h12" />
+    </>
+  ),
   // Three linked nodes: a workflow.
   n8n: (
     <>

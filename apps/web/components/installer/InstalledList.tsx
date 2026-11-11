@@ -19,6 +19,7 @@ import {
   useToast,
 } from "@kaname/ui";
 import { useCan } from "@/lib/queries";
+import { AppHealthDot } from "./AppHealth";
 import { AppMark, versionLabel } from "./AppMark";
 import { INSTALL_STATUS } from "./InstallProgress";
 import { IN_FLIGHT, useAppInstalls, useUninstallApp } from "./queries";
@@ -102,6 +103,7 @@ export function InstalledList() {
                     <StatusBadge size="xs" tone={status.tone} pulse={busy}>
                       {status.label}
                     </StatusBadge>
+                    {row.status === "active" && <AppHealthDot installId={row.id} />}
                   </div>
                   <p className="kn-mono m-0 mt-0.5 truncate text-xs text-[var(--kn-text-3)]">
                     {row.domain} · {row.server_name} · {versionLabel(row.app_version)}

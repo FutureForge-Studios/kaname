@@ -117,7 +117,7 @@ describe("catalog", () => {
   });
 
   it("makes every container app installable, Plausible included", () => {
-    for (const id of ["ghost", "nextcloud", "uptime-kuma", "n8n", "gitea", "plausible"]) {
+    for (const id of ["ghost", "nextcloud", "uptime-kuma", "n8n", "gitea", "plausible", "jellyfin"]) {
       expect(findApp(id)?.availability, id).toBe("available");
     }
     expect(findApp("plausible")!.category).toBe("analytics");
@@ -248,7 +248,7 @@ const containerCtx = (recipeId: string, ssl = true) => ({
 });
 
 describe("image recipe plans", () => {
-  const IMAGE_APPS = ["ghost", "nextcloud", "uptime-kuma", "n8n", "gitea", "plausible"] as const;
+  const IMAGE_APPS = ["ghost", "nextcloud", "uptime-kuma", "n8n", "gitea", "plausible", "jellyfin"] as const;
 
   it.each(IMAGE_APPS)("%s: every spec passes the agent's own schema and its guards' shape", (id) => {
     const recipe = findApp(id)!;
@@ -890,14 +890,14 @@ describe("app.install from an image", () => {
     );
   });
 
-  it.each(["uptime-kuma", "n8n", "gitea", "nextcloud"])("%s installs on the same machinery", async (id) => {
+  it.each(["uptime-kuma", "n8n", "gitea", "nextcloud", "jellyfin"])("%s installs on the same machinery", async (id) => {
     const install = await newInstall(id);
     const { error } = await run("app.install", install.id);
     expect(error).toBeNull();
     expect((await installRow(install.id))!.status).toBe("active");
     const roles = calls("container.create").map((p) => p.role);
     expect(roles.at(-1)).toBe("app");
-    expect(roles.length).toBe(id === "uptime-kuma" ? 1 : 2);
+    expect(roles.length).toBe(id === "uptime-kuma" || id === "jellyfin" ? 1 : 2);
   });
 
   it("removes the containers, network, data, vhost and secrets when the site cannot be created", async () => {

@@ -13,6 +13,7 @@ import {
   StatusLine,
   type Tone,
 } from "@kaname/ui";
+import { AppHealthLine } from "@/components/installer/AppHealth";
 import { formatCount } from "@/lib/format";
 import { useCan, useDashboard, useSession } from "@/lib/queries";
 import { useViewMode } from "@/lib/modes";
@@ -84,7 +85,16 @@ export function SimplifiedHome() {
           title={first ? `Hello, ${first}.` : "Hello."}
           accent="What would you like to do?"
           lede="The everyday tasks, one click each. Switch to Advanced in the top bar for the full Command Center."
-          status={summary ? <HealthLine summary={summary} /> : <Skeleton className="h-4 w-64" />}
+          status={
+            summary ? (
+              <div className="flex flex-col gap-1.5">
+                <HealthLine summary={summary} />
+                <AppHealthLine />
+              </div>
+            ) : (
+              <Skeleton className="h-4 w-64" />
+            )
+          }
         />
       </header>
 

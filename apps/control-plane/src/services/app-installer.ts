@@ -453,6 +453,15 @@ export function appEnvironment(recipe: AppRecipe, ctx: ContainerContext): Record
     case "uptime-kuma":
       // SQLite in /app/data; nothing to tell it.
       return {};
+    case "jellyfin":
+      // Everything under the one managed mount; the web client stays
+      // where the image ships it.
+      return {
+        JELLYFIN_DATA_DIR: "/jellyfin/data",
+        JELLYFIN_CONFIG_DIR: "/jellyfin/config",
+        JELLYFIN_CACHE_DIR: "/jellyfin/cache",
+        JELLYFIN_LOG_DIR: "/jellyfin/log",
+      };
     case "n8n":
       return {
         DB_TYPE: "postgresdb",

@@ -255,7 +255,7 @@ export const updateRunListQuery = listQuery.extend({
  *
  * Not Kaname's own releases: the host's apt/dnf/apk/pacman updates, as
  * the agent reports them through `system.packages.list`. The control
- * plane caches the last answer per server (KD-047) so a page never fans
+ * plane caches the last answer per server (KD-041) so a page never fans
  * a package-manager run across the fleet; a refresh is explicit, and a
  * background pass keeps the cache from going stale.
  * ------------------------------------------------------------------ */

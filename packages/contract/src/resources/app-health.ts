@@ -6,7 +6,7 @@ import { alert, alertRule, appAlertKind, type AppAlertKind } from "./fleet.js";
 /* ------------------------------------------------------------------ *
  * App health — is an installed app answering, and is it well.
  *
- * Signals, collected by the control plane's app monitor (KD-041):
+ * Signals, collected by the control plane's app monitor (KD-042):
  *   - an HTTP(S) probe of the app's own address, once a minute;
  *   - for image recipes, its Kaname-labelled containers (state,
  *     healthcheck, restarts, CPU and memory), every other minute;
@@ -30,6 +30,7 @@ export const APP_HEALTH_PATHS: Readonly<Record<string, string>> = {
   n8n: "/healthz",
   gitea: "/api/healthz",
   plausible: "/api/health",
+  jellyfin: "/health",
 };
 
 export function defaultHealthPath(appId: string): string {
