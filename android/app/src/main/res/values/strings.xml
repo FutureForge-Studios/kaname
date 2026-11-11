@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Kaname</string>
+    <string name="unlock_title">Unlock Kaname</string>
+    <string name="unlock_subtitle">Confirm it\'s you to open your panels</string>
+</resources>

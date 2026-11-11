@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TLS stays strict: only system CAs are trusted, user-installed CAs and self-signed
+  certificates are not. Plain http is allowed for LAN/IP installs (the installer's
+  default), which the app badges as "not encrypted".
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

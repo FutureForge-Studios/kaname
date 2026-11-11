@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Kaname mark: the purple square with a pivot point (要, "kaname" = pivot). -->
+    <path
+        android:fillColor="#7A4FF4"
+        android:pathData="M38,38h32v32h-32z" />
+    <path
+        android:fillColor="#F5F4F0"
+        android:pathData="M51,51h6v6h-6z" />
+</vector>

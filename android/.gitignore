@@ -1,0 +1,20 @@
+# Gradle / build output
+.gradle/
+build/
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Machine-local config (sdk.dir)
+local.properties
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Signing material
+*.keystore
+*.jks
+keystore.properties
