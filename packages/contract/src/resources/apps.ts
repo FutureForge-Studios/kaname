@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { domainName, emailAddress, identifier, isoDate, listQuery, slug, uuid } from "../primitives.js";
 import { dbEngine, siteRuntime } from "../enums.js";
+import { permission } from "../rbac.js";
 
 /* ------------------------------------------------------------------ *
  * App catalog — the one-click installer.
@@ -313,6 +314,80 @@ export const APP_CATALOG: readonly AppRecipe[] = [
 export function findApp(id: string): AppRecipe | undefined {
   return APP_CATALOG.find((app) => app.id === id);
 }
+
+/* ------------------------------------------------------------------ *
+ * Featured server apps.
+ *
+ * Some things people install from the catalog are not websites. A mail
+ * server is a whole service on a host, deployed by its own module and
+ * its own job (KD-034), not a site + database + certificate. They are
+ * listed here, typed apart from APP_CATALOG, so the installer can show
+ * them beside the recipes without the app-install job, its routes or
+ * its validation ever seeing them: `findApp` cannot return one, so
+ * POST /apps/installs answers 404 for its id. The card hands off to the
+ * module that owns the deploy.
+ * ------------------------------------------------------------------ */
+
+export const featuredAppCategory = z.enum(["mail"]);
+export type FeaturedAppCategory = z.infer<typeof featuredAppCategory>;
+
+export const FEATURED_APP_CATEGORY_LABELS: Record<FeaturedAppCategory, string> = {
+  mail: "Mail",
+};
+
+export const featuredServerApp = z.object({
+  id: slug,
+  /** Always a hand-off: the installer links to the module that deploys it. */
+  kind: z.literal("handoff"),
+  name: z.string().min(1).max(64),
+  tagline: z.string().min(1).max(120),
+  description: z.string().min(1).max(600),
+  category: featuredAppCategory,
+  homepage: z.string().url(),
+  /** In-panel path that opens the module's own deploy form. */
+  deploy_href: z.string().startsWith("/"),
+  /** In-panel path to the module once it is running. */
+  open_href: z.string().startsWith("/"),
+  /** Needed to deploy it; without it the card says where it lives and nothing more. */
+  permission,
+  /** What Kaname does for it, one short line each. */
+  setup: z.array(z.object({ title: z.string().max(80), description: z.string().max(200) })).max(8),
+});
+export type FeaturedServerApp = z.infer<typeof featuredServerApp>;
+
+export const FEATURED_SERVER_APPS: readonly FeaturedServerApp[] = [
+  {
+    id: "yunori-mail",
+    kind: "handoff",
+    name: "Yunori Mail Server",
+    tagline: "Host your own mail on a server you already manage.",
+    description:
+      "Yunori Mail Server drives an unmodified Stalwart. Its secrets are sealed in a vault, every change it makes goes into a hash-chained audit log, and it checks its DNS records against public resolvers rather than taking them on trust.",
+    category: "mail",
+    homepage: "https://yunori.email",
+    deploy_href: "/email?deploy=1",
+    open_href: "/email",
+    permission: "email.servers:write",
+    setup: [
+      {
+        title: "Deploys it on a paired host",
+        description: "Downloads the release, verifies its checksum on the host and runs the installer.",
+      },
+      {
+        title: "Adopts an existing install",
+        description: "A Yunori Mail Server installed by hand can be brought under Kaname instead.",
+      },
+      {
+        title: "Domains, mailboxes and aliases",
+        description: "Managed from Kaname, applied through the yunori-mail CLI on the host.",
+      },
+      {
+        title: "A DNS checklist and health checks",
+        description: "The records each domain needs, and Yunori's own verdict on deliverability.",
+      },
+    ],
+  },
+];
 
 /* ------------------------------------------------------------------ *
  * Provisioning steps

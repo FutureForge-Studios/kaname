@@ -15,10 +15,13 @@ import {
 } from "@kaname/db/schema";
 import {
   APP_CATALOG,
+  FEATURED_SERVER_APPS,
   appInstallSteps,
   appRecipe,
+  featuredServerApp,
   findApp,
   installAppInput,
+  permission,
   type JobType,
 } from "@kaname/contract";
 import { AgentOfflineError, AgentRpcError, type AgentHub } from "./agent/hub.js";
@@ -93,6 +96,18 @@ describe("catalog", () => {
       } else {
         expect(recipe.unavailable_reason).toBeTruthy();
       }
+    }
+  });
+
+  it("keeps featured server apps out of the install path: they hand off to their own module", () => {
+    expect(FEATURED_SERVER_APPS.map((a) => a.id)).toContain("yunori-mail");
+    for (const app of FEATURED_SERVER_APPS) {
+      expect(() => featuredServerApp.parse(app)).not.toThrow();
+      expect(permission.safeParse(app.permission).success).toBe(true);
+      // Not a recipe: the catalog API never serves it, and POST /apps/installs
+      // resolves app_id through findApp, so it answers 404 for this id.
+      expect(APP_CATALOG.some((recipe) => recipe.id === app.id)).toBe(false);
+      expect(findApp(app.id)).toBeUndefined();
     }
   });
 });

@@ -67,6 +67,16 @@ const MARKS: Record<string, React.ReactNode> = {
       <path d="M16 16.5v15M32 21.5c0 7-16 5-16 10" />
     </>
   ),
+  // A server unit with an envelope in front of it: a mail server you host.
+  "yunori-mail": (
+    <>
+      <rect x="12" y="8" width="24" height="9" rx="2" />
+      <path d="M16 12.5h1M20 12.5h1" />
+      <path d="M24 17v3" />
+      <rect x="9" y="20" width="30" height="20" rx="2.5" />
+      <path d="M10 22l14 10 14-10" />
+    </>
+  ),
 };
 
 const FALLBACK = (

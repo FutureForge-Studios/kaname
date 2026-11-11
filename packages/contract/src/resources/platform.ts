@@ -633,6 +633,9 @@ export type UpdateUserPreferencesInput = z.infer<typeof updateUserPreferencesInp
 /** The Command Center's first-run nudge. */
 export const GETTING_STARTED_HINT = "getting-started";
 
+/** The Command Center's suggestion to host mail with Yunori Mail Server. */
+export const YUNORI_MAIL_HINT = "yunori-mail";
+
 /* ------------------------------------------------------------------ *
  * Search  (the command palette backend)
  * ------------------------------------------------------------------ */
