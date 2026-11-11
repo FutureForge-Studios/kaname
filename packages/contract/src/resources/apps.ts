@@ -30,6 +30,7 @@ export const appCategory = z.enum([
   "monitoring",
   "storage",
   "developer",
+  "analytics",
 ]);
 export type AppCategory = z.infer<typeof appCategory>;
 
@@ -40,6 +41,7 @@ export const APP_CATEGORY_LABELS: Record<AppCategory, string> = {
   monitoring: "Monitoring",
   storage: "Files",
   developer: "Developer",
+  analytics: "Analytics",
 };
 
 export const appAvailability = z.enum(["available", "coming_soon"]);
@@ -57,6 +59,7 @@ export const appConfigTemplate = z.enum([
   "uptime-kuma",
   "n8n",
   "gitea",
+  "plausible",
 ]);
 export type AppConfigTemplate = z.infer<typeof appConfigTemplate>;
 
@@ -66,6 +69,16 @@ const relativePath = z
   .max(256)
   .regex(/^(?:[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)?$/, "must be a relative path")
   .refine((p) => !p.split("/").includes(".."), { message: "path traversal is not allowed" });
+
+/** What a companion container runs; its data paths and settings are the control plane's. */
+export const companionEngine = z.enum(["mysql", "postgres", "clickhouse"]);
+export type CompanionEngine = z.infer<typeof companionEngine>;
+
+export const COMPANION_ENGINE_LABELS: Record<CompanionEngine, string> = {
+  mysql: "MySQL",
+  postgres: "PostgreSQL",
+  clickhouse: "ClickHouse",
+};
 
 /** An absolute path inside a container image. */
 const containerPath = z
@@ -96,17 +109,27 @@ export const appSource = z.discriminatedUnion("kind", [
     /** The account the image runs as, when it does not take ownership of its data itself. */
     data_uid: z.number().int().min(1).max(65534).nullable(),
     /**
-     * The app's database, run as a companion container on the install's
-     * private network and reachable from the app as host "db". Null when
-     * the app keeps its data in files (SQLite).
+     * The app's databases, each a companion container on the install's
+     * private network, reachable from the app by its role as a host name
+     * ("db", "events") and never published. Empty when the app keeps its
+     * data in files (SQLite). Started in this order, before the app.
      */
-    database: z
-      .object({
-        engine: z.enum(["mysql", "postgres"]),
-        image: z.string().regex(/^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9._-]+$/),
-        data_path: containerPath,
-      })
-      .nullable(),
+    companions: z
+      .array(
+        z.object({
+          role: z.enum(["db", "events"]),
+          engine: companionEngine,
+          image: z.string().regex(/^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9._-]+$/),
+        }),
+      )
+      .max(3),
+    /**
+     * One-shot runs of the app image before it starts (database creation,
+     * migrations): arguments to the image's own entrypoint, never a shell.
+     */
+    init: z
+      .array(z.array(z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9._:=+-]{0,127}$/)).min(1).max(8))
+      .max(4),
   }),
 ]);
 export type AppSource = z.infer<typeof appSource>;
@@ -253,7 +276,8 @@ export const APP_CATALOG: readonly AppRecipe[] = [
       data_path: "/var/lib/ghost/content",
       data_uid: null,
       // Ghost supports MySQL 8 and only MySQL 8 in production.
-      database: { engine: "mysql", image: "mysql:8.0", data_path: "/var/lib/mysql" },
+      companions: [{ role: "db", engine: "mysql", image: "mysql:8.0" }],
+      init: [],
     },
     config: "ghost",
     writable_paths: [],
@@ -285,7 +309,8 @@ export const APP_CATALOG: readonly AppRecipe[] = [
       port: 80,
       data_path: "/var/www/html",
       data_uid: null,
-      database: { engine: "postgres", image: "postgres:16-alpine", data_path: "/var/lib/postgresql/data" },
+      companions: [{ role: "db", engine: "postgres", image: "postgres:16-alpine" }],
+      init: [],
     },
     config: "nextcloud",
     writable_paths: [],
@@ -317,7 +342,8 @@ export const APP_CATALOG: readonly AppRecipe[] = [
       port: 3001,
       data_path: "/app/data",
       data_uid: null,
-      database: null,
+      companions: [],
+      init: [],
     },
     config: "uptime-kuma",
     writable_paths: [],
@@ -350,7 +376,8 @@ export const APP_CATALOG: readonly AppRecipe[] = [
       data_path: "/home/node/.n8n",
       // The image runs as `node` and does not take its data directory over.
       data_uid: 1000,
-      database: { engine: "postgres", image: "postgres:16-alpine", data_path: "/var/lib/postgresql/data" },
+      companions: [{ role: "db", engine: "postgres", image: "postgres:16-alpine" }],
+      init: [],
     },
     config: "n8n",
     writable_paths: [],
@@ -382,11 +409,55 @@ export const APP_CATALOG: readonly AppRecipe[] = [
       port: 3000,
       data_path: "/data",
       data_uid: null,
-      database: { engine: "postgres", image: "postgres:16-alpine", data_path: "/var/lib/postgresql/data" },
+      companions: [{ role: "db", engine: "postgres", image: "postgres:16-alpine" }],
+      init: [],
     },
     config: "gitea",
     writable_paths: [],
     finish: "Open the site to finish the initial configuration.",
+  },
+  {
+    id: "plausible",
+    name: "Plausible Analytics",
+    tagline: "Privacy-friendly web analytics without cookies.",
+    description:
+      "Simple, lightweight site analytics that respects visitors' privacy. Kaname runs the Community Edition image with PostgreSQL for accounts and ClickHouse for events, both on a private network, using the settings from Plausible's own Community Edition setup.",
+    category: "analytics",
+    // Pinned to the release the Community Edition compose file documents.
+    version: "3.2.1",
+    homepage: "https://plausible.io",
+    license: "AGPL-3.0",
+    availability: "available",
+    unavailable_reason: null,
+    requirements: {
+      runtime: "container",
+      runtime_version: null,
+      capabilities: ["nginx", "docker"],
+      database: null,
+      // ClickHouse is the hungry one: Plausible recommends 2 GB of RAM or more.
+      min_memory_mb: 2048,
+      min_disk_mb: 4096,
+    },
+    source: {
+      kind: "image",
+      image: "ghcr.io/plausible/community-edition:v3.2.1",
+      port: 8000,
+      data_path: "/var/lib/plausible",
+      // The image runs as uid 999 and does not take its data directory over.
+      data_uid: 999,
+      companions: [
+        { role: "db", engine: "postgres", image: "postgres:16-alpine" },
+        { role: "events", engine: "clickhouse", image: "clickhouse/clickhouse-server:24.12-alpine" },
+      ],
+      init: [
+        ["db", "createdb"],
+        ["db", "migrate"],
+      ],
+    },
+    config: "plausible",
+    writable_paths: [],
+    finish:
+      "Open the site and register: the first account becomes the owner. Registration then stays open to invitations only.",
   },
 ];
 
@@ -480,6 +551,7 @@ export const APP_INSTALL_STEP_IDS = [
   "pull",
   "network",
   "db_container",
+  "init",
   "app_container",
   "site",
   "certificate",
@@ -506,7 +578,7 @@ export function appInstallSteps(
   const steps: AppInstallStepSpec[] = [];
   const source = recipe.source;
   if (source.kind === "image") {
-    const images = source.database ? `${source.image} and ${source.database.image}` : source.image;
+    const images = [source.image, ...source.companions.map((c) => c.image)].join(", ");
     steps.push({
       id: "pull",
       title: "Pull the image",
@@ -517,12 +589,20 @@ export function appInstallSteps(
       title: "Create a private network",
       description: "A network of its own, so the app and its database reach each other and nothing else.",
     });
-    if (source.database) {
+    if (source.companions.length > 0) {
+      const engines = source.companions.map((c) => COMPANION_ENGINE_LABELS[c.engine]).join(" and ");
       steps.push({
         id: "db_container",
-        title: `Start the database (${source.database.engine === "mysql" ? "MySQL" : "PostgreSQL"})`,
+        title: `Start the ${source.companions.length === 1 ? "database" : "databases"} (${engines})`,
         description:
-          "A database container with a generated password kept encrypted. It is never published outside the private network.",
+          "Companion containers on the private network, with generated passwords kept encrypted. They are never published.",
+      });
+    }
+    if (source.init.length > 0) {
+      steps.push({
+        id: "init",
+        title: "Prepare the database",
+        description: `Run ${recipe.name}'s own setup (${source.init.map((a) => a.join(" ")).join(", ")}) once, before it starts.`,
       });
     }
     steps.push({

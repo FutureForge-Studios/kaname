@@ -145,6 +145,32 @@ export const managedContainerSpec = z
       .max(256 * 1024 * 1024 * 1024)
       .optional(),
     cpus: z.number().min(0.1).max(256).optional(),
+    /** The one ulimit a spec may raise: open files, soft and hard alike. */
+    nofile: z.number().int().min(1024).max(1_048_576).optional(),
+    /**
+     * Arguments to the image's own entrypoint, one token each. There is no
+     * entrypoint override and no shell: a token cannot hold a space.
+     */
+    args: z
+      .array(z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9._:=+-]{0,127}$/))
+      .max(16)
+      .default([]),
+    /** Small config files, written under the install's directory and mounted read-only. */
+    files: z
+      .array(
+        z
+          .object({
+            path: z
+              .string()
+              .max(256)
+              .regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/),
+            content: z.string().max(64 * 1024),
+            target: absolutePath,
+          })
+          .strict(),
+      )
+      .max(8)
+      .default([]),
     /** Remove a managed container of the same install and role first. */
     replace: z.boolean().default(false),
   })
@@ -529,6 +555,20 @@ export const AGENT_METHODS = {
     requires: ["docker"],
     readOnly: false,
     summary: "Create and start a managed app container from a closed, guarded spec.",
+  }),
+  "container.task.run": m({
+    params: z
+      .object({
+        /** Must publish no ports; runs once, is never restarted, and is removed afterwards. */
+        spec: managedContainerSpec,
+        timeout_seconds: z.number().int().min(1).max(3600).default(600),
+      })
+      .strict(),
+    result: z.object({ exit_code: z.number().int(), output: z.string() }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Run a one-shot managed container (a migration) to completion.",
   }),
   "container.app.status": m({
     params: z.object({ install_id: managedInstallId }).strict(),

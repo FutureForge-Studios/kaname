@@ -944,6 +944,51 @@
             "minimum": 0.1,
             "maximum": 256
           },
+          "nofile": {
+            "type": "integer",
+            "minimum": 1024,
+            "maximum": 1048576
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_][A-Za-z0-9._:=+-]{0,127}$"
+            },
+            "maxItems": 16,
+            "default": []
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 256,
+                  "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
+                },
+                "content": {
+                  "type": "string",
+                  "maxLength": 65536
+                },
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^\\/"
+                }
+              },
+              "required": [
+                "path",
+                "content",
+                "target"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 8,
+            "default": []
+          },
           "replace": {
             "type": "boolean",
             "default": false
@@ -2577,6 +2622,209 @@
           "memory_usage",
           "memory_limit",
           "runtime"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "container.task.run",
+      "stream": "none",
+      "requires": [
+        "docker"
+      ],
+      "read_only": false,
+      "summary": "Run a one-shot managed container (a migration) to completion.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "spec": {
+            "type": "object",
+            "properties": {
+              "install_id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+              },
+              "role": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9]{0,15}$"
+              },
+              "image": {
+                "type": "string",
+                "maxLength": 255,
+                "pattern": "^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]{1,5})?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[a-f0-9]{64}|:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}@sha256:[a-f0-9]{64})$"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "maxLength": 4096,
+                  "pattern": "^[^\\0]*$"
+                },
+                "propertyNames": {
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+                },
+                "default": {}
+              },
+              "mounts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "source": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096,
+                      "pattern": "^\\/"
+                    },
+                    "target": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096,
+                      "pattern": "^\\/"
+                    },
+                    "read_only": {
+                      "type": "boolean",
+                      "default": false
+                    },
+                    "uid": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65534
+                    },
+                    "gid": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65534
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "target"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 8,
+                "default": []
+              },
+              "ports": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "container_port": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 65535
+                    },
+                    "host_port": {
+                      "type": "integer",
+                      "minimum": 1024,
+                      "maximum": 65535
+                    }
+                  },
+                  "required": [
+                    "container_port",
+                    "host_port"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 4,
+                "default": []
+              },
+              "memory_bytes": {
+                "type": "integer",
+                "minimum": 67108864,
+                "maximum": 274877906944
+              },
+              "cpus": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 256
+              },
+              "nofile": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 1048576
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_][A-Za-z0-9._:=+-]{0,127}$"
+                },
+                "maxItems": 16,
+                "default": []
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "maxLength": 256,
+                      "pattern": "^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
+                    },
+                    "content": {
+                      "type": "string",
+                      "maxLength": 65536
+                    },
+                    "target": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096,
+                      "pattern": "^\\/"
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "content",
+                    "target"
+                  ],
+                  "additionalProperties": false
+                },
+                "maxItems": 8,
+                "default": []
+              },
+              "replace": {
+                "type": "boolean",
+                "default": false
+              }
+            },
+            "required": [
+              "install_id",
+              "role",
+              "image"
+            ],
+            "additionalProperties": false
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600,
+            "default": 600
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "exit_code": {
+            "type": "integer"
+          },
+          "output": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "exit_code",
+          "output"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
