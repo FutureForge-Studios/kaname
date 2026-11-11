@@ -2,7 +2,14 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { APP_CATEGORY_LABELS, type AppCategory, type AppRecipe } from "@kaname/contract";
+import {
+  APP_CATEGORY_LABELS,
+  FEATURED_APP_CATEGORY_LABELS,
+  FEATURED_SERVER_APPS,
+  type AppCategory,
+  type AppRecipe,
+  type FeaturedAppCategory,
+} from "@kaname/contract";
 import {
   ErrorState,
   NumberedSection,
@@ -13,6 +20,7 @@ import {
 } from "@kaname/ui";
 import { AppCard } from "@/components/installer/AppCard";
 import { AppsHeader } from "@/components/installer/AppsHeader";
+import { FeaturedAppCard } from "@/components/installer/FeaturedAppCard";
 import { useAppCatalog, useAppInstalls } from "@/components/installer/queries";
 import { pluralize } from "@/lib/format";
 import { useCan } from "@/lib/queries";
@@ -23,10 +31,15 @@ import { useCan } from "@/lib/queries";
  * A gallery, not a table: the person here is choosing, not operating.
  * Categories filter in place; apps that need an agent capability that
  * does not exist yet sit in their own section so the installable ones
- * lead.
+ * lead. Featured server apps (a mail server) open the page: they are
+ * not recipes, and their card hands off to the module that deploys them.
  * ------------------------------------------------------------------ */
 
-type Filter = "all" | AppCategory;
+type Filter = "all" | AppCategory | FeaturedAppCategory;
+
+function isFeaturedCategory(filter: Filter): filter is FeaturedAppCategory {
+  return filter in FEATURED_APP_CATEGORY_LABELS;
+}
 
 export default function AppsCatalogPage() {
   const router = useRouter();
@@ -42,6 +55,11 @@ export default function AppsCatalogPage() {
     return [...seen];
   }, [apps]);
 
+  const featured = FEATURED_SERVER_APPS.filter(
+    (app) => filter === "all" || app.category === filter,
+  );
+  const featuredCategories = [...new Set(FEATURED_SERVER_APPS.map((app) => app.category))];
+  const showRecipes = !isFeaturedCategory(filter);
   const visible = apps.filter((app) => filter === "all" || app.category === filter);
   const ready = visible.filter((app) => app.availability === "available");
   const soon = visible.filter((app) => app.availability !== "available");
@@ -58,7 +76,8 @@ export default function AppsCatalogPage() {
         status={
           catalog.data ? (
             <StatusLine tone="ok">
-              {pluralize(availableCount, "app")} ready to install · {apps.length - availableCount} coming soon
+              {pluralize(availableCount, "app")} ready to install · {apps.length - availableCount}{" "}
+              coming soon
             </StatusLine>
           ) : null
         }
@@ -80,33 +99,54 @@ export default function AppsCatalogPage() {
                 options={[
                   { value: "all", label: "All" },
                   ...categories.map((c) => ({ value: c, label: APP_CATEGORY_LABELS[c] })),
+                  ...featuredCategories.map((c) => ({
+                    value: c,
+                    label: FEATURED_APP_CATEGORY_LABELS[c],
+                  })),
                 ]}
               />
             </div>
 
-            <NumberedSection
-              index={1}
-              title="Ready to install"
-              caption="Database, files, website and HTTPS in one job."
-            >
-              {catalog.isLoading ? (
-                <Grid>
-                  {[0, 1, 2].map((i) => (
-                    <Skeleton key={i} className="h-80 w-full" label={i === 0 ? "Loading apps" : undefined} />
-                  ))}
-                </Grid>
-              ) : ready.length === 0 ? (
-                <p className="m-0 text-sm text-[var(--kn-text-2)]">Nothing in this category can be installed yet.</p>
-              ) : (
-                <Grid>
-                  {ready.map((app) => (
-                    <AppCard key={app.id} app={app} canInstall={canInstall} onInstall={onInstall} />
-                  ))}
-                </Grid>
-              )}
-            </NumberedSection>
+            {featured.map((app) => (
+              <FeaturedAppCard key={app.id} app={app} />
+            ))}
 
-            {soon.length > 0 && (
+            {showRecipes && (
+              <NumberedSection
+                index={1}
+                title="Ready to install"
+                caption="Database, files, website and HTTPS in one job."
+              >
+                {catalog.isLoading ? (
+                  <Grid>
+                    {[0, 1, 2].map((i) => (
+                      <Skeleton
+                        key={i}
+                        className="h-80 w-full"
+                        label={i === 0 ? "Loading apps" : undefined}
+                      />
+                    ))}
+                  </Grid>
+                ) : ready.length === 0 ? (
+                  <p className="m-0 text-sm text-[var(--kn-text-2)]">
+                    Nothing in this category can be installed yet.
+                  </p>
+                ) : (
+                  <Grid>
+                    {ready.map((app) => (
+                      <AppCard
+                        key={app.id}
+                        app={app}
+                        canInstall={canInstall}
+                        onInstall={onInstall}
+                      />
+                    ))}
+                  </Grid>
+                )}
+              </NumberedSection>
+            )}
+
+            {showRecipes && soon.length > 0 && (
               <NumberedSection
                 index={2}
                 title="Coming soon"
@@ -127,5 +167,9 @@ export default function AppsCatalogPage() {
 }
 
 function Grid({ children }: { children: React.ReactNode }) {
-  return <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">{children}</div>;
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+      {children}
+    </div>
+  );
 }

@@ -16,6 +16,7 @@ import {
 import { formatCount } from "@/lib/format";
 import { useCan, useDashboard, useSession } from "@/lib/queries";
 import { useViewMode } from "@/lib/modes";
+import { YUNORI, useMailPresence } from "@/components/YunoriMail";
 import { TaskCard } from "./shared";
 
 /* ------------------------------------------------------------------ *
@@ -31,6 +32,7 @@ export function SimplifiedHome() {
   const dashboard = useDashboard();
   const summary = dashboard.data;
   const first = session?.user?.name?.split(/\s+/)[0];
+  const mail = useMailPresence();
 
   const tasks = [
     {
@@ -47,13 +49,23 @@ export function SimplifiedHome() {
       description: "WordPress, DokuWiki and more in one step: site, database and HTTPS together.",
       show: true,
     },
-    {
-      href: "/email/mailboxes?new=1",
-      icon: Mail,
-      title: "Add a mailbox",
-      description: "A new address on one of your mail domains, with its password shown once.",
-      show: can("email.mailboxes:write"),
-    },
+    // With no mail server yet, the mail task is deploying one; a mailbox
+    // needs a server to live on.
+    mail.known && mail.count === 0
+      ? {
+          href: YUNORI.deploy_href,
+          icon: Mail,
+          title: "Host your own mail",
+          description: "Deploy Yunori Mail Server on a host you manage. Kaname checks its DNS for you.",
+          show: mail.canDeploy,
+        }
+      : {
+          href: "/email/mailboxes?new=1",
+          icon: Mail,
+          title: "Add a mailbox",
+          description: "A new address on one of your mail domains, with its password shown once.",
+          show: can("email.mailboxes:write"),
+        },
     {
       href: "/backups",
       icon: Archive,

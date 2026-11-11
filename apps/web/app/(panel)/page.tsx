@@ -46,6 +46,7 @@ import {
 import { GettingStarted } from "@/components/GettingStarted";
 import { ModeHome } from "@/components/modes";
 import { PageError } from "@/components/PageError";
+import { YunoriSuggestion } from "@/components/YunoriMail";
 import { ATTENTION_ICONS, type IconComponent } from "@/lib/icons";
 import {
   formatBytes,
@@ -160,6 +161,7 @@ function CommandCenterPage() {
         )}
 
         <GettingStarted />
+        <YunoriSuggestion />
 
         <AttentionList
           index={1}

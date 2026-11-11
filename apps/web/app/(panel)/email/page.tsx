@@ -28,6 +28,8 @@ import {
   MenuItem,
   MenuSeparator,
   Card,
+  CardInset,
+  Eyebrow,
   MonoLabel,
   MonoText,
   NumberedSection,
@@ -46,6 +48,8 @@ import { PageError } from "@/components/PageError";
 import { serverPrerequisite, useOpenFromQuery } from "@/components/ResourcePage";
 import { formatCount, pluralize } from "@/lib/format";
 import { useCan, useServers } from "@/lib/queries";
+import { AppMark } from "@/components/installer/AppMark";
+import { YUNORI, YunoriSetupList } from "@/components/YunoriMail";
 import { HostCell } from "../_components/cells";
 import { JobActivityBar } from "../_components/JobActivity";
 import { DnsDrawer } from "./_components/DnsDrawer";
@@ -222,6 +226,12 @@ export default function MailServersPage() {
             <Skeleton className="h-40 rounded-[var(--kn-r-md)]" label="Loading mail servers" />
             <Skeleton className="h-40 rounded-[var(--kn-r-md)]" />
           </div>
+        ) : servers.length === 0 && !health && !noHost ? (
+          <HostYourOwnMail
+            canWrite={canWrite}
+            deployButton={deployButton}
+            onAdopt={() => setAdopting(true)}
+          />
         ) : servers.length === 0 ? (
           <SectionCard>
             {!health && noHost ? (
@@ -234,23 +244,12 @@ export default function MailServersPage() {
             ) : (
               <EmptyState
                 icon={MailCheck}
-                title={health ? "No mail server matches" : "No mail server yet"}
-                description={
-                  health
-                    ? "No host's last check came out that way."
-                    : "Kaname installs Yunori Mail Server on a host you own: Stalwart for mail, with DNS and certificates checked for you. Domains, mailboxes and aliases all live on one."
-                }
-                action={health || !canWrite ? undefined : deployButton}
+                title="No mail server matches"
+                description="No host's last check came out that way."
                 secondaryAction={
-                  health ? (
-                    <Button variant="secondary" size="sm" onClick={() => setHealth("")}>
-                      Clear filter
-                    </Button>
-                  ) : canWrite ? (
-                    <Button variant="secondary" size="sm" onClick={() => setAdopting(true)}>
-                      Adopt one installed by hand
-                    </Button>
-                  ) : undefined
+                  <Button variant="secondary" size="sm" onClick={() => setHealth("")}>
+                    Clear filter
+                  </Button>
                 }
               />
             )}
@@ -316,6 +315,73 @@ export default function MailServersPage() {
         }}
       />
     </div>
+  );
+}
+
+/*
+ * The first-run state: what Yunori Mail Server is, in the same factual
+ * terms the installer's featured card uses, and what Kaname sets up for
+ * it. Only someone who can deploy gets the pills.
+ */
+function HostYourOwnMail({
+  canWrite,
+  deployButton,
+  onAdopt,
+}: {
+  canWrite: boolean;
+  deployButton: React.ReactNode;
+  onAdopt: () => void;
+}) {
+  return (
+    <Card
+      radius="xl"
+      padding="lg"
+      className="grid min-w-0 grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+      aria-labelledby="host-your-own-mail"
+    >
+      <div className="flex min-w-0 flex-col items-start">
+        <Eyebrow>Host your own mail</Eyebrow>
+        <div className="mt-5 flex items-center gap-4">
+          <CardInset
+            grid
+            className="flex h-16 w-16 shrink-0 items-center justify-center text-[var(--kn-accent-400)]"
+          >
+            <AppMark appId={YUNORI.id} size={40} />
+          </CardInset>
+          <div className="min-w-0">
+            <h3 id="host-your-own-mail" className="kn-title m-0 text-xl text-[var(--kn-text)]">
+              No mail server yet
+            </h3>
+            <p className="m-0 mt-0.5 text-sm text-[var(--kn-text-2)]">{YUNORI.tagline}</p>
+          </div>
+        </div>
+        <p className="m-0 mt-5 max-w-prose text-sm text-[var(--kn-text-2)]">{YUNORI.description}</p>
+        <p className="m-0 mt-2 max-w-prose text-sm text-[var(--kn-text-2)]">
+          It needs an A record for <MonoText>mail.&lt;your domain&gt;</MonoText> pointed at the host,
+          and outbound port 25 open or a sending relay.
+        </p>
+        {canWrite ? (
+          <div className="mt-6 flex flex-wrap items-center gap-3">
+            {deployButton}
+            <Button variant="secondary" size="sm" onClick={onAdopt}>
+              Adopt one installed by hand
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-6">
+            <StatusLine tone="neutral">Deploying one needs Email server access</StatusLine>
+          </div>
+        )}
+      </div>
+      <div className="min-w-0">
+        <MonoLabel size="xs" tone="subtle">
+          What Kaname sets up
+        </MonoLabel>
+        <div className="mt-1">
+          <YunoriSetupList />
+        </div>
+      </div>
+    </Card>
   );
 }
 
