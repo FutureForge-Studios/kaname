@@ -427,7 +427,7 @@ function MailServerCard({ server, onForget }: { server: MailServer; onForget: ()
         {/* The verdict: one sentence, derived from the same checks listed below. */}
         <StatusLine
           tone={verdictTone(server)}
-          className={cn("text-sm", checkTextClass(server.health))}
+          className="text-sm font-medium text-[var(--kn-text)]"
         >
           {verdictSentence(server)}
         </StatusLine>

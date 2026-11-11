@@ -4,7 +4,7 @@ import * as React from "react";
 import type { CertKeyType, Domain, IssueCertificateInput } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, Tag, type ComboboxOption } from "@kaname/ui";
 import { useCan, useServers, useSession } from "@/lib/queries";
-import { FormDialog, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
 import { useDomains, useIssueCertificate } from "./queries";
 
 /* ------------------------------------------------------------------ *

@@ -4,7 +4,7 @@ import * as React from "react";
 import type { DnsProvider, Domain } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, type ComboboxOption } from "@kaname/ui";
 import { useCan, useServers } from "@/lib/queries";
-import { FormDialog, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
 import { DNS_PROVIDER_LABELS } from "./status";
 import { useCreateDomain, useSaveDnsToken, useSites, useUpdateDomain } from "./queries";
 

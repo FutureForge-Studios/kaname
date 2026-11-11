@@ -122,7 +122,7 @@ export function DnsDrawer({ domain, onClose }: DnsDrawerProps) {
                 The host has not reported any records for this domain yet. Run a check.
               </p>
             ) : (
-              <ul className="flex flex-col divide-y divide-[var(--kn-border-subtle)]" aria-label="DNS records">
+              <ul className="m-0 flex list-none flex-col divide-y divide-[var(--kn-border)] p-0" aria-label="DNS records">
                 {records.map((record) => (
                   <DnsRecordRow key={record.id} record={record} />
                 ))}
@@ -172,7 +172,7 @@ function DnsRecordRow({ record }: { record: MailDnsRecord }) {
       id={`dns-${record.id}`}
       data-record-type={record.type}
       data-record-status={record.status}
-      className="flex flex-col gap-1.5 py-3"
+      className="flex flex-col gap-2 py-3.5"
     >
       <div className="flex flex-wrap items-center gap-2">
         <MailCheckBadge status={record.status} />
@@ -184,9 +184,7 @@ function DnsRecordRow({ record }: { record: MailDnsRecord }) {
             {purpose}
           </Badge>
         )}
-        {!record.required && (
-          <span className="text-xs text-[var(--kn-text-3)]">optional</span>
-        )}
+        {!record.required && <span className="kn-label-sm text-[var(--kn-text-3)]">optional</span>}
         <span className="flex min-w-0 flex-1 items-center gap-1">
           <MonoText truncate className="min-w-0 text-[var(--kn-text)]" title={record.name}>
             {record.name}
@@ -196,10 +194,11 @@ function DnsRecordRow({ record }: { record: MailDnsRecord }) {
       </div>
 
       {record.expected !== null ? (
-        <div className="flex items-start gap-1">
+        <div className="flex items-start gap-2 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] py-1.5 pl-3 pr-1.5">
+          <span className="kn-label-sm shrink-0 pt-0.5 text-[var(--kn-text-3)]">Value</span>
           <code
             data-record-expected=""
-            className="kn-mono min-w-0 flex-1 select-all break-all rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-2 py-1 text-[var(--kn-text)]"
+            className="kn-mono min-w-0 flex-1 select-all break-all pt-px text-[var(--kn-text)]"
           >
             {record.expected}
           </code>
@@ -212,7 +211,7 @@ function DnsRecordRow({ record }: { record: MailDnsRecord }) {
       )}
 
       {differs && (
-        <div className="flex flex-col gap-0.5 text-xs">
+        <div className="flex flex-col gap-0.5 rounded-[var(--kn-r-md)] border border-[color-mix(in_srgb,var(--kn-danger)_35%,transparent)] bg-[var(--kn-danger-soft)] px-3 py-1.5 text-xs">
           <span className="text-[var(--kn-text-3)]">found:</span>
           {record.actual.map((value, index) => (
             <code
@@ -225,7 +224,7 @@ function DnsRecordRow({ record }: { record: MailDnsRecord }) {
         </div>
       )}
       {record.status === "fail" && record.actual.length === 0 && (
-        <p className="text-xs text-[var(--kn-text-3)]">found: nothing — public resolvers return no record.</p>
+        <p className="kn-mono m-0 text-2xs text-[var(--kn-danger)]">found: nothing — public resolvers return no record.</p>
       )}
     </li>
   );

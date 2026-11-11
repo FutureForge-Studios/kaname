@@ -23,6 +23,7 @@ import {
   RelativeTime,
   SectionCard,
   Skeleton,
+  StatusLine,
   cn,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
@@ -117,7 +118,9 @@ export default function MailHealthPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Email"
         title="Mail health"
+        lede="What Yunori's doctor found on the host, failing first, each with its fix. Deliverability lives or dies on these."
         subtitle={selected?.hostname ?? "What Yunori's doctor says about each server"}
         actions={selected && <ServerActions server={selected} />}
       />
@@ -253,7 +256,12 @@ function HealthDetail({ server }: { server: MailServer }) {
       <SectionCard>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className={cn("font-medium", checkTextClass(server.health))}>{verdictSentence(server)}</p>
+            <StatusLine
+              tone={CHECK_META[server.health].tone}
+              className={cn("text-md font-medium", checkTextClass(server.health))}
+            >
+              {verdictSentence(server)}
+            </StatusLine>
             <p className="mt-1 text-sm text-[var(--kn-text-2)]">
               {server.checks.length === 0
                 ? "Press Check now to run yunori-mail doctor on the host."
@@ -283,6 +291,7 @@ function HealthDetail({ server }: { server: MailServer }) {
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         {/* Checks */}
         <SectionCard
+          index={1}
           title="Checks"
           icon={Stethoscope}
           description="The last doctor run, failing first. Each row says what was observed and what to do."
@@ -308,6 +317,7 @@ function CertificateCard({ server }: { server: MailServer }) {
 
   return (
     <SectionCard
+      index={2}
       title="Certificate"
       icon={ShieldCheck}
       description="Issued by Let's Encrypt for the mail hostname and pushed into the mail engine."
@@ -401,6 +411,7 @@ function PreflightCard({ server }: { server: MailServer }) {
   return (
     <SectionCard
       padded={false}
+      index={3}
       title={
         <button
           type="button"

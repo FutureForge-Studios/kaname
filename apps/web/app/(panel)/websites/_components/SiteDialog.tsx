@@ -4,7 +4,7 @@ import * as React from "react";
 import type { Site, SiteRuntime } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, Tag, type ComboboxOption } from "@kaname/ui";
 import { useCan, useServers } from "@/lib/queries";
-import { FormDialog, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
 import { RUNTIME_LABELS } from "./status";
 import { useCreateSite, useUpdateSite } from "./queries";
 
@@ -198,6 +198,9 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
     else create.mutate({ ...payload, server_id: form.serverId }, close);
   };
 
+  /* Numbered in reading order: an edit has no placement step. */
+  const step = editing ? 0 : 1;
+
   return (
     <FormDialog
       open={open}
@@ -215,6 +218,7 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
       size="lg"
     >
       {!editing && (
+        <FormSection index={1} title="Placement">
         <FormField label="Server" error={errorFor("server_id")} required>
           <Combobox
             options={serverOptions}
@@ -229,8 +233,10 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
             mono
           />
         </FormField>
+        </FormSection>
       )}
 
+      <FormSection index={step + 1} title="Names">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField
           label="Site name"
@@ -291,7 +297,9 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
           ))}
         </div>
       )}
+      </FormSection>
 
+      <FormSection index={step + 2} title="Serving">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Runtime" required>
           <Select
@@ -375,7 +383,9 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
           />
         </FormField>
       )}
+      </FormSection>
 
+      <FormSection index={step + 3} title="Ownership">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField
           label="Owner"
@@ -400,6 +410,7 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
           />
         </div>
       </div>
+      </FormSection>
     </FormDialog>
   );
 }

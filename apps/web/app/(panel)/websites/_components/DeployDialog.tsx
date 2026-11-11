@@ -3,7 +3,7 @@
 import * as React from "react";
 import type { DeploymentSource, Site } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, type ComboboxOption } from "@kaname/ui";
-import { FormDialog, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
 import { useSites, useTriggerDeployment } from "./queries";
 
 /* ------------------------------------------------------------------ *

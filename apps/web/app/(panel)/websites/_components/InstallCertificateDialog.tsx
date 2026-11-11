@@ -4,7 +4,7 @@ import * as React from "react";
 import type { Job } from "@kaname/contract";
 import { Combobox, FormField, Textarea, type ComboboxOption } from "@kaname/ui";
 import { useCan, useServers } from "@/lib/queries";
-import { FormDialog, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
 import { useDomains, useInstallCertificate } from "./queries";
 
 /* ------------------------------------------------------------------ *

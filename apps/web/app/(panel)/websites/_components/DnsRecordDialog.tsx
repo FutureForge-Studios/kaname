@@ -3,7 +3,7 @@
 import * as React from "react";
 import type { DnsRecord, DnsRecordType, Domain } from "@kaname/contract";
 import { CopyableCode, FormField, Input, Select, Switch, Textarea } from "@kaname/ui";
-import { FormDialog, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
 import {
   DNS_RECORD_TYPES,
   DNS_TYPE_SPECS,

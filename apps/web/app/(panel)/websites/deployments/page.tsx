@@ -21,7 +21,7 @@ import { ServerPicker, useServerSelection } from "@/components/ServerPicker";
 import { formatDuration } from "@/lib/format";
 import { useCan } from "@/lib/queries";
 import { DeployDialog } from "../_components/DeployDialog";
-import { FilterSelect } from "../_components/filters";
+import { FilterSelect, ScopeBar } from "../_components/filters";
 import {
   useCancelDeployments,
   useDeployments,
@@ -250,7 +250,9 @@ export default function DeploymentsPage() {
   return (
     <>
       <ResourcePage<Deployment>
+        eyebrow="Websites"
         title="Deployments"
+        lede="Every build and release, newest first. Each run is a job with its own log."
         subtitle={site ? (site.primary_domain ?? site.name) : "Every site in scope"}
         primaryAction={deploy}
         state={state}
@@ -316,7 +318,7 @@ export default function DeploymentsPage() {
           );
         }}
       >
-        <div className="flex flex-wrap items-center gap-3">
+        <ScopeBar>
           <ServerPicker selection={selection} allowAll />
           <Combobox
             options={siteOptions}
@@ -333,7 +335,7 @@ export default function DeploymentsPage() {
             aria-label="Site"
             className="w-56"
           />
-        </div>
+        </ScopeBar>
       </ResourcePage>
 
       <DeployDialog open={deploying} onOpenChange={setDeploying} site={site} />
