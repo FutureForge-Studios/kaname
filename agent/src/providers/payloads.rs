@@ -837,6 +837,142 @@ pub struct ContainerPruneResult {
     pub removed: Vec<String>,
 }
 
+/* ------------------------- managed containers ------------------------ */
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ImagePullParams {
+    pub image: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ImagePullResult {
+    pub image: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedInstallParams {
+    pub install_id: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ManagedNetworkResult {
+    pub name: String,
+    pub id: String,
+    pub created: bool,
+}
+
+/// One bind mount of a managed container. `source` must lie under the
+/// install's directory in the managed apps root.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedMount {
+    pub source: String,
+    pub target: String,
+    pub read_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedPort {
+    pub container_port: i64,
+    pub host_port: i64,
+}
+
+/// The closed create spec. `deny_unknown_fields` is load-bearing: a raw
+/// engine field such as `Privileged` or `HostConfig` is a decode error, not
+/// something silently dropped.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedContainerSpec {
+    pub install_id: String,
+    pub role: String,
+    pub image: String,
+    pub env: BTreeMap<String, String>,
+    pub mounts: Vec<ManagedMount>,
+    pub ports: Vec<ManagedPort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_bytes: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpus: Option<f64>,
+    /// Raises the open-files limit (soft and hard alike); nothing else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nofile: Option<i64>,
+    /// Arguments handed to the image's own entrypoint. Tokens, not a
+    /// command line: the entrypoint itself can never be replaced.
+    pub args: Vec<String>,
+    /// Small configuration files written under the install's directory
+    /// and mounted read-only.
+    pub files: Vec<ManagedFile>,
+    pub replace: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedFile {
+    /// Relative to the install's directory under the managed apps root.
+    pub path: String,
+    pub content: String,
+    pub target: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedTaskParams {
+    pub spec: ManagedContainerSpec,
+    pub timeout_seconds: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ManagedTaskResult {
+    pub exit_code: i64,
+    /// The tail of what the task printed.
+    pub output: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ManagedContainerState {
+    pub role: String,
+    pub name: String,
+    pub state: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ManagedEndpoint {
+    pub role: String,
+    pub host_port: i64,
+    pub container_port: i64,
+    pub reachable: bool,
+    pub http_status: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ManagedAppStatus {
+    pub containers: Vec<ManagedContainerState>,
+    pub endpoints: Vec<ManagedEndpoint>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedAppRemoveParams {
+    pub install_id: String,
+    pub remove_data: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ManagedAppRemoveResult {
+    pub containers: Vec<String>,
+    pub networks: Vec<String>,
+    pub data_removed: bool,
+}
+
 /* ------------------------------- files ------------------------------- */
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

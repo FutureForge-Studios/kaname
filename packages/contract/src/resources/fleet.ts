@@ -286,11 +286,42 @@ export const monitoringOverview = z.object({
 });
 export type MonitoringOverview = z.infer<typeof monitoringOverview>;
 
+/**
+ * What an app rule watches (see resources/app-health.ts). An app rule
+ * has one of these as its `metric`, `{ kind: "app" }` as its scope and
+ * is evaluated against that one install's health samples; a server
+ * rule keeps a `metricName` and a fleet or server-list scope.
+ */
+export const appAlertKind = z.enum([
+  /** HTTP probe failed (non-2xx, timeout, refused) for `threshold` checks in a row. */
+  "app_down",
+  /** Every probe in the window answered slower than `threshold` ms. */
+  "app_slow",
+  /** At least `threshold` container restarts inside the window. */
+  "app_restart_loop",
+  /** More than `threshold` of its containers exited or unhealthy, for the whole window. */
+  "app_container_unhealthy",
+  /** Summed memory of its containers above `threshold` % of their limit. */
+  "app_memory",
+  /** Summed CPU of its containers above `threshold` % (of one core). */
+  "app_cpu",
+  /** Its site certificate expires within `threshold` days. */
+  "app_cert_expiring",
+]);
+export type AppAlertKind = z.infer<typeof appAlertKind>;
+
+export const alertRuleMetric = z.union([metricName, appAlertKind]);
+export type AlertRuleMetric = z.infer<typeof alertRuleMetric>;
+
+export function isAppAlertKind(metric: string): metric is AppAlertKind {
+  return (appAlertKind.options as readonly string[]).includes(metric);
+}
+
 export const alertRule = z.object({
   id: uuid,
   /** Required: a rule with an empty name fires as an alert nobody can identify. */
   name: z.string().trim().min(1).max(96),
-  metric: metricName,
+  metric: alertRuleMetric,
   comparator: alertComparator,
   threshold: z.number(),
   /**
@@ -303,9 +334,14 @@ export const alertRule = z.object({
   scope: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("fleet") }),
     z.object({ kind: z.literal("servers"), server_ids: z.array(uuid) }),
+    /** One installed app; the metric must then be an `appAlertKind`. */
+    z.object({ kind: z.literal("app"), app_install_id: uuid }),
   ]),
   enabled: z.boolean(),
   channels: z.array(uuid).default([]),
+  /** App rules: the install it watches, and its name for display. Null for server rules. */
+  app_install_id: uuid.nullable(),
+  app_name: z.string().nullable(),
   created_at: isoDate,
   updated_at: isoDate,
 });
@@ -325,11 +361,14 @@ export const alert = z.object({
   started_at: isoDate,
   resolved_at: isoDate.nullable(),
   acknowledged_by: uuid.nullable(),
+  /** Set when the rule is an app rule: the install, and its "App on domain" label. */
+  app_install_id: uuid.nullable(),
+  app_name: z.string().nullable(),
 });
 export type Alert = z.infer<typeof alert>;
 
 export const createAlertRuleInput = alertRule
-  .omit({ id: true, created_at: true, updated_at: true })
+  .omit({ id: true, created_at: true, updated_at: true, app_install_id: true, app_name: true })
   .partial({ enabled: true, channels: true });
 
 /**
@@ -396,6 +435,8 @@ export const commandCenterSummary = z.object({
         "threat_spike",
         "job_failed",
         "update_available",
+        "os_updates",
+        "app_down",
       ]),
       severity: alertSeverity,
       title: z.string(),

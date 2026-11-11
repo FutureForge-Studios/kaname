@@ -110,6 +110,16 @@ uses an argv slice — never a string handed to `sh -c`.
 Namespaces: `system`, `service`, `process`, `container`, `fs`, `site`, `cert`, `dns`, `mail`,
 `db`, `fw`, `ssh`, `ftp`, `backup`, `log`, `pty`.
 
+The managed-container verbs (`container.image.pull`, `container.network.create`,
+`container.create`, `container.task.run`, `container.app.status`, `container.app.remove`) are
+how the app installer runs image recipes ([KD-040](../DECISIONS.md)). `container.create` takes a
+closed spec (unknown fields are a decode error) and the agent builds the Engine API body itself:
+no privileged mode, no added capabilities, no host network/PID/IPC, no devices, `no-new-privileges`,
+restart `unless-stopped`, ports bound to `127.0.0.1` only, bind sources only under
+`/var/lib/kaname-apps/<install_id>/` (checked lexically and after resolving symlinks), images with
+an explicit tag or digest, and Kaname labels plus an install-derived name on everything created.
+`container.app.remove` acts only on resources carrying this install's labels.
+
 The `ftp` namespace manages transfer accounts as real POSIX users (`ftp.account.create`,
 `.update`, `.passwd`, `.delete`). Each requires `sftp` (sshd is installed) or `vsftpd`, and the
 agent then insists on the one the account's protocol needs. The password reaches `chpasswd` on

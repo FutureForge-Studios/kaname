@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { APP_CATEGORY_LABELS, type AppRecipe } from "@kaname/contract";
+import { APP_CATEGORY_LABELS, COMPANION_ENGINE_LABELS, type AppRecipe } from "@kaname/contract";
 import { Badge, Button, Card, CardInset, MonoLabel, Tooltip } from "@kaname/ui";
 import { AppMark, versionLabel } from "./AppMark";
 
@@ -21,9 +21,16 @@ export interface AppCardProps {
 export function AppCard({ app, canInstall, onInstall }: AppCardProps) {
   const available = app.availability === "available";
   const req = app.requirements;
+  const source = app.source;
   const needs = [
     req.runtime === "php" ? `PHP ${req.runtime_version ?? ""}`.trim() : req.runtime,
-    req.database ? req.database.engines.join(" / ") : "no database",
+    source.kind === "image"
+      ? source.companions.length > 0
+        ? source.companions.map((c) => COMPANION_ENGINE_LABELS[c.engine]).join(" + ")
+        : "no database"
+      : req.database
+        ? req.database.engines.join(" / ")
+        : "no database",
   ];
 
   return (

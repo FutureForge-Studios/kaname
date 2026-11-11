@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   CircleAlert,
   CircleCheck,
@@ -14,6 +15,7 @@ import {
   UPDATE_TIER_LABELS,
   parseVersion,
   type AgentVersionRow,
+  type Release,
   type UpdateOverview,
   type UpdateRun,
   type UpdateRunStatus,
@@ -47,6 +49,7 @@ import {
   type Tone,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
+import { SystemUpdatesSection } from "./SystemUpdatesSection";
 import { api } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import {
@@ -171,6 +174,7 @@ export default function UpdatesPage() {
               onRetry={() => void runs.refetch()}
               onOpen={setOpenRunId}
             />
+            {can("infra.servers:read") && <SystemUpdatesSection index={4} />}
           </>
         )}
       </PageBody>
@@ -189,6 +193,20 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
   const [confirming, setConfirming] = React.useState(false);
   const [skipBackup, setSkipBackup] = React.useState(false);
   const justFinished = useRestartWatch(cp.run);
+
+  // The top-bar notice links here with ?apply=1: land on the confirm
+  // step, with the release notes, rather than on a page to search.
+  const router = useRouter();
+  const pathname = usePathname() ?? "";
+  const searchParams = useSearchParams();
+  const applyRequested = searchParams.get("apply") === "1";
+  React.useEffect(() => {
+    if (!applyRequested) return;
+    if (cp.update_available && !readOnly && !cp.blocked_reason && cp.run?.status !== "running") {
+      setConfirming(true);
+    }
+    router.replace(pathname, { scroll: false });
+  }, [applyRequested, cp.update_available, cp.blocked_reason, cp.run?.status, readOnly, router, pathname]);
 
   const apply = useResourceMutation<{ confirm: boolean; skipBackup: boolean }, UpdateRun>({
     mutationFn: (vars) =>
@@ -221,10 +239,10 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
             icon={Download}
             loading={apply.isPending}
             disabled={Boolean(cp.blocked_reason) || cp.run?.status === "running"}
-            onClick={() => {
-              if (cp.requires_confirmation) setConfirming(true);
-              else apply.mutate({ confirm: false, skipBackup: skipBackup });
-            }}
+            // Always via the confirm step: it is where the release notes are
+            // read. Only a breaking or destructive release asks for the
+            // version to be typed.
+            onClick={() => setConfirming(true)}
           >
             Update to {cp.latest_version}
           </Button>
@@ -344,11 +362,7 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
               variant="secondary"
               size="xs"
               loading={apply.isPending}
-              onClick={() =>
-                cp.requires_confirmation
-                  ? setConfirming(true)
-                  : apply.mutate({ confirm: false, skipBackup: true })
-              }
+              onClick={() => setConfirming(true)}
             >
               Apply without a recent backup
             </Button>
@@ -360,24 +374,26 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
         open={confirming}
         onOpenChange={setConfirming}
         title={`Apply ${cp.latest_version} to the control plane`}
-        confirmText={cp.latest_version ?? undefined}
-        confirmLabel="Apply the update"
-        destructive
+        confirmText={cp.requires_confirmation ? (cp.latest_version ?? undefined) : undefined}
+        confirmLabel={`Update to ${cp.latest_version ?? "the new release"}`}
+        destructive={cp.requires_confirmation}
         loading={apply.isPending}
         onConfirm={() => {
-          apply.mutate({ confirm: true, skipBackup });
+          apply.mutate({ confirm: cp.requires_confirmation, skipBackup });
           setConfirming(false);
         }}
       >
-        <div className="flex flex-col gap-2 text-[var(--kn-text-2)]">
-          <p>
-            {cp.pending?.breaking
-              ? `${cp.latest_version} is marked as containing breaking changes.`
-              : `${cp.latest_version} runs a migration that rewrites or drops data.`}{" "}
-            That is why this asks, and why it would still ask if updates were set to apply
-            themselves.
-          </p>
-          {cp.pending?.summary && <p>{cp.pending.summary}</p>}
+        <div className="flex flex-col gap-3 text-[var(--kn-text-2)]">
+          {cp.pending && <ReleaseNotes release={cp.pending} from={cp.current_version} />}
+          {cp.requires_confirmation && (
+            <p>
+              {cp.pending?.breaking
+                ? `${cp.latest_version} is marked as containing breaking changes.`
+                : `${cp.latest_version} runs a migration that rewrites or drops data.`}{" "}
+              That is why this asks you to type the version, and why it would still ask if updates
+              were set to apply themselves.
+            </p>
+          )}
           <p>
             The panel and the API will be unavailable for about a minute. If the new version does
             not answer afterwards, the previous configuration is restored automatically — unless a
@@ -391,6 +407,71 @@ function ControlPlaneCard({ overview, readOnly }: { overview: UpdateOverview; re
         </div>
       </ConfirmDialog>
     </SectionCard>
+  );
+}
+
+/**
+ * What the manifest says about the release, shown before anyone presses
+ * the button: the summary, and the three flags that change what an
+ * update means — breaking, a destructive migration, a security fix.
+ */
+function ReleaseNotes({ release, from }: { release: Release; from: string }) {
+  const flags: { label: string; tone: Tone }[] = [
+    ...(release.security ? [{ label: "security", tone: "warn" as Tone }] : []),
+    ...(release.breaking ? [{ label: "breaking", tone: "danger" as Tone }] : []),
+    ...(release.migrations.destructive
+      ? [{ label: "destructive migration", tone: "danger" as Tone }]
+      : []),
+  ];
+
+  return (
+    <div className="flex flex-col gap-2 rounded-[var(--kn-r-md)] border border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <MonoLabel size="xs" tone="subtle">
+          Release notes
+        </MonoLabel>
+        <MonoText className="text-sm text-[var(--kn-text)]">
+          {from} → {release.version}
+        </MonoText>
+        {flags.length === 0 ? (
+          <Badge tone="ok" size="xs">
+            no breaking changes
+          </Badge>
+        ) : (
+          flags.map((flag) => (
+            <Badge key={flag.label} tone={flag.tone} size="xs">
+              {flag.label}
+            </Badge>
+          ))
+        )}
+      </div>
+      <p className="text-sm text-[var(--kn-text)]">
+        {release.summary || "This release carries no summary."}
+      </p>
+      {release.migrations.adds_config.length > 0 && (
+        <p className="text-xs text-[var(--kn-text-3)]">
+          Adds configuration:{" "}
+          <MonoText className="text-xs">{release.migrations.adds_config.join(", ")}</MonoText> —
+          generated on the host during the update.
+        </p>
+      )}
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--kn-text-3)]">
+        <span>
+          Released <RelativeTime value={release.released_at} />
+        </span>
+        {release.notes_url && (
+          <a
+            className="inline-flex items-center gap-1 text-[var(--kn-accent-400)] hover:underline"
+            href={release.notes_url}
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            Full notes
+            <ExternalLink size={11} aria-hidden />
+          </a>
+        )}
+      </p>
+    </div>
   );
 }
 

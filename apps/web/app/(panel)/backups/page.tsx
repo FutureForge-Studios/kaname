@@ -63,7 +63,9 @@ import {
   useResourceListState,
   type ResourcePrerequisite,
 } from "@/components/ResourcePage";
+import { AppBackupsIndex } from "@/components/AppBackupsIndex";
 import { describeCron } from "@/lib/cron";
+import { useAudience } from "@/lib/modes";
 import { formatCount, pluralize } from "@/lib/format";
 import { api } from "@/lib/api";
 import {
@@ -119,6 +121,14 @@ function isTab(value: string | null): value is TabValue {
 }
 
 export default function BackupsPage() {
+  // A reseller or client backs up its own apps; the operator's
+  // schedules and destinations are not theirs to see (KD-043).
+  const { audience } = useAudience();
+  if (audience !== "operator") return <AppBackupsIndex />;
+  return <OperatorBackups />;
+}
+
+function OperatorBackups() {
   const searchParams = useSearchParams();
   const raw = searchParams.get("tab");
   const active: TabValue = isTab(raw) ? raw : "schedules";

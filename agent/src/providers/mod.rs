@@ -11,7 +11,9 @@
 //! injection structurally impossible rather than a code-review
 //! responsibility.
 
+pub mod app_backup;
 pub mod ftp;
+pub mod managed;
 pub mod payloads;
 
 #[cfg(target_os = "linux")]
@@ -354,6 +356,41 @@ pub trait Containers: Send + Sync {
     async fn exec(&self, ctx: &Ctx, p: ContainerExecParams, s: StreamRef) -> PResult<()>;
     async fn images(&self, ctx: &Ctx) -> PResult<Vec<ImageInfo>>;
     async fn prune(&self, ctx: &Ctx, p: ContainerPruneParams) -> PResult<ContainerPruneResult>;
+
+    /* Managed app containers (KD-040). The handler has already run
+     * `managed::validate_spec` / `validate_install_id`; a provider re-checks
+     * what only it can see (the network's labels, a resolved bind source).
+     * Defaulted to refuse, like `Sites::release`, so a provider that has not
+     * wired them answers `unsupported` rather than failing to compile. */
+    async fn pull_image(&self, _ctx: &Ctx, _p: ImagePullParams, _s: StreamRef) -> PResult<ImagePullResult> {
+        Err(ProviderError::unsupported_because("this host cannot pull images"))
+    }
+    async fn create_network(&self, _ctx: &Ctx, _install_id: &str) -> PResult<ManagedNetworkResult> {
+        Err(ProviderError::unsupported_because(
+            "this host cannot create networks",
+        ))
+    }
+    async fn create_managed(&self, _ctx: &Ctx, _spec: ManagedContainerSpec) -> PResult<ContainerInfo> {
+        Err(ProviderError::unsupported_because(
+            "this host cannot create containers",
+        ))
+    }
+    /// Runs a one-shot container (a migration) to completion and removes it.
+    async fn run_task(&self, _ctx: &Ctx, _p: ManagedTaskParams) -> PResult<ManagedTaskResult> {
+        Err(ProviderError::unsupported_because(
+            "this host cannot run container tasks",
+        ))
+    }
+    async fn app_status(&self, _ctx: &Ctx, _install_id: &str) -> PResult<ManagedAppStatus> {
+        Err(ProviderError::unsupported_because(
+            "this host has no managed containers",
+        ))
+    }
+    async fn remove_app(&self, _ctx: &Ctx, _p: ManagedAppRemoveParams) -> PResult<ManagedAppRemoveResult> {
+        Err(ProviderError::unsupported_because(
+            "this host has no managed containers",
+        ))
+    }
 }
 
 #[async_trait]
@@ -554,6 +591,10 @@ pub trait Provider: Send + Sync {
     /// than every test double having to grow a fifth empty impl.
     fn ftp(&self) -> &dyn ftp::Ftp {
         &ftp::NO_FTP
+    }
+    /// App backup dumps (`app.db_*`). Defaulted to a refusing stub, as ftp is.
+    fn app_backup(&self) -> &dyn app_backup::AppBackup {
+        &app_backup::NO_APP_BACKUP
     }
 
     async fn close(&self);

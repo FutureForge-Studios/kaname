@@ -35,6 +35,7 @@ import { useSession } from "@/lib/queries";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { useCommandPalette } from "./CommandPalette";
 import { JobActivityButton } from "./JobDrawer";
+import { UpdatePill } from "./UpdateNotice";
 
 /* ------------------------------------------------------------------ *
  * Topbar — 52px, flat ink with a hairline, and it never grows.
@@ -172,6 +173,9 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
           data-testid="view-mode-switch"
         />
       )}
+
+      {/* Renders nothing unless a newer Kaname exists and this account may apply it. */}
+      <UpdatePill />
 
       <JobActivityButton />
 

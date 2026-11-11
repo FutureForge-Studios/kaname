@@ -816,6 +816,554 @@ impl Containers for ContainerOps {
         }
         Ok(result)
     }
+
+    async fn pull_image(&self, ctx: &Ctx, p: ImagePullParams, stream: StreamRef) -> PResult<ImagePullResult> {
+        let client = self.client()?;
+        let (from, tag) = managed::pull_query(&p.image);
+        let query = {
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            query.append_pair("fromImage", &from);
+            if let Some(tag) = &tag {
+                query.append_pair("tag", tag);
+            }
+            query.finish()
+        };
+        say(stream.as_ref(), format!("pulling {}", p.image)).await;
+        let (response, conn_task) = ctx
+            .run(client.open(Method::POST, &format!("/images/create?{query}"), None))
+            .await??;
+
+        // Progress arrives one JSON object per line. Byte counters are
+        // dropped: a layer's status changing is worth a line, its
+        // percentage ticking is not.
+        let mut body = response.into_body();
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut last = String::new();
+        let mut failure: Option<String> = None;
+        loop {
+            let frame = tokio::select! {
+                f = body.frame() => f,
+                _ = ctx.done() => { conn_task.abort(); return Err(ctx.error()); }
+            };
+            let Some(frame) = frame else { break };
+            let frame = frame.map_err(|e| ProviderError::internal(format!("read pull progress: {e}")))?;
+            let Ok(data) = frame.into_data() else { continue };
+            buffer.extend_from_slice(&data);
+            if buffer.len() > MAX_CONTAINER_FRAME {
+                conn_task.abort();
+                return Err(precondition("image pull progress line exceeds the cap"));
+            }
+            while let Some(end) = buffer.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = buffer.drain(..=end).collect();
+                let Ok(progress) = serde_json::from_slice::<PullProgress>(&line) else {
+                    continue;
+                };
+                if !progress.error.is_empty() {
+                    failure = Some(progress.error);
+                    continue;
+                }
+                if progress.status.is_empty()
+                    || progress.status == "Downloading"
+                    || progress.status == "Extracting"
+                {
+                    continue;
+                }
+                let text = if progress.id.is_empty() {
+                    progress.status
+                } else {
+                    format!("{}: {}", progress.id, progress.status)
+                };
+                if text != last {
+                    say(stream.as_ref(), &text).await;
+                    last = text;
+                }
+            }
+        }
+        conn_task.abort();
+        if let Some(error) = failure {
+            return Err(ProviderError::exec(
+                "image pull",
+                format!("could not pull {}", p.image),
+                error,
+            ));
+        }
+
+        #[derive(Deserialize)]
+        struct Inspected {
+            #[serde(rename = "Id", default)]
+            id: String,
+        }
+        let inspected: Inspected = client
+            .get(ctx, &format!("/images/{}/json", path_escape(&p.image)))
+            .await?;
+        Ok(ImagePullResult {
+            image: p.image,
+            id: inspected.id,
+        })
+    }
+
+    async fn create_network(&self, ctx: &Ctx, install_id: &str) -> PResult<ManagedNetworkResult> {
+        let client = self.client()?;
+        let name = managed::network_name(install_id);
+        if let Some(existing) = self.find_network(ctx, &client, &name).await? {
+            if !managed::is_managed_by(existing.labels.as_ref().unwrap_or(&BTreeMap::new()), install_id) {
+                return Err(ProviderError::conflict(format!(
+                    "a network named {name} exists and was not created by Kaname"
+                )));
+            }
+            return Ok(ManagedNetworkResult {
+                name: existing.name,
+                id: existing.id,
+                created: false,
+            });
+        }
+
+        #[derive(Deserialize)]
+        struct Created {
+            #[serde(rename = "Id", default)]
+            id: String,
+        }
+        let body = serde_json::json!({
+            "Name": name,
+            "Driver": "bridge",
+            "CheckDuplicate": true,
+            "Internal": false,
+            "Attachable": false,
+            "Labels": managed::install_labels(install_id),
+        });
+        let created: Created = client.post(ctx, "/networks/create", Some(body)).await?;
+        Ok(ManagedNetworkResult {
+            name,
+            id: created.id,
+            created: true,
+        })
+    }
+
+    async fn create_managed(&self, ctx: &Ctx, spec: ManagedContainerSpec) -> PResult<ContainerInfo> {
+        let client = self.client()?;
+        let name = self.prepare_managed(ctx, &client, &spec, spec.replace).await?;
+
+        #[derive(Deserialize)]
+        struct Created {
+            #[serde(rename = "Id", default)]
+            id: String,
+        }
+        let created: Created = client
+            .post(
+                ctx,
+                &format!("/containers/create?name={}", path_escape(&name)),
+                Some(managed::create_body(&spec)),
+            )
+            .await?;
+        if let Err(err) = client
+            .post_empty(
+                ctx,
+                &format!("/containers/{}/start", path_escape(&created.id)),
+                None,
+            )
+            .await
+        {
+            // A container that was created but cannot start (a port taken by
+            // something else) is removed, so a retry starts clean.
+            let _ = client
+                .call(
+                    ctx,
+                    Method::DELETE,
+                    &format!("/containers/{}?force=true&v=true", path_escape(&created.id)),
+                    None,
+                    false,
+                )
+                .await;
+            return Err(err);
+        }
+        client.inspect(ctx, &created.id).await
+    }
+
+    async fn run_task(&self, ctx: &Ctx, p: ManagedTaskParams) -> PResult<ManagedTaskResult> {
+        let client = self.client()?;
+        let spec = p.spec;
+        // A task of the same role left by an interrupted run is replaced.
+        let name = self.prepare_managed(ctx, &client, &spec, true).await?;
+
+        #[derive(Deserialize)]
+        struct Created {
+            #[serde(rename = "Id", default)]
+            id: String,
+        }
+        #[derive(Deserialize)]
+        struct Waited {
+            #[serde(rename = "StatusCode", default)]
+            status_code: i64,
+        }
+        let created: Created = client
+            .post(
+                ctx,
+                &format!("/containers/create?name={}", path_escape(&name)),
+                Some(managed::task_body(&spec)),
+            )
+            .await?;
+        let id = path_escape(&created.id);
+        let remove = format!("/containers/{id}?force=true&v=true");
+
+        let outcome: PResult<i64> = async {
+            client
+                .post_empty(ctx, &format!("/containers/{id}/start"), None)
+                .await?;
+            let wait_path = format!("/containers/{id}/wait?condition=not-running");
+            let wait = client.post::<Waited>(ctx, &wait_path, None);
+            match tokio::time::timeout(Duration::from_secs(p.timeout_seconds as u64), wait).await {
+                Ok(waited) => Ok(waited?.status_code),
+                Err(_) => Err(ProviderError::Timeout),
+            }
+        }
+        .await;
+
+        let output = client
+            .call(
+                ctx,
+                Method::GET,
+                &format!("/containers/{id}/logs?stdout=1&stderr=1&tail=64"),
+                None,
+                true,
+            )
+            .await
+            .map(|raw| demultiplex_bytes(&raw))
+            .unwrap_or_default();
+        let _ = client.call(ctx, Method::DELETE, &remove, None, false).await;
+        Ok(ManagedTaskResult {
+            exit_code: outcome?,
+            output: truncate_output(output),
+        })
+    }
+
+    async fn app_status(&self, ctx: &Ctx, install_id: &str) -> PResult<ManagedAppStatus> {
+        let client = self.client()?;
+        let mut status = ManagedAppStatus::default();
+        for entry in self.managed_containers(ctx, &client, install_id).await? {
+            let info = client.info_from_list(&entry);
+            let role = info.labels.get(managed::LABEL_ROLE).cloned().unwrap_or_default();
+            for port in &info.ports {
+                let Some(host_port) = port.host_port else { continue };
+                let (reachable, http_status) = if info.state == "running" {
+                    probe_http(host_port).await
+                } else {
+                    (false, None)
+                };
+                status.endpoints.push(ManagedEndpoint {
+                    role: role.clone(),
+                    host_port,
+                    container_port: port.container_port,
+                    reachable,
+                    http_status,
+                });
+            }
+            status.containers.push(ManagedContainerState {
+                role,
+                name: info.name,
+                state: info.state,
+                status: info.status,
+            });
+        }
+        status.containers.sort_by(|a, b| a.role.cmp(&b.role));
+        Ok(status)
+    }
+
+    async fn remove_app(&self, ctx: &Ctx, p: ManagedAppRemoveParams) -> PResult<ManagedAppRemoveResult> {
+        let client = self.client()?;
+        let mut result = ManagedAppRemoveResult::default();
+        for entry in self.managed_containers(ctx, &client, &p.install_id).await? {
+            let path = format!("/containers/{}?force=true&v=true", path_escape(&entry.id));
+            match client.call(ctx, Method::DELETE, &path, None, false).await {
+                Ok(_) | Err(ProviderError::NotFound(_)) => {
+                    result.containers.push(container_name(&entry.names))
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        for network in self.managed_networks(ctx, &client, &p.install_id).await? {
+            let path = format!("/networks/{}", path_escape(&network.id));
+            match client.call(ctx, Method::DELETE, &path, None, false).await {
+                Ok(_) | Err(ProviderError::NotFound(_)) => result.networks.push(network.name),
+                Err(err) => return Err(err),
+            }
+        }
+        if p.remove_data {
+            let dir = managed::install_dir(managed::MANAGED_APPS_ROOT, &p.install_id);
+            match std::fs::symlink_metadata(&dir) {
+                // remove_dir_all does not follow symlinks below the top; the
+                // top itself is refused if it is one.
+                Ok(meta) if meta.file_type().is_dir() => {
+                    std::fs::remove_dir_all(&dir)?;
+                    result.data_removed = true;
+                }
+                Ok(_) => {
+                    return Err(precondition(format!(
+                        "{dir} is not a directory; leaving it alone"
+                    )));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        Ok(result)
+    }
+}
+
+/* ----------------------- managed app containers --------------------- */
+
+#[derive(Debug, Default, Deserialize)]
+struct DockerNetwork {
+    #[serde(rename = "Id", default)]
+    id: String,
+    #[serde(rename = "Name", default)]
+    name: String,
+    #[serde(rename = "Labels", default)]
+    labels: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PullProgress {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    error: String,
+}
+
+/// A label filter for the managed resources of one install, url-encoded.
+fn install_filter(install_id: &str) -> String {
+    let filter = serde_json::json!({
+        "label": [
+            format!("{}=true", managed::LABEL_MANAGED),
+            format!("{}={install_id}", managed::LABEL_INSTALL),
+        ]
+    });
+    url::form_urlencoded::byte_serialize(filter.to_string().as_bytes()).collect()
+}
+
+/// Creates a bind source (and the install directory above it, private to
+/// root) and re-checks it once it exists: the check before creation
+/// covered the parts that existed, this one covers what mkdir made.
+fn prepare_source(mount: &ManagedMount, install_id: &str) -> PResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let root = managed::MANAGED_APPS_ROOT;
+    for dir in [root.to_string(), managed::install_dir(root, install_id)] {
+        if std::fs::symlink_metadata(&dir).is_err() {
+            std::fs::create_dir_all(&dir)?;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    std::fs::create_dir_all(&mount.source)?;
+    managed::check_source(root, install_id, &mount.source)?;
+    if mount.uid.is_some() || mount.gid.is_some() {
+        std::os::unix::fs::chown(&mount.source, mount.uid, mount.gid)?;
+    }
+    Ok(())
+}
+
+/// Writes one configuration file under the install's directory. The path
+/// was checked by the handler; it is checked again once its parents exist,
+/// and the file is opened without following a symlink at its name.
+fn write_managed_file(file: &ManagedFile, install_id: &str) -> PResult<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let root = managed::MANAGED_APPS_ROOT;
+    let target = managed::file_source(root, install_id, &file.path);
+    if let Some(parent) = std::path::Path::new(&target).parent() {
+        prepare_source(
+            &ManagedMount {
+                source: parent.to_string_lossy().into_owned(),
+                ..Default::default()
+            },
+            install_id,
+        )
+        .or_else(|err| {
+            // The install directory itself is a valid parent of a top-level file.
+            if parent.to_string_lossy() == managed::install_dir(root, install_id) {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        })?;
+    }
+    managed::check_source(root, install_id, &target)?;
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o644)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&target)?;
+    out.write_all(file.content.as_bytes())?;
+    Ok(())
+}
+
+/// Decodes a whole framed (non-TTY) log body into text.
+fn demultiplex_bytes(mut raw: &[u8]) -> String {
+    let mut out = Vec::new();
+    while raw.len() >= 8 {
+        let size = u32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]) as usize;
+        let end = (8 + size).min(raw.len());
+        out.extend_from_slice(&raw[8..end]);
+        raw = &raw[end..];
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Sends `GET /` to a loopback port and reads the status line, so the
+/// install's health check means "the app answers HTTP", not "a socket is
+/// open". The address is fixed; only the port comes from the container.
+async fn probe_http(port: i64) -> (bool, Option<i64>) {
+    let Ok(Ok(mut stream)) = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::net::TcpStream::connect((managed::LOOPBACK, port as u16)),
+    )
+    .await
+    else {
+        return (false, None);
+    };
+    let request = b"GET / HTTP/1.0\r\nHost: localhost\r\nUser-Agent: kaname-agent\r\n\r\n";
+    if stream.write_all(request).await.is_err() {
+        return (true, None);
+    }
+    let mut head = vec![0u8; 64];
+    let read = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut head)).await;
+    let Ok(Ok(n)) = read else { return (true, None) };
+    (true, parse_status_line(&head[..n]))
+}
+
+fn parse_status_line(head: &[u8]) -> Option<i64> {
+    let text = std::str::from_utf8(head).ok()?;
+    let mut parts = text.split_whitespace();
+    if !parts.next()?.starts_with("HTTP/") {
+        return None;
+    }
+    parts
+        .next()?
+        .parse::<i64>()
+        .ok()
+        .filter(|c| (100..600).contains(c))
+}
+
+impl ContainerOps {
+    /// Everything before the create call, shared by services and tasks:
+    /// the install's network must be Kaname's, a same-named container must
+    /// be this install's (and is replaced only when asked), and every bind
+    /// source and file is put in place under the managed root.
+    async fn prepare_managed(
+        &self,
+        ctx: &Ctx,
+        client: &DockerClient,
+        spec: &ManagedContainerSpec,
+        replace: bool,
+    ) -> PResult<String> {
+        let network = managed::network_name(&spec.install_id);
+        match self.find_network(ctx, client, &network).await? {
+            Some(n)
+                if managed::is_managed_by(
+                    n.labels.as_ref().unwrap_or(&BTreeMap::new()),
+                    &spec.install_id,
+                ) => {}
+            Some(_) => {
+                return Err(precondition(format!("{network} was not created by Kaname")));
+            }
+            None => {
+                return Err(precondition(format!(
+                    "the install's network {network} does not exist; create it first"
+                )));
+            }
+        }
+
+        let name = managed::container_name(&spec.install_id, &spec.role);
+        match client.inspect_raw(ctx, &name).await {
+            Ok(existing) => {
+                let labels = existing.config.labels.clone().unwrap_or_default();
+                let ours = managed::is_managed_by(&labels, &spec.install_id)
+                    && labels.get(managed::LABEL_ROLE) == Some(&spec.role);
+                if !ours {
+                    return Err(ProviderError::conflict(format!(
+                        "a container named {name} exists and was not created by Kaname"
+                    )));
+                }
+                if !replace {
+                    return Err(ProviderError::conflict(format!(
+                        "container {name} already exists"
+                    )));
+                }
+                client
+                    .call(
+                        ctx,
+                        Method::DELETE,
+                        &format!("/containers/{}?force=true&v=true", path_escape(&existing.id)),
+                        None,
+                        false,
+                    )
+                    .await?;
+            }
+            Err(ProviderError::NotFound(_)) => {}
+            Err(err) => return Err(err),
+        }
+
+        for mount in &spec.mounts {
+            prepare_source(mount, &spec.install_id)?;
+        }
+        for file in &spec.files {
+            write_managed_file(file, &spec.install_id)?;
+        }
+        Ok(name)
+    }
+
+    async fn managed_containers(
+        &self,
+        ctx: &Ctx,
+        client: &DockerClient,
+        install_id: &str,
+    ) -> PResult<Vec<DockerContainer>> {
+        let all: Vec<DockerContainer> = client
+            .get(
+                ctx,
+                &format!("/containers/json?all=1&filters={}", install_filter(install_id)),
+            )
+            .await?;
+        // The daemon filtered on labels already; checking again here is what
+        // keeps the destructive verb honest if a runtime ignores a filter.
+        Ok(all
+            .into_iter()
+            .filter(|c| managed::is_managed_by(c.labels.as_ref().unwrap_or(&BTreeMap::new()), install_id))
+            .collect())
+    }
+
+    async fn managed_networks(
+        &self,
+        ctx: &Ctx,
+        client: &DockerClient,
+        install_id: &str,
+    ) -> PResult<Vec<DockerNetwork>> {
+        let all: Vec<DockerNetwork> = client
+            .get(ctx, &format!("/networks?filters={}", install_filter(install_id)))
+            .await?;
+        Ok(all
+            .into_iter()
+            .filter(|n| managed::is_managed_by(n.labels.as_ref().unwrap_or(&BTreeMap::new()), install_id))
+            .collect())
+    }
+
+    async fn find_network(
+        &self,
+        ctx: &Ctx,
+        client: &DockerClient,
+        name: &str,
+    ) -> PResult<Option<DockerNetwork>> {
+        match client
+            .get::<DockerNetwork>(ctx, &format!("/networks/{}", path_escape(name)))
+            .await
+        {
+            Ok(network) => Ok(Some(network)),
+            Err(ProviderError::NotFound(_)) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
 }
 
 /* ------------------------------- mapping ----------------------------- */
@@ -1546,5 +2094,35 @@ mod tests {
         assert_eq!(parse_since("1700000000").unwrap().timestamp(), 1700000000);
         assert!(parse_since("-2h").is_ok());
         assert!(parse_since("yesterday-ish").is_err());
+    }
+
+    #[test]
+    fn the_health_probe_reads_only_a_real_status_line() {
+        assert_eq!(
+            parse_status_line(b"HTTP/1.1 301 Moved Permanently\r\n"),
+            Some(301)
+        );
+        assert_eq!(parse_status_line(b"HTTP/1.0 200 OK\r\n"), Some(200));
+        assert_eq!(parse_status_line(b"SSH-2.0-OpenSSH_9.6\r\n"), None);
+        assert_eq!(parse_status_line(b"HTTP/1.1 999 Nope\r\n"), None);
+        assert_eq!(parse_status_line(b""), None);
+    }
+
+    #[test]
+    fn the_install_filter_names_both_labels() {
+        let decoded: String = url::form_urlencoded::parse(format!("f={}", install_filter("abc")).as_bytes())
+            .map(|(_, v)| v.into_owned())
+            .collect();
+        assert!(decoded.contains("io.kaname.managed=true"), "{decoded}");
+        assert!(decoded.contains("io.kaname.install=abc"), "{decoded}");
+    }
+
+    #[test]
+    fn a_task_log_body_is_demultiplexed_whole() {
+        let mut raw = vec![1, 0, 0, 0, 0, 0, 0, 6];
+        raw.extend_from_slice(b"hello\n");
+        raw.extend_from_slice(&[2, 0, 0, 0, 0, 0, 0, 4]);
+        raw.extend_from_slice(b"oops");
+        assert_eq!(demultiplex_bytes(&raw), "hello\noops");
     }
 }

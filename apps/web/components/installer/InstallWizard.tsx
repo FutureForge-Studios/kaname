@@ -96,6 +96,14 @@ export function InstallWizard({ app }: InstallWizardProps) {
       }));
   }, [servers.data, can]);
 
+  // Warn before review when the chosen server reports less memory than the app wants.
+  const chosen = (servers.data?.data ?? []).find((s) => s.id === form.server_id);
+  const minimumBytes = app.requirements.min_memory_mb * 1024 * 1024;
+  const lowMemory =
+    chosen?.memory_total != null && chosen.memory_total > 0 && chosen.memory_total < minimumBytes
+      ? `${app.name} wants at least ${formatMb(app.requirements.min_memory_mb)} of memory; ${chosen.name} reports ${formatMb(Math.round(chosen.memory_total / 1024 / 1024))}.`
+      : null;
+
   // One server: choose it for them.
   React.useEffect(() => {
     if (!form.server_id && serverOptions.length === 1 && serverOptions[0]) {
@@ -190,7 +198,11 @@ export function InstallWizard({ app }: InstallWizardProps) {
             description={
               serverOptions.length === 0 && !servers.isLoading
                 ? "No server you may install on. Add or pair a server first."
-                : "Where the files, the database and the website live."
+                : lowMemory
+                  ? lowMemory
+                  : app.source.kind === "image"
+                    ? "Where the containers, their data and the website live."
+                    : "Where the files, the database and the website live."
             }
           >
             <Select
@@ -341,9 +353,22 @@ function ReviewCard({ plan }: { plan: AppInstallPlan }) {
             {plan.url}
           </PropertyRow>
           <PropertyRow label="Server">{plan.server_name}</PropertyRow>
-          <PropertyRow label="Files" mono>
-            {plan.webroot}
-          </PropertyRow>
+          {plan.containers.length > 0 ? (
+            <>
+              <PropertyRow label="Containers" mono>
+                {plan.containers.map((c) => `${c.role}: ${c.image}`).join(" · ")}
+              </PropertyRow>
+              {plan.app_port !== null && (
+                <PropertyRow label="Listens on" mono>
+                  127.0.0.1:{plan.app_port}
+                </PropertyRow>
+              )}
+            </>
+          ) : (
+            <PropertyRow label="Files" mono>
+              {plan.webroot}
+            </PropertyRow>
+          )}
           {plan.database && (
             <PropertyRow label="Database" mono>
               {plan.database} · {plan.db_engine}
@@ -378,4 +403,8 @@ function ReviewCard({ plan }: { plan: AppInstallPlan }) {
       </Card>
     </div>
   );
+}
+
+function formatMb(mb: number): string {
+  return mb >= 1024 ? `${Math.round((mb / 1024) * 10) / 10} GB` : `${mb} MB`;
 }

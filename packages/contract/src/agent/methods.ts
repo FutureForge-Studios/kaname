@@ -68,6 +68,128 @@ export interface MethodSpec {
 }
 
 const ok = z.object({ ok: z.literal(true) });
+
+/* ------------------------- managed containers ------------------------ */
+
+/**
+ * Where every managed app container's bind mounts live, one directory per
+ * install. Outside the agent's own state directory on purpose: that one
+ * holds the enrolled key and is denied to every file verb.
+ */
+export const MANAGED_APPS_ROOT = "/var/lib/kaname-apps";
+
+/** An install id as the agent names things after it: a UUID in practice. */
+export const managedInstallId = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/);
+
+/**
+ * An image reference with an explicit tag or digest. `latest` by omission
+ * is refused: what an install runs should be what its recipe says.
+ */
+export const containerImageRef = z
+  .string()
+  .max(255)
+  .regex(
+    /^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[a-f0-9]{64}|:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}@sha256:[a-f0-9]{64})$/,
+    "must be an image reference with a tag or digest",
+  );
+
+/** The engines `app.db_dump` / `app.db_restore` know a fixed argv for. */
+export const appDbEngine = z.enum(["postgres", "mysql", "mariadb"]);
+
+export const appDbParams = z
+  .object({
+    install_id: managedInstallId,
+    /** The companion's role ("db"); its container is kaname-<install_id>-<role>. */
+    role: z.string().regex(/^[a-z][a-z0-9]{0,15}$/),
+    engine: appDbEngine,
+    /** Which dump file: the backup itself, or the safety copy taken before a restore. */
+    slot: z.enum(["backup", "pre_restore"]).default("backup"),
+  })
+  .strict();
+
+const envName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/);
+
+/**
+ * The whole of what can be said about a managed container. There is no
+ * field for privileged mode, capabilities, devices, host namespaces,
+ * a command, an entrypoint or a host IP: the agent fixes those itself.
+ */
+export const managedContainerSpec = z
+  .object({
+    install_id: managedInstallId,
+    /** "app", "db": the name suffix and the alias on the install's network. */
+    role: z.string().regex(/^[a-z][a-z0-9]{0,15}$/),
+    image: containerImageRef,
+    env: z
+      .record(envName, z.string().max(4096).regex(/^[^\0]*$/))
+      .refine((env) => Object.keys(env).length <= 64, { message: "at most 64 variables" })
+      .default({}),
+    mounts: z
+      .array(
+        z
+          .object({
+            /** Must lie under MANAGED_APPS_ROOT/<install_id>/; created if missing. */
+            source: absolutePath,
+            target: absolutePath,
+            read_only: z.boolean().default(false),
+            /** Hands the directory to the account the image runs as. */
+            uid: z.number().int().min(1).max(65534).optional(),
+            gid: z.number().int().min(1).max(65534).optional(),
+          })
+          .strict(),
+      )
+      .max(8)
+      .default([]),
+    /** Always published on 127.0.0.1 only. */
+    ports: z
+      .array(
+        z
+          .object({
+            container_port: z.number().int().min(1).max(65535),
+            host_port: z.number().int().min(1024).max(65535),
+          })
+          .strict(),
+      )
+      .max(4)
+      .default([]),
+    memory_bytes: z
+      .number()
+      .int()
+      .min(64 * 1024 * 1024)
+      .max(256 * 1024 * 1024 * 1024)
+      .optional(),
+    cpus: z.number().min(0.1).max(256).optional(),
+    /** The one ulimit a spec may raise: open files, soft and hard alike. */
+    nofile: z.number().int().min(1024).max(1_048_576).optional(),
+    /**
+     * Arguments to the image's own entrypoint, one token each. There is no
+     * entrypoint override and no shell: a token cannot hold a space.
+     */
+    args: z
+      .array(z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9._:=+-]{0,127}$/))
+      .max(16)
+      .default([]),
+    /** Small config files, written under the install's directory and mounted read-only. */
+    files: z
+      .array(
+        z
+          .object({
+            path: z
+              .string()
+              .max(256)
+              .regex(/^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/),
+            content: z.string().max(64 * 1024),
+            target: absolutePath,
+          })
+          .strict(),
+      )
+      .max(8)
+      .default([]),
+    /** Remove a managed container of the same install and role first. */
+    replace: z.boolean().default(false),
+  })
+  .strict();
+export type ManagedContainerSpec = z.infer<typeof managedContainerSpec>;
 const empty = z.object({});
 const unit = z.object({ unit: z.string().min(1).max(256) });
 
@@ -415,6 +537,94 @@ export const AGENT_METHODS = {
     requires: ["docker"],
     readOnly: false,
     summary: "Reclaim unused container resources.",
+  }),
+
+  /*
+   * Managed app containers (KD-040). The installer's only way to create a
+   * container, and deliberately not a Docker API passthrough: the spec is
+   * a closed shape the agent validates and turns into a create body itself.
+   * Everything these verbs make carries Kaname's labels and a name derived
+   * from the install id, and the destructive one acts on nothing else.
+   */
+  "container.image.pull": m({
+    params: z.object({ image: containerImageRef }).strict(),
+    result: z.object({ image: z.string(), id: z.string() }),
+    stream: "response",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Pull an image by an explicit tag or digest, narrating progress.",
+  }),
+  "container.network.create": m({
+    params: z.object({ install_id: managedInstallId }).strict(),
+    result: z.object({ name: z.string(), id: z.string(), created: z.boolean() }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Create (or find) an app install's private bridge network.",
+  }),
+  "container.create": m({
+    params: managedContainerSpec,
+    result: containerInfo,
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Create and start a managed app container from a closed, guarded spec.",
+  }),
+  "container.task.run": m({
+    params: z
+      .object({
+        /** Must publish no ports; runs once, is never restarted, and is removed afterwards. */
+        spec: managedContainerSpec,
+        timeout_seconds: z.number().int().min(1).max(3600).default(600),
+      })
+      .strict(),
+    result: z.object({ exit_code: z.number().int(), output: z.string() }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Run a one-shot managed container (a migration) to completion.",
+  }),
+  "container.app.status": m({
+    params: z.object({ install_id: managedInstallId }).strict(),
+    result: z.object({
+      containers: z.array(
+        z.object({
+          role: z.string(),
+          name: z.string(),
+          state: z.string(),
+          status: z.string(),
+        }),
+      ),
+      endpoints: z.array(
+        z.object({
+          role: z.string(),
+          host_port: z.number().int(),
+          container_port: z.number().int(),
+          /** A TCP connection to 127.0.0.1:host_port succeeded. */
+          reachable: z.boolean(),
+          /** The status line of a plain GET /, when one came back. */
+          http_status: z.number().int().nullable(),
+        }),
+      ),
+    }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: true,
+    summary: "State of an install's managed containers and whether its loopback ports answer.",
+  }),
+  "container.app.remove": m({
+    params: z
+      .object({ install_id: managedInstallId, remove_data: z.boolean().default(false) })
+      .strict(),
+    result: z.object({
+      containers: z.array(z.string()),
+      networks: z.array(z.string()),
+      data_removed: z.boolean(),
+    }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Remove an install's Kaname-labelled containers, network and (optionally) data directory.",
   }),
 
   /* ------------------------------- files ----------------------------- */
@@ -1441,6 +1651,36 @@ export const AGENT_METHODS = {
     requires: [],
     readOnly: false,
     summary: "Apply a retention policy.",
+  }),
+
+  /*
+   * App backups. One fixed argv per engine, run by the engine's own dump
+   * or restore tool inside an install's Kaname-labelled companion
+   * container; the file lives at a path the agent derives under
+   * MANAGED_APPS_ROOT/<install_id>/kaname-backup/, never one the caller
+   * names. Database name, user and password are read from the container's
+   * own environment, so no credential crosses the socket.
+   */
+  "app.db_dump": m({
+    params: appDbParams,
+    result: z.object({
+      path: z.string(),
+      size_bytes: z.number().int(),
+      engine: appDbEngine,
+      database: z.string(),
+    }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Dump an app install's companion database with the engine's own tool.",
+  }),
+  "app.db_restore": m({
+    params: appDbParams,
+    result: z.object({ ok: z.literal(true), database: z.string() }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Re-import an app install's companion database from its dump.",
   }),
 
   /* --------------------------------- logs ------------------------------ */

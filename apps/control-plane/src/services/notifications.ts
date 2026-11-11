@@ -864,6 +864,9 @@ export class NotificationService {
       }
       case "alert.firing":
       case "alert.resolved": {
+        // An app rule that only mirrors a warning another sweep already
+        // sends (certificate expiry) is shown on the app, not sent again.
+        if (data.notify === false) return;
         const resolved = event.type === "alert.resolved";
         const channels = Array.isArray(data.channels)
           ? data.channels.filter((id): id is string => typeof id === "string")
@@ -874,7 +877,8 @@ export class NotificationService {
           body: String(data.message ?? ""),
           serverId,
           serverName: name,
-          href: "/monitoring",
+          // App rules link to the app's own page, where its health is.
+          href: typeof data.href === "string" ? data.href : "/monitoring",
           key: `alert:${String(data.alert_id ?? "")}:${event.type}`,
           windowMs: 6 * HOUR,
           channels,

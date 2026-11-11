@@ -2,9 +2,12 @@
 
 use std::sync::Arc;
 
+use crate::providers::managed::{self, MANAGED_APPS_ROOT};
 use crate::providers::{
     ContainerExecParams, ContainerIdParams, ContainerListParams, ContainerListResult, ContainerLogsParams,
-    ContainerPruneParams, ContainerRemoveParams, ContainerStopParams, ImageListResult, LogRecordsResult, OK,
+    ContainerPruneParams, ContainerRemoveParams, ContainerStopParams, ImageListResult, ImagePullParams,
+    LogRecordsResult, ManagedAppRemoveParams, ManagedContainerSpec, ManagedInstallParams, ManagedTaskParams,
+    OK,
 };
 use crate::registry::{Registry, Request, StreamMode};
 use crate::wire::WireError;
@@ -135,6 +138,95 @@ pub(super) fn register(r: &mut Registry, h: &Arc<Handlers>) {
         |h, ctx, _req| async move {
             let images = h.provider.containers().images(&ctx).await?;
             reply(ImageListResult { images })
+        },
+    ));
+
+    /* ----------------------- managed app containers --------------------- */
+
+    r.register(method(
+        "container.image.pull",
+        StreamMode::Response,
+        NEEDS_DOCKER,
+        h,
+        |h, ctx, req| async move {
+            let p: ImagePullParams = decode(&req)?;
+            managed::validate_image(&p.image)?;
+            let stream = require_stream(&req)?;
+            reply(h.provider.containers().pull_image(&ctx, p, stream).await?)
+        },
+    ));
+
+    r.register(method(
+        "container.network.create",
+        StreamMode::None,
+        NEEDS_DOCKER,
+        h,
+        |h, ctx, req| async move {
+            let p: ManagedInstallParams = decode(&req)?;
+            managed::validate_install_id(&p.install_id)?;
+            reply(
+                h.provider
+                    .containers()
+                    .create_network(&ctx, &p.install_id)
+                    .await?,
+            )
+        },
+    ));
+
+    r.register(method(
+        "container.create",
+        StreamMode::None,
+        NEEDS_DOCKER,
+        h,
+        |h, ctx, req| async move {
+            let mut spec: ManagedContainerSpec = decode(&req)?;
+            managed::validate_spec(&mut spec, MANAGED_APPS_ROOT)?;
+            // The agent-wide guard as well: a source can never be the
+            // agent's own state directory, whatever the managed root is.
+            for mount in &mut spec.mounts {
+                mount.source = h.paths.check(&mount.source)?;
+            }
+            reply(h.provider.containers().create_managed(&ctx, spec).await?)
+        },
+    ));
+
+    r.register(method(
+        "container.task.run",
+        StreamMode::None,
+        NEEDS_DOCKER,
+        h,
+        |h, ctx, req| async move {
+            let mut p: ManagedTaskParams = decode(&req)?;
+            p.timeout_seconds = or_default(p.timeout_seconds, 600);
+            managed::validate_task(&mut p.spec, p.timeout_seconds, MANAGED_APPS_ROOT)?;
+            for mount in &mut p.spec.mounts {
+                mount.source = h.paths.check(&mount.source)?;
+            }
+            reply(h.provider.containers().run_task(&ctx, p).await?)
+        },
+    ));
+
+    r.register(method(
+        "container.app.status",
+        StreamMode::None,
+        NEEDS_DOCKER,
+        h,
+        |h, ctx, req| async move {
+            let p: ManagedInstallParams = decode(&req)?;
+            managed::validate_install_id(&p.install_id)?;
+            reply(h.provider.containers().app_status(&ctx, &p.install_id).await?)
+        },
+    ));
+
+    r.register(method(
+        "container.app.remove",
+        StreamMode::None,
+        NEEDS_DOCKER,
+        h,
+        |h, ctx, req| async move {
+            let p: ManagedAppRemoveParams = decode(&req)?;
+            managed::validate_install_id(&p.install_id)?;
+            reply(h.provider.containers().remove_app(&ctx, p).await?)
         },
     ));
 

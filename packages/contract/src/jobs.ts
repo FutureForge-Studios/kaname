@@ -121,6 +121,7 @@ export const JOB_TYPES = [
   "backup.restore",
   "backup.verify",
   "backup.prune",
+  "app.restore",
   // lifecycle
   "agent.update",
 ] as const;
@@ -693,6 +694,20 @@ export const JOB_SPECS: Record<JobType, JobTypeSpec> = {
     idempotent: true,
     maxAttempts: 1,
     timeoutMs: 60 * M,
+    destructive: true,
+  },
+
+  /*
+   * One job for the whole app restore: stage, stop, swap, re-import,
+   * start, check. Not retried — a half-run restore is resumed by a
+   * person reading its log, never replayed.
+   */
+  "app.restore": {
+    label: "Restore app",
+    permission: "backups.restore:exec",
+    idempotent: false,
+    maxAttempts: 1,
+    timeoutMs: 6 * 60 * M,
     destructive: true,
   },
 

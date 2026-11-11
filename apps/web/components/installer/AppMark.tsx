@@ -49,6 +49,14 @@ const MARKS: Record<string, React.ReactNode> = {
       <path d="M14 26h6l3-7 4 12 3-5h4" />
     </>
   ),
+  // A screen with a play mark: a media server.
+  jellyfin: (
+    <>
+      <rect x="9" y="12" width="30" height="20" rx="3" />
+      <path d="M21 17l8 5-8 5z" />
+      <path d="M18 37h12" />
+    </>
+  ),
   // Three linked nodes: a workflow.
   n8n: (
     <>
@@ -65,6 +73,13 @@ const MARKS: Record<string, React.ReactNode> = {
       <circle cx="16" cy="35" r="3.5" />
       <circle cx="32" cy="18" r="3.5" />
       <path d="M16 16.5v15M32 21.5c0 7-16 5-16 10" />
+    </>
+  ),
+  // Rising bars on an axis: analytics.
+  plausible: (
+    <>
+      <path d="M10 38h28" />
+      <path d="M15 38V28M22 38V22M29 38V25M36 38V14" />
     </>
   ),
   // A server unit with an envelope in front of it: a mail server you host.

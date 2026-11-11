@@ -306,6 +306,12 @@ export const SCOPED_ACCOUNT_PERMISSIONS = [
   "apps.installs:read",
   "apps.installs:write",
   "apps.installs:delete",
+  // Only /backups/apps/* opts in to ownership: a scoped account backs up
+  // and restores the app installs it owns, and no other backup route
+  // ever sees these grants (KD-043).
+  "backups.schedules:read",
+  "backups.schedules:write",
+  "backups.restore:exec",
 ] as const satisfies readonly Permission[];
 
 /** The grants a scoped account holds: the fixed list, on exactly these servers. */

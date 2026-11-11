@@ -25,10 +25,18 @@ import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
 import { open, seal, type SealedSecret } from "../lib/crypto.js";
 import {
   APP_DB_PRIVILEGES,
+  NO_SECRETS,
+  containerSecretNames,
+  containerSecretRef,
+  containerSpecs,
   generatePassword,
+  generateSecret,
+  initTaskSpecs,
   installNames,
   renderConfig,
   writablePaths,
+  type ContainerContext,
+  type ContainerSecrets,
   type InstallNames,
 } from "../services/app-installer.js";
 import { recordOwnership } from "../services/app-ownership.js";
@@ -66,6 +74,32 @@ type InstallRow = typeof appInstalls.$inferSelect;
 
 const GIT_TIMEOUT_MS = 15 * 60_000;
 const CERT_TIMEOUT_MS = 5 * 60_000;
+const PULL_TIMEOUT_MS = 20 * 60_000;
+const TASK_TIMEOUT_S = 600;
+
+/**
+ * How long an image install waits on things that take their time: a
+ * database that is still initialising when the app's migration first
+ * runs, and an app that is still starting when the health check asks.
+ * Mutable so the tests do not sleep.
+ */
+export const CONTAINER_TIMING = {
+  initAttempts: 12,
+  initRetryMs: 5_000,
+  verifyAttempts: 60,
+  verifyIntervalMs: 5_000,
+};
+
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
 
 function requireServer(ctx: JobContext): string {
   if (!ctx.job.serverId) throw new Error(`${ctx.job.type} requires a server`);
@@ -477,8 +511,16 @@ const configureStep: StepFn = async (run) => {
 const siteStep: StepFn = async (run) => {
   const { ctx, names, recipe } = run;
   const inputs = run.row.inputs;
-  const runtimeVersion = inputs.php_version ?? recipe.requirements.runtime_version;
   const source = recipe.source;
+  const image = source.kind === "image";
+  const runtimeVersion = image ? null : (inputs.php_version ?? recipe.requirements.runtime_version);
+  const upstream = image ? `127.0.0.1:${run.row.appPort}` : null;
+  if (image) {
+    if (!run.row.appPort) throw new Error("no loopback port was allocated for this install");
+    // The vhost's webroot only answers the ACME challenge; it is this
+    // install's to remove, like a git recipe's deploy root.
+    await run.remember({ site_name: names.siteName, deploy_root: names.deployRoot, webroot: names.webroot, files_attempted: true });
+  }
 
   if (!run.row.siteId) {
     const [site] = await ctx.db
@@ -549,10 +591,11 @@ const siteStep: StepFn = async (run) => {
           webroot: names.webroot,
           runtime: recipe.requirements.runtime,
           ...(runtimeVersion ? { runtime_version: runtimeVersion } : {}),
+          ...(upstream ? { upstream } : {}),
           force_https: run.row.ssl,
         }),
       // Ours already: re-render it so it matches what this run would write.
-      () => run.call(run.serverId, "site.update", { name: names.siteName }),
+      () => run.call(run.serverId, "site.update", { name: names.siteName, ...(upstream ? { upstream } : {}) }),
     );
     await run.call(run.serverId, "site.reload", {});
   } catch (err) {
@@ -701,13 +744,20 @@ const certificateStep: StepFn = async (run) => {
   ctx.events.publish("certificates", "certificate.issued", { certificate_id: certificateId }, run.serverId);
 };
 
-/** The health check: nginx accepts its configuration, and the app's entry file is where the vhost looks. */
+/**
+ * The health check: nginx accepts its configuration, and the app is where
+ * the vhost looks — its entry file for a git recipe, an HTTP answer on its
+ * loopback port for an image recipe.
+ */
 const verifyStep: StepFn = async (run) => {
   const { ctx, recipe } = run;
   const test = await run.call(run.serverId, "site.test_config", {});
   if (!test.valid) {
     await ctx.log_("error", test.output);
     throw new Error(`The web server configuration is invalid: ${test.output.slice(0, 400)}`);
+  }
+  if (recipe.source.kind === "image") {
+    await verifyContainers(run);
   }
   if (recipe.source.kind === "git") {
     const probe = `${run.names.webroot}/${recipe.source.probe}`;
@@ -723,10 +773,167 @@ const verifyStep: StepFn = async (run) => {
   }
 };
 
+/* ------------------------------------------------------------------ *
+ * Image recipes (KD-040): everything goes through the agent's managed-
+ * container verbs, whose guards (loopback-only ports, bind mounts under
+ * the managed root, Kaname labels) the agent enforces whatever is sent.
+ * ------------------------------------------------------------------ */
+
+/** The install's generated secrets, created and sealed on first use and read back after. */
+async function containerSecrets(run: InstallRun): Promise<ContainerSecrets> {
+  const secretsOut: ContainerSecrets = { ...NO_SECRETS };
+  for (const name of containerSecretNames(run.recipe)) {
+    const ref = containerSecretRef(run.row.id, name);
+    let value = await readSecret(run.ctx, ref);
+    if (!value) {
+      value = generateSecret(name);
+      await storeSecret(run.ctx, ref, "app_install", run.row.id, value);
+    }
+    secretsOut[name] = value;
+  }
+  return secretsOut;
+}
+
+async function containerContext(run: InstallRun): Promise<ContainerContext> {
+  if (!run.row.appPort) throw new Error("no loopback port was allocated for this install");
+  return {
+    installId: run.row.id,
+    domain: run.row.domain,
+    ssl: run.row.ssl,
+    appPort: run.row.appPort,
+    secrets: await containerSecrets(run),
+  };
+}
+
+function imageSource(run: InstallRun) {
+  const source = run.recipe.source;
+  if (source.kind !== "image") throw new Error(`${run.recipe.name} is not installed from an image`);
+  return source;
+}
+
+/** Every image the install runs, pulled with its progress in the job log. */
+const pullStep: StepFn = async (run) => {
+  const { ctx } = run;
+  const source = imageSource(run);
+  const images = [...new Set([...source.companions.map((c) => c.image), source.image])];
+  for (const image of images) {
+    await ctx.log_("info", `pulling ${image}`);
+    const handle = ctx.hub.stream(
+      run.serverId,
+      "container.image.pull",
+      { image },
+      (chunk) => {
+        for (const line of chunk.split("\n").filter(Boolean)) void ctx.log_("info", line.trim());
+      },
+      { timeoutMs: PULL_TIMEOUT_MS, signal: ctx.signal },
+    );
+    const pulled = await handle.done;
+    await ctx.log_("info", `${pulled.image} is ${pulled.id.slice(0, 19)}`);
+  }
+  await run.remember({ images_pulled: true });
+};
+
+/** The install's own bridge network; the agent answers with it again on a resume. */
+const networkStep: StepFn = async (run) => {
+  await run.remember({ network_attempted: true, data_dir: run.names.dataDir ?? undefined });
+  const network = await run.call(run.serverId, "container.network.create", { install_id: run.row.id });
+  await run.remember({ network_created: true });
+  await run.ctx.log_("info", network.created ? `network ${network.name} created` : `network ${network.name} is in place`);
+};
+
+/** The companion databases, on the private network and published nowhere. */
+const companionStep: StepFn = async (run) => {
+  const context = await containerContext(run);
+  const specs = containerSpecs(run.recipe, context).filter((spec) => spec.role !== "app");
+  await run.remember({ db_container_attempted: true });
+  for (const spec of specs) {
+    // The spec carries generated passwords, so only its shape is logged.
+    await run.ctx.log_("info", `starting ${spec.role} (${spec.image})`);
+    const info = await run.call(run.serverId, "container.create", spec);
+    await run.ctx.log_("info", `${info.name} is ${info.state}`);
+  }
+  await run.remember({ db_container_created: true });
+};
+
+/**
+ * The app's own one-shot setup (creating and migrating its database).
+ * A database container answers "started" before it accepts connections,
+ * so a failing first attempt is retried for a while before it counts.
+ */
+const initStep: StepFn = async (run) => {
+  const { ctx } = run;
+  const context = await containerContext(run);
+  await run.remember({ app_container_attempted: true });
+  for (const spec of initTaskSpecs(run.recipe, context)) {
+    const label = spec.args.join(" ");
+    let last = { exit_code: -1, output: "" };
+    for (let attempt = 1; attempt <= CONTAINER_TIMING.initAttempts; attempt += 1) {
+      await ctx.log_("info", `running ${label}${attempt > 1 ? ` (attempt ${attempt})` : ""}`);
+      last = await run.call(
+        run.serverId,
+        "container.task.run",
+        { spec, timeout_seconds: TASK_TIMEOUT_S },
+        { timeoutMs: (TASK_TIMEOUT_S + 30) * 1000 },
+      );
+      if (last.exit_code === 0) break;
+      if (attempt < CONTAINER_TIMING.initAttempts) await pause(CONTAINER_TIMING.initRetryMs, ctx.signal);
+    }
+    if (last.exit_code !== 0) {
+      for (const line of last.output.split("\n").filter(Boolean).slice(-10)) await ctx.log_("error", line);
+      throw new Error(`${run.recipe.name}'s "${label}" exited with ${last.exit_code}.`);
+    }
+    await ctx.log_("info", `${label}: done`);
+  }
+};
+
+/** The app itself, published on 127.0.0.1:<allocated port> only. */
+const appContainerStep: StepFn = async (run) => {
+  const context = await containerContext(run);
+  const spec = containerSpecs(run.recipe, context).find((s) => s.role === "app")!;
+  await run.remember({ app_container_attempted: true, data_dir: run.names.dataDir ?? undefined });
+  await run.ctx.log_("info", `starting ${run.recipe.name} (${spec.image}) on 127.0.0.1:${context.appPort}`);
+  const info = await run.call(run.serverId, "container.create", spec);
+  await run.remember({ app_container_created: true });
+  await run.ctx.log_("info", `${info.name} is ${info.state}`);
+};
+
+/** The image half of "check it answers": every container up, and the app speaking HTTP. */
+async function verifyContainers(run: InstallRun): Promise<void> {
+  const { ctx } = run;
+  const expected = 1 + imageSource(run).companions.length;
+  let status = await run.call(run.serverId, "container.app.status", { install_id: run.row.id });
+  for (let attempt = 1; ; attempt += 1) {
+    const down = status.containers.filter((c) => c.state !== "running");
+    if (status.containers.length < expected) {
+      throw new Error(`Only ${status.containers.length} of ${expected} containers exist on the server.`);
+    }
+    if (down.some((c) => ["exited", "dead"].includes(c.state))) {
+      throw new Error(`${down.map((c) => `${c.name} is ${c.state} (${c.status})`).join("; ")}.`);
+    }
+    const app = status.endpoints.find((e) => e.role === "app");
+    if (down.length === 0 && app?.reachable && app.http_status !== null && app.http_status < 500) {
+      await ctx.log_("info", `${run.recipe.name} answers on 127.0.0.1:${app.host_port} (HTTP ${app.http_status})`);
+      return;
+    }
+    if (attempt >= CONTAINER_TIMING.verifyAttempts) {
+      throw new StepWarning(
+        `${run.recipe.name} is running but did not answer yet${app?.http_status ? ` (HTTP ${app.http_status})` : ""}. A first start can take a few minutes; check the app's logs under Containers if it stays this way.`,
+      );
+    }
+    await pause(CONTAINER_TIMING.verifyIntervalMs, ctx.signal);
+    status = await run.call(run.serverId, "container.app.status", { install_id: run.row.id });
+  }
+}
+
 const STEPS: Record<AppInstallStepId, StepFn> = {
   database: databaseStep,
   files: filesStep,
   configure: configureStep,
+  pull: pullStep,
+  network: networkStep,
+  db_container: companionStep,
+  init: initStep,
+  app_container: appContainerStep,
   site: siteStep,
   certificate: certificateStep,
   verify: verifyStep,
@@ -827,6 +1034,41 @@ export async function teardown(run: InstallRun): Promise<string[]> {
     if (ok) {
       await run.remember({ files_created: false, files_attempted: false });
       await ctx.log_("info", `${deployRoot} removed`);
+    }
+  }
+
+  /* containers, their network and their data (image recipes) */
+  const containersMade =
+    run.res.network_attempted || run.res.db_container_attempted || run.res.app_container_attempted;
+  if (run.recipe.source.kind === "image") {
+    let ok = true;
+    if (containersMade) {
+      ok = await attempt(`the containers of ${run.row.domain}`, async () => {
+        // Finds them by Kaname's labels for this install; touches nothing else.
+        const removed = await run.call(run.serverId, "container.app.remove", {
+          install_id: run.row.id,
+          remove_data: true,
+        });
+        await ctx.log_(
+          "info",
+          `removed ${removed.containers.length} container${removed.containers.length === 1 ? "" : "s"}, ${removed.networks.length} network${removed.networks.length === 1 ? "" : "s"}${removed.data_removed ? " and the data directory" : ""}`,
+        );
+      });
+      if (ok) {
+        await run.remember({
+          network_attempted: false,
+          network_created: false,
+          db_container_attempted: false,
+          db_container_created: false,
+          app_container_attempted: false,
+          app_container_created: false,
+        });
+      }
+    }
+    if (ok) {
+      await ctx.db
+        .delete(secrets)
+        .where(and(eq(secrets.ownerType, "app_install"), eq(secrets.ownerId, run.row.id)));
     }
   }
 

@@ -4,5 +4,5 @@
   "security": false,
   "adds_config": [],
   "min_upgrade_from": null,
-  "summary": "Redesigned in the FutureForge Studios language. New: Simplified and Advanced view modes; reseller and client accounts with owned resources, quotas and branding; a one-click app installer (WordPress, DokuWiki) that also features Yunori Mail Server. Migrations 0008 and 0009 are additive: 0008 adds users.view_mode, audience and parent_id with defaults plus account_limits, reseller_branding and resource_owners; 0009 adds app_installs. Nothing is dropped."
+  "summary": "Container apps in the one-click installer: Ghost, Nextcloud, Uptime Kuma, n8n, Gitea, Plausible and Jellyfin, on private networks with loopback-only ports via guarded agent verbs (KD-040). App backup and restore with in-container database dumps; S3 provider presets with a live test (KD-043). App health alerts (KD-042), OS package updates and an in-panel update notice (KD-041). Migrations 0010-0012 are additive: app_port, app health tables, restore_points.manifest."
 }
