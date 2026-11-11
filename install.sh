@@ -514,6 +514,52 @@ wait_for_api() {
   return 1
 }
 
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    openssl dgst -sha256 -r "$1" | cut -d' ' -f1
+  fi
+}
+
+# Reads one field ("url" or "sha256") of this host's agent artifact for
+# release $1 out of versions.json ($2). The manifest is generated with
+# one key per line (scripts/release-manifest.mjs), which is what lets
+# awk stand in for a JSON parser on a host that may not have jq.
+manifest_agent_field() {
+  awk -v ver="$1" -v key="\"linux-$ARCH\"" -v field="\"$3\"" '
+    /"version":/ { v = $2; gsub(/[",]/, "", v); inrel = (v == ver); inkey = 0 }
+    inrel && index($0, key) { inkey = 1; next }
+    inrel && inkey && index($0, field) {
+      line = $0
+      sub(/^[^:]*:[ \t]*"/, "", line)
+      sub(/".*$/, "", line)
+      print line
+      exit
+    }
+  ' "$2"
+}
+
+# Downloads release $REQ_VERSION's agent from its GitHub release into $1
+# and leaves the manifest's digest for it in RELEASE_AGENT_SHA256.
+fetch_release_agent() {
+  log "    this control plane publishes no checksum; using the $REQ_VERSION release instead"
+  manifest="$(dirname "$1")/versions.json"
+  $CURL "$KANAME_SOURCE_URL/versions.json" -o "$manifest" ||
+    die "could not download the release manifest from $KANAME_SOURCE_URL/versions.json."
+  url="$(manifest_agent_field "$REQ_VERSION" "$manifest" url)"
+  RELEASE_AGENT_SHA256="$(manifest_agent_field "$REQ_VERSION" "$manifest" sha256)"
+  [ -n "$url" ] && [ -n "$RELEASE_AGENT_SHA256" ] ||
+    die "the release manifest has no linux-$ARCH agent for $REQ_VERSION."
+  case "$url" in
+    https://*) ;;
+    *) die "the release manifest names a non-HTTPS agent URL ($url); refusing it." ;;
+  esac
+  log "    fetching kanamed $REQ_VERSION from $url"
+  $CURL "$url" -o "$1" ||
+    die "could not download the agent from $url."
+}
+
 # 8. The agent. Three steps that are each safe to repeat, because a
 #    re-run has to be able to pick up wherever the last one stopped:
 #    after the download, after enrollment, or after the unit was lost.
@@ -529,16 +575,32 @@ control plane is not reachable from here."
   # The binary runs as root on this host and, until a domain is set,
   # travelled over plain HTTP. The control plane publishes its digest
   # beside it; nothing is installed until the two agree.
-  $CURL "$1/download/kanamed-linux-$ARCH.sha256" -o "$tmp/kanamed.sha256" ||
-    die "could not download the agent's checksum from $1/download/kanamed-linux-$ARCH.sha256."
-  expected="$(cut -d' ' -f1 "$tmp/kanamed.sha256")"
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "$tmp/kanamed" | cut -d' ' -f1)"
-  else
-    actual="$(openssl dgst -sha256 -r "$tmp/kanamed" | cut -d' ' -f1)"
-  fi
+  code="$(curl -sSL --retry 3 --retry-delay 2 --connect-timeout 15 \
+    -o "$tmp/kanamed.sha256" -w '%{http_code}' \
+    "$1/download/kanamed-linux-$ARCH.sha256" 2>>"$LOG_FILE")" || code=000
+  case "$code" in
+    200)
+      expected="$(cut -d' ' -f1 "$tmp/kanamed.sha256")"
+      source_desc="the checksum the control plane published"
+      ;;
+    404)
+      # A control plane older than this script (0.1.0 and earlier) has
+      # no checksum route. install.sh is served from main but pins the
+      # last stable release, so that is the normal case right after a
+      # release, not an attack. Take that release's agent from GitHub
+      # instead, checked against the digest in the release manifest:
+      # both come over HTTPS from the same place as this script.
+      fetch_release_agent "$tmp/kanamed"
+      expected="$RELEASE_AGENT_SHA256"
+      source_desc="the digest in the $REQ_VERSION release manifest"
+      ;;
+    *)
+      die "could not download the agent's checksum from $1/download/kanamed-linux-$ARCH.sha256 (HTTP $code)."
+      ;;
+  esac
+  actual="$(sha256_of "$tmp/kanamed")"
   if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
-    die "the downloaded agent does not match the checksum the control plane published
+    die "the downloaded agent does not match $source_desc
 (expected ${expected:-nothing}, got $actual). Nothing was installed. A truncated
 download or something on the path between this host and $1 changed the file;
 run this again, and if it repeats, look at what sits between the two."
