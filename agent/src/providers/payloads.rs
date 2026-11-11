@@ -901,7 +901,39 @@ pub struct ManagedContainerSpec {
     pub memory_bytes: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpus: Option<f64>,
+    /// Raises the open-files limit (soft and hard alike); nothing else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nofile: Option<i64>,
+    /// Arguments handed to the image's own entrypoint. Tokens, not a
+    /// command line: the entrypoint itself can never be replaced.
+    pub args: Vec<String>,
+    /// Small configuration files written under the install's directory
+    /// and mounted read-only.
+    pub files: Vec<ManagedFile>,
     pub replace: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedFile {
+    /// Relative to the install's directory under the managed apps root.
+    pub path: String,
+    pub content: String,
+    pub target: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManagedTaskParams {
+    pub spec: ManagedContainerSpec,
+    pub timeout_seconds: i64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ManagedTaskResult {
+    pub exit_code: i64,
+    /// The tail of what the task printed.
+    pub output: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

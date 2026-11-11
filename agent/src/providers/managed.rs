@@ -47,12 +47,22 @@ const MAX_ENV: usize = 64;
 const MAX_ENV_VALUE: usize = 4096;
 const MAX_MOUNTS: usize = 8;
 const MAX_PORTS: usize = 4;
+const MAX_ARGS: usize = 16;
+const MAX_FILES: usize = 8;
+const MAX_FILE_BYTES: usize = 64 * 1024;
+/// The bounds of the one ulimit a spec may raise.
+pub const NOFILE_RANGE: std::ops::RangeInclusive<i64> = 1024..=1_048_576;
+/// The longest a one-shot task may run.
+pub const MAX_TASK_SECONDS: i64 = 3600;
 const MIN_MEMORY: i64 = 64 * 1024 * 1024;
 const MAX_MEMORY: i64 = 256 * 1024 * 1024 * 1024;
 
 static INSTALL_ID: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[a-z0-9][a-z0-9-]{0,63}$").expect("install id pattern"));
 static ROLE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-z][a-z0-9]{0,15}$").expect("role pattern"));
+static ARG: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[A-Za-z0-9_][A-Za-z0-9._:=+-]{0,127}$").expect("arg pattern"));
+static FILE_PATH: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$").expect("file pattern"));
 static ENV_NAME: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$").expect("env pattern"));
 /// Mirrors `containerImageRef` in the contract: an optional registry, a
@@ -241,7 +251,68 @@ pub fn validate_spec(spec: &mut ManagedContainerSpec, root: &str) -> PResult<()>
             return Err(invalid("cpus must be between 0.1 and 256"));
         }
     }
+    if let Some(nofile) = spec.nofile {
+        if !NOFILE_RANGE.contains(&nofile) {
+            return Err(invalid(format!(
+                "nofile must be between {} and {}",
+                NOFILE_RANGE.start(),
+                NOFILE_RANGE.end()
+            )));
+        }
+    }
+
+    if spec.args.len() > MAX_ARGS {
+        return Err(invalid(format!("at most {MAX_ARGS} arguments")));
+    }
+    for arg in &spec.args {
+        if !ARG.is_match(arg) {
+            return Err(invalid(format!(
+                "argument {arg:?} must be a single token of letters, digits and ._:=+-"
+            )));
+        }
+    }
+
+    if spec.files.len() > MAX_FILES {
+        return Err(invalid(format!("at most {MAX_FILES} files")));
+    }
+    for file in &mut spec.files {
+        if file.path.len() > 256 || !FILE_PATH.is_match(&file.path) || file.path.split('/').any(|s| s == "..") {
+            return Err(invalid(format!(
+                "file path must be relative to the install directory: {:?}",
+                file.path
+            )));
+        }
+        // Checked as a bind source would be: it is one, read-only.
+        check_source(root, &spec.install_id, &format!("{}/{}", install_dir(root, &spec.install_id), file.path))?;
+        if file.content.len() > MAX_FILE_BYTES || file.content.contains('\0') {
+            return Err(invalid(format!(
+                "file {} must be at most {MAX_FILE_BYTES} bytes with no NUL",
+                file.path
+            )));
+        }
+        file.target = validate_container_path("file target", &file.target)?;
+        if file.target == "/" || !targets.insert(file.target.clone()) {
+            return Err(invalid(format!("{} cannot be mounted here", file.target)));
+        }
+    }
     Ok(())
+}
+
+/// A one-shot task: a spec with nothing published, and a bounded wait.
+pub fn validate_task(spec: &mut ManagedContainerSpec, timeout_seconds: i64, root: &str) -> PResult<()> {
+    validate_spec(spec, root)?;
+    if !spec.ports.is_empty() {
+        return Err(invalid("a task publishes no ports"));
+    }
+    if !(1..=MAX_TASK_SECONDS).contains(&timeout_seconds) {
+        return Err(invalid(format!("timeout_seconds must be between 1 and {MAX_TASK_SECONDS}")));
+    }
+    Ok(())
+}
+
+/// Where a spec's file lands on the host.
+pub fn file_source(root: &str, install_id: &str, path: &str) -> String {
+    format!("{}/{path}", install_dir(root, install_id))
 }
 
 /* ------------------------------ the body ----------------------------- */
@@ -250,6 +321,15 @@ pub fn validate_spec(spec: &mut ManagedContainerSpec, root: &str) -> PResult<()>
 /// could widen what the container can reach on the host is written here
 /// with its safe value, rather than left to the daemon's defaults.
 pub fn create_body(spec: &ManagedContainerSpec) -> serde_json::Value {
+    create_body_with(spec, RESTART_POLICY)
+}
+
+/// A one-shot task's body: the same guards, and never restarted.
+pub fn task_body(spec: &ManagedContainerSpec) -> serde_json::Value {
+    create_body_with(spec, "no")
+}
+
+fn create_body_with(spec: &ManagedContainerSpec, restart: &str) -> serde_json::Value {
     let network = network_name(&spec.install_id);
     let env: Vec<String> = spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
 
@@ -264,7 +344,7 @@ pub fn create_body(spec: &ManagedContainerSpec) -> serde_json::Value {
         );
     }
 
-    let mounts: Vec<serde_json::Value> = spec
+    let mut mounts: Vec<serde_json::Value> = spec
         .mounts
         .iter()
         .map(|m| {
@@ -277,13 +357,22 @@ pub fn create_body(spec: &ManagedContainerSpec) -> serde_json::Value {
             })
         })
         .collect();
+    for file in &spec.files {
+        mounts.push(serde_json::json!({
+            "Type": "bind",
+            "Source": file_source(MANAGED_APPS_ROOT, &spec.install_id, &file.path),
+            "Target": file.target,
+            "ReadOnly": true,
+            "BindOptions": { "Propagation": "rprivate" },
+        }));
+    }
 
     let mut host = serde_json::json!({
         "Mounts": mounts,
         "PortBindings": bindings,
         "PublishAllPorts": false,
         "NetworkMode": network,
-        "RestartPolicy": { "Name": RESTART_POLICY },
+        "RestartPolicy": { "Name": restart },
         "Privileged": false,
         "CapAdd": [],
         "Devices": [],
@@ -305,8 +394,11 @@ pub fn create_body(spec: &ManagedContainerSpec) -> serde_json::Value {
     if let Some(cpus) = spec.cpus {
         host["NanoCpus"] = serde_json::json!((cpus * 1e9) as i64);
     }
+    if let Some(nofile) = spec.nofile {
+        host["Ulimits"] = serde_json::json!([{ "Name": "nofile", "Soft": nofile, "Hard": nofile }]);
+    }
 
-    serde_json::json!({
+    let mut body = serde_json::json!({
         "Image": spec.image,
         "Env": env,
         "Labels": container_labels(&spec.install_id, &spec.role),
@@ -315,7 +407,12 @@ pub fn create_body(spec: &ManagedContainerSpec) -> serde_json::Value {
         "NetworkingConfig": {
             "EndpointsConfig": { network: { "Aliases": [spec.role] } }
         },
-    })
+    });
+    // Arguments to the image's own entrypoint; `Entrypoint` is never set.
+    if !spec.args.is_empty() {
+        body["Cmd"] = serde_json::json!(spec.args);
+    }
+    body
 }
 
 /// Splits an image reference into the `fromImage` and `tag` an image pull
@@ -497,6 +594,63 @@ mod tests {
             let again = s.mounts[0].clone();
             s.mounts.push(again);
         });
+        rejects(|s| s.nofile = Some(10));
+        rejects(|s| s.nofile = Some(10_000_000));
+        rejects(|s| s.args = vec!["sh -c id".into()]);
+        rejects(|s| s.args = vec!["run;reboot".into()]);
+        rejects(|s| s.args = vec!["$(id)".into()]);
+        rejects(|s| s.args = vec!["/bin/sh".into()]);
+        rejects(|s| s.args = (0..17).map(|i| format!("a{i}")).collect());
+    }
+
+    fn file(path: &str, target: &str) -> crate::providers::ManagedFile {
+        crate::providers::ManagedFile {
+            path: path.into(),
+            content: "<clickhouse/>".into(),
+            target: target.into(),
+        }
+    }
+
+    #[test]
+    fn config_files_stay_under_the_install_directory_and_mount_read_only() {
+        let mut s = spec();
+        s.files = vec![file("config/logs.xml", "/etc/clickhouse-server/config.d/logs.xml")];
+        s.nofile = Some(262_144);
+        s.args = vec!["db".into(), "migrate".into()];
+        validate_spec(&mut s, ROOT).expect("valid");
+        let body = create_body(&s);
+        let mounts = body["HostConfig"]["Mounts"].as_array().unwrap();
+        let mounted = mounts.iter().find(|m| m["Target"] == "/etc/clickhouse-server/config.d/logs.xml").unwrap();
+        assert_eq!(mounted["ReadOnly"], true);
+        assert_eq!(mounted["Source"], format!("{ROOT}/{ID}/config/logs.xml"));
+        assert_eq!(
+            body["HostConfig"]["Ulimits"],
+            serde_json::json!([{"Name": "nofile", "Soft": 262_144, "Hard": 262_144}])
+        );
+        assert_eq!(body["Cmd"], serde_json::json!(["db", "migrate"]));
+        assert!(body.get("Entrypoint").is_none());
+        assert_eq!(task_body(&s)["HostConfig"]["RestartPolicy"]["Name"], "no");
+
+        for bad in ["../escape.xml", "/etc/passwd", "a/../../b", ".hidden/../x", "", "a//b", "a b"] {
+            rejects(|s| s.files = vec![file(bad, "/etc/x.xml")]);
+        }
+        rejects(|s| s.files = vec![file("ok.xml", "/")]);
+        rejects(|s| s.files = vec![file("ok.xml", "/var/lib/ghost/content")]);
+        rejects(|s| {
+            let mut f = file("ok.xml", "/etc/x.xml");
+            f.content = "x".repeat(70 * 1024);
+            s.files = vec![f];
+        });
+    }
+
+    #[test]
+    fn tasks_publish_nothing_and_wait_a_bounded_time() {
+        let mut s = spec();
+        assert!(validate_task(&mut s, 60, ROOT).is_err(), "a task with a port");
+        s.ports.clear();
+        assert!(validate_task(&mut s.clone(), 60, ROOT).is_ok());
+        assert!(validate_task(&mut s.clone(), 0, ROOT).is_err());
+        assert!(validate_task(&mut s, 7200, ROOT).is_err());
     }
 
     #[test]
