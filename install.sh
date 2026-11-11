@@ -27,7 +27,7 @@ KANAME_SOURCE_URL="${KANAME_SOURCE_URL:-https://raw.githubusercontent.com/Future
 KANAME_REGISTRY="${KANAME_REGISTRY:-ghcr.io/futureforge-studios}"
 KANAME_DOCKER_INSTALL_URL="https://get.docker.com"
 
-KANAME_DEFAULT_VERSION="0.1.0"
+KANAME_DEFAULT_VERSION="0.2.0"
 KANAME_MIN_DOCKER_MAJOR=24
 KANAME_COMPOSE_PROJECT="kaname"
 
@@ -549,8 +549,9 @@ fetch_release_agent() {
     die "could not download the release manifest from $KANAME_SOURCE_URL/versions.json."
   url="$(manifest_agent_field "$REQ_VERSION" "$manifest" url)"
   RELEASE_AGENT_SHA256="$(manifest_agent_field "$REQ_VERSION" "$manifest" sha256)"
-  [ -n "$url" ] && [ -n "$RELEASE_AGENT_SHA256" ] ||
+  if [ -z "$url" ] || [ -z "$RELEASE_AGENT_SHA256" ]; then
     die "the release manifest has no linux-$ARCH agent for $REQ_VERSION."
+  fi
   case "$url" in
     https://*) ;;
     *) die "the release manifest names a non-HTTPS agent URL ($url); refusing it." ;;

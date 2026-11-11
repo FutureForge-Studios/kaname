@@ -2,6 +2,33 @@
   "schema": 1,
   "releases": [
     {
+      "version": "0.2.0",
+      "channel": "stable",
+      "released_at": "2026-11-11T07:28:45.160Z",
+      "breaking": true,
+      "security": true,
+      "summary": "Agent rewritten in Rust (same protocol; update agents from the panel). Mail moves to Yunori Mail Server: migration 0003 drops mail_forwarders, mail_auth_checks and mail_log_entries and empties the mail domain, mailbox and alias tables; Postfix/Dovecot hosts are no longer managed. Security: single-use TOTP codes, X-Forwarded-For only from trusted proxies, checksum-verified agent installs. Plus alert rules, a finished DNS page and many fixes.",
+      "notes_url": "https://github.com/FutureForge-Studios/kaname/releases/tag/v0.2.0",
+      "migrations": {
+        "destructive": true,
+        "adds_config": []
+      },
+      "artifacts": {
+        "control_plane": "ghcr.io/futureforge-studios/kaname-control-plane:0.2.0",
+        "web": "ghcr.io/futureforge-studios/kaname-web:0.2.0",
+        "agent": {
+          "linux-amd64": {
+            "url": "https://github.com/FutureForge-Studios/kaname/releases/download/v0.2.0/kanamed-linux-amd64",
+            "sha256": "572c882973051dc4aa9fb28c967e329c4e43ab8733bf5c50f5fd13b411830794"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/FutureForge-Studios/kaname/releases/download/v0.2.0/kanamed-linux-arm64",
+            "sha256": "218b7d00d43a28a121ec02b984ecfc9d191b056940c65d55a57f7476d342ca14"
+          }
+        }
+      }
+    },
+    {
       "version": "0.1.0",
       "channel": "stable",
       "released_at": "2026-08-26T12:50:00.501Z",

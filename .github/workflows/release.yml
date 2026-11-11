@@ -219,8 +219,10 @@ jobs:
             echo "main already describes $VERSION"
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Credited to the maintainer, not the bot, so the release commit
+          # does not add a second name to the repository's contributors.
+          git config user.name "Lone Detective"
+          git config user.email "me@lonedetective.moe"
           git add versions.json install.sh release.json
           git commit -m "chore(release): $VERSION"
           git push origin HEAD:main

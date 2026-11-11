@@ -1,8 +1,8 @@
 {
-  "breaking": true,
-  "destructive": true,
+  "breaking": false,
+  "destructive": false,
   "security": false,
   "adds_config": [],
   "min_upgrade_from": null,
-  "summary": "Mail moves to Yunori Mail Server. Migration 0003 drops mail_forwarders, mail_auth_checks and mail_log_entries and empties the mail domain, mailbox and alias tables; a host running yunori-mail is re-read on its next sync. Postfix/Dovecot hosts are no longer managed."
+  "summary": ""
 }
