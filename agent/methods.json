@@ -680,6 +680,469 @@
       }
     },
     {
+      "name": "container.app.remove",
+      "stream": "none",
+      "requires": [
+        "docker"
+      ],
+      "read_only": false,
+      "summary": "Remove an install's Kaname-labelled containers, network and (optionally) data directory.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "install_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          },
+          "remove_data": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "install_id"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "containers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "networks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "data_removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "containers",
+          "networks",
+          "data_removed"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "container.app.status",
+      "stream": "none",
+      "requires": [
+        "docker"
+      ],
+      "read_only": true,
+      "summary": "State of an install's managed containers and whether its loopback ports answer.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "install_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          }
+        },
+        "required": [
+          "install_id"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "containers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "role",
+                "name",
+                "state",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string"
+                },
+                "host_port": {
+                  "type": "integer"
+                },
+                "container_port": {
+                  "type": "integer"
+                },
+                "reachable": {
+                  "type": "boolean"
+                },
+                "http_status": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "role",
+                "host_port",
+                "container_port",
+                "reachable",
+                "http_status"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "containers",
+          "endpoints"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "container.create",
+      "stream": "none",
+      "requires": [
+        "docker"
+      ],
+      "read_only": false,
+      "summary": "Create and start a managed app container from a closed, guarded spec.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "install_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          },
+          "role": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9]{0,15}$"
+          },
+          "image": {
+            "type": "string",
+            "maxLength": 255,
+            "pattern": "^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]{1,5})?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[a-f0-9]{64}|:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}@sha256:[a-f0-9]{64})$"
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 4096,
+              "pattern": "^[^\\0]*$"
+            },
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+            },
+            "default": {}
+          },
+          "mounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^\\/"
+                },
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "pattern": "^\\/"
+                },
+                "read_only": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "uid": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65534
+                },
+                "gid": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65534
+                }
+              },
+              "required": [
+                "source",
+                "target"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 8,
+            "default": []
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "container_port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535
+                },
+                "host_port": {
+                  "type": "integer",
+                  "minimum": 1024,
+                  "maximum": 65535
+                }
+              },
+              "required": [
+                "container_port",
+                "host_port"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 4,
+            "default": []
+          },
+          "memory_bytes": {
+            "type": "integer",
+            "minimum": 67108864,
+            "maximum": 274877906944
+          },
+          "cpus": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 256
+          },
+          "replace": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "install_id",
+          "role",
+          "image"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "image_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "created",
+              "running",
+              "paused",
+              "restarting",
+              "removing",
+              "exited",
+              "dead",
+              "unknown"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "container_port": {
+                  "type": "integer"
+                },
+                "host_port": {
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "host_ip": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "protocol": {
+                  "type": "string",
+                  "enum": [
+                    "tcp",
+                    "udp"
+                  ]
+                }
+              },
+              "required": [
+                "container_port",
+                "host_port",
+                "host_ip",
+                "protocol"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "networks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "destination": {
+                  "type": "string"
+                },
+                "rw": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "source",
+                "destination",
+                "rw"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "restart_count": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          },
+          "cpu_percent": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_usage": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_limit": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runtime": {
+            "type": "string",
+            "enum": [
+              "docker",
+              "podman"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "image",
+          "image_id",
+          "state",
+          "status",
+          "created_at",
+          "started_at",
+          "ports",
+          "labels",
+          "networks",
+          "mounts",
+          "cpu_percent",
+          "memory_usage",
+          "memory_limit",
+          "runtime"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
       "name": "container.exec",
       "stream": "bidirectional",
       "requires": [
@@ -719,6 +1182,47 @@
         },
         "required": [
           "ok"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "container.image.pull",
+      "stream": "response",
+      "requires": [
+        "docker"
+      ],
+      "read_only": false,
+      "summary": "Pull an image by an explicit tag or digest, narrating progress.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "image": {
+            "type": "string",
+            "maxLength": 255,
+            "pattern": "^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]{1,5})?\\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[a-f0-9]{64}|:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}@sha256:[a-f0-9]{64})$"
+          }
+        },
+        "required": [
+          "image"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "image": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "image",
+          "id"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
@@ -1307,6 +1811,50 @@
         },
         "required": [
           "records"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "container.network.create",
+      "stream": "none",
+      "requires": [
+        "docker"
+      ],
+      "read_only": false,
+      "summary": "Create (or find) an app install's private bridge network.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "install_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+          }
+        },
+        "required": [
+          "install_id"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "id",
+          "created"
         ],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"

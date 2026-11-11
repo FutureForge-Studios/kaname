@@ -12,7 +12,7 @@
 //! lock which is always taken *after* the world lock is released, the
 //! same order the Go original used.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -71,6 +71,10 @@ pub struct World {
 
     pub containers: Vec<Container>,
     pub images: Vec<ImageInfo>,
+    /// Networks created by `container.network.create`, with their labels.
+    pub networks: Vec<(String, String, BTreeMap<String, String>)>,
+    /// Install directories under the managed apps root that hold data.
+    pub app_data: HashSet<String>,
 
     pub sites: Vec<Site>,
     pub certs: Vec<Certificate>,
@@ -158,6 +162,8 @@ impl Sim {
             pid_seq: 0,
             containers: Vec::new(),
             images: Vec::new(),
+            networks: Vec::new(),
+            app_data: HashSet::new(),
             sites: Vec::new(),
             certs: Vec::new(),
             mail: MailWorld::default(),

@@ -12,6 +12,7 @@
 //! responsibility.
 
 pub mod ftp;
+pub mod managed;
 pub mod payloads;
 
 #[cfg(target_os = "linux")]
@@ -354,6 +355,35 @@ pub trait Containers: Send + Sync {
     async fn exec(&self, ctx: &Ctx, p: ContainerExecParams, s: StreamRef) -> PResult<()>;
     async fn images(&self, ctx: &Ctx) -> PResult<Vec<ImageInfo>>;
     async fn prune(&self, ctx: &Ctx, p: ContainerPruneParams) -> PResult<ContainerPruneResult>;
+
+    /* Managed app containers (KD-040). The handler has already run
+     * `managed::validate_spec` / `validate_install_id`; a provider re-checks
+     * what only it can see (the network's labels, a resolved bind source).
+     * Defaulted to refuse, like `Sites::release`, so a provider that has not
+     * wired them answers `unsupported` rather than failing to compile. */
+    async fn pull_image(&self, _ctx: &Ctx, _p: ImagePullParams, _s: StreamRef) -> PResult<ImagePullResult> {
+        Err(ProviderError::unsupported_because("this host cannot pull images"))
+    }
+    async fn create_network(&self, _ctx: &Ctx, _install_id: &str) -> PResult<ManagedNetworkResult> {
+        Err(ProviderError::unsupported_because(
+            "this host cannot create networks",
+        ))
+    }
+    async fn create_managed(&self, _ctx: &Ctx, _spec: ManagedContainerSpec) -> PResult<ContainerInfo> {
+        Err(ProviderError::unsupported_because(
+            "this host cannot create containers",
+        ))
+    }
+    async fn app_status(&self, _ctx: &Ctx, _install_id: &str) -> PResult<ManagedAppStatus> {
+        Err(ProviderError::unsupported_because(
+            "this host has no managed containers",
+        ))
+    }
+    async fn remove_app(&self, _ctx: &Ctx, _p: ManagedAppRemoveParams) -> PResult<ManagedAppRemoveResult> {
+        Err(ProviderError::unsupported_because(
+            "this host has no managed containers",
+        ))
+    }
 }
 
 #[async_trait]

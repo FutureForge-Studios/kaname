@@ -68,6 +68,88 @@ export interface MethodSpec {
 }
 
 const ok = z.object({ ok: z.literal(true) });
+
+/* ------------------------- managed containers ------------------------ */
+
+/**
+ * Where every managed app container's bind mounts live, one directory per
+ * install. Outside the agent's own state directory on purpose: that one
+ * holds the enrolled key and is denied to every file verb.
+ */
+export const MANAGED_APPS_ROOT = "/var/lib/kaname-apps";
+
+/** An install id as the agent names things after it: a UUID in practice. */
+export const managedInstallId = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/);
+
+/**
+ * An image reference with an explicit tag or digest. `latest` by omission
+ * is refused: what an install runs should be what its recipe says.
+ */
+export const containerImageRef = z
+  .string()
+  .max(255)
+  .regex(
+    /^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127}|@sha256:[a-f0-9]{64}|:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}@sha256:[a-f0-9]{64})$/,
+    "must be an image reference with a tag or digest",
+  );
+
+const envName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/);
+
+/**
+ * The whole of what can be said about a managed container. There is no
+ * field for privileged mode, capabilities, devices, host namespaces,
+ * a command, an entrypoint or a host IP: the agent fixes those itself.
+ */
+export const managedContainerSpec = z
+  .object({
+    install_id: managedInstallId,
+    /** "app", "db": the name suffix and the alias on the install's network. */
+    role: z.string().regex(/^[a-z][a-z0-9]{0,15}$/),
+    image: containerImageRef,
+    env: z
+      .record(envName, z.string().max(4096).regex(/^[^\0]*$/))
+      .refine((env) => Object.keys(env).length <= 64, { message: "at most 64 variables" })
+      .default({}),
+    mounts: z
+      .array(
+        z
+          .object({
+            /** Must lie under MANAGED_APPS_ROOT/<install_id>/; created if missing. */
+            source: absolutePath,
+            target: absolutePath,
+            read_only: z.boolean().default(false),
+            /** Hands the directory to the account the image runs as. */
+            uid: z.number().int().min(1).max(65534).optional(),
+            gid: z.number().int().min(1).max(65534).optional(),
+          })
+          .strict(),
+      )
+      .max(8)
+      .default([]),
+    /** Always published on 127.0.0.1 only. */
+    ports: z
+      .array(
+        z
+          .object({
+            container_port: z.number().int().min(1).max(65535),
+            host_port: z.number().int().min(1024).max(65535),
+          })
+          .strict(),
+      )
+      .max(4)
+      .default([]),
+    memory_bytes: z
+      .number()
+      .int()
+      .min(64 * 1024 * 1024)
+      .max(256 * 1024 * 1024 * 1024)
+      .optional(),
+    cpus: z.number().min(0.1).max(256).optional(),
+    /** Remove a managed container of the same install and role first. */
+    replace: z.boolean().default(false),
+  })
+  .strict();
+export type ManagedContainerSpec = z.infer<typeof managedContainerSpec>;
 const empty = z.object({});
 const unit = z.object({ unit: z.string().min(1).max(256) });
 
@@ -415,6 +497,80 @@ export const AGENT_METHODS = {
     requires: ["docker"],
     readOnly: false,
     summary: "Reclaim unused container resources.",
+  }),
+
+  /*
+   * Managed app containers (KD-040). The installer's only way to create a
+   * container, and deliberately not a Docker API passthrough: the spec is
+   * a closed shape the agent validates and turns into a create body itself.
+   * Everything these verbs make carries Kaname's labels and a name derived
+   * from the install id, and the destructive one acts on nothing else.
+   */
+  "container.image.pull": m({
+    params: z.object({ image: containerImageRef }).strict(),
+    result: z.object({ image: z.string(), id: z.string() }),
+    stream: "response",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Pull an image by an explicit tag or digest, narrating progress.",
+  }),
+  "container.network.create": m({
+    params: z.object({ install_id: managedInstallId }).strict(),
+    result: z.object({ name: z.string(), id: z.string(), created: z.boolean() }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Create (or find) an app install's private bridge network.",
+  }),
+  "container.create": m({
+    params: managedContainerSpec,
+    result: containerInfo,
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Create and start a managed app container from a closed, guarded spec.",
+  }),
+  "container.app.status": m({
+    params: z.object({ install_id: managedInstallId }).strict(),
+    result: z.object({
+      containers: z.array(
+        z.object({
+          role: z.string(),
+          name: z.string(),
+          state: z.string(),
+          status: z.string(),
+        }),
+      ),
+      endpoints: z.array(
+        z.object({
+          role: z.string(),
+          host_port: z.number().int(),
+          container_port: z.number().int(),
+          /** A TCP connection to 127.0.0.1:host_port succeeded. */
+          reachable: z.boolean(),
+          /** The status line of a plain GET /, when one came back. */
+          http_status: z.number().int().nullable(),
+        }),
+      ),
+    }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: true,
+    summary: "State of an install's managed containers and whether its loopback ports answer.",
+  }),
+  "container.app.remove": m({
+    params: z
+      .object({ install_id: managedInstallId, remove_data: z.boolean().default(false) })
+      .strict(),
+    result: z.object({
+      containers: z.array(z.string()),
+      networks: z.array(z.string()),
+      data_removed: z.boolean(),
+    }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Remove an install's Kaname-labelled containers, network and (optionally) data directory.",
   }),
 
   /* ------------------------------- files ----------------------------- */

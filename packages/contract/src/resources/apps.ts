@@ -14,10 +14,13 @@ import { permission } from "../rbac.js";
  * cert.issue. A recipe can never carry a command line, because nothing
  * downstream would know what to do with one (PLAN.md section 0).
  *
- * That is also why some well-known apps are listed as "coming soon":
- * they ship as container images, and the agent has verbs to start, stop
- * and remove a container but none to create one. They become available
- * the day that verb exists, without a change to this shape.
+ * Apps that ship as container images use the agent's managed-container
+ * verbs (KD-040): container.image.pull, container.network.create,
+ * container.create, container.app.status and container.app.remove. The
+ * recipe still carries no command line and no Docker body — only an
+ * image, a port, where its data lives and which companion database it
+ * runs beside; the control plane renders the environment from a named
+ * template, and the agent decides everything else about the container.
  * ------------------------------------------------------------------ */
 
 export const appCategory = z.enum([
@@ -42,8 +45,19 @@ export const APP_CATEGORY_LABELS: Record<AppCategory, string> = {
 export const appAvailability = z.enum(["available", "coming_soon"]);
 export type AppAvailability = z.infer<typeof appAvailability>;
 
-/** Which renderer writes the app's configuration. One per app that has a config file. */
-export const appConfigTemplate = z.enum(["none", "wordpress"]);
+/**
+ * Which renderer writes the app's configuration: a config file for a git
+ * recipe, the container environment for an image recipe. One per app.
+ */
+export const appConfigTemplate = z.enum([
+  "none",
+  "wordpress",
+  "ghost",
+  "nextcloud",
+  "uptime-kuma",
+  "n8n",
+  "gitea",
+]);
 export type AppConfigTemplate = z.infer<typeof appConfigTemplate>;
 
 /** A path inside a release: relative, no traversal, nothing a shell would read. */
@@ -51,6 +65,13 @@ const relativePath = z
   .string()
   .max(256)
   .regex(/^(?:[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)?$/, "must be a relative path")
+  .refine((p) => !p.split("/").includes(".."), { message: "path traversal is not allowed" });
+
+/** An absolute path inside a container image. */
+const containerPath = z
+  .string()
+  .max(256)
+  .regex(/^\/(?:[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*)$/, "must be an absolute path")
   .refine((p) => !p.split("/").includes(".."), { message: "path traversal is not allowed" });
 
 export const appSource = z.discriminatedUnion("kind", [
@@ -66,9 +87,26 @@ export const appSource = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("image"),
-    image: z.string().regex(/^[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]+)?$/),
-    /** The port the container listens on, which the vhost would proxy to. */
+    /** Always with an explicit tag: the agent refuses a bare name. */
+    image: z.string().regex(/^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9._-]+$/),
+    /** The port the container listens on, which the vhost proxies to. */
     port: z.number().int().min(1).max(65535),
+    /** Where the app keeps its data inside the container; bind-mounted from the managed root. */
+    data_path: containerPath,
+    /** The account the image runs as, when it does not take ownership of its data itself. */
+    data_uid: z.number().int().min(1).max(65534).nullable(),
+    /**
+     * The app's database, run as a companion container on the install's
+     * private network and reachable from the app as host "db". Null when
+     * the app keeps its data in files (SQLite).
+     */
+    database: z
+      .object({
+        engine: z.enum(["mysql", "postgres"]),
+        image: z.string().regex(/^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9._-]+$/),
+        data_path: containerPath,
+      })
+      .nullable(),
   }),
 ]);
 export type AppSource = z.infer<typeof appSource>;
@@ -115,16 +153,15 @@ export const appRecipe = z.object({
 });
 export type AppRecipe = z.infer<typeof appRecipe>;
 
-const CONTAINER_VERB_MISSING =
-  "Ships as a container image. The agent can start, stop and remove containers but has no verb to create one yet, so Kaname cannot provision it without a shell — and it does not use one.";
-
 /**
  * The catalog. Order is the order the gallery shows.
  *
  * To add an app: it must be installable with the verbs in
  * `agent/methods.ts` alone. If it needs a build step, a package
  * manager or a download the agent cannot perform, list it as
- * `coming_soon` and say which capability is missing.
+ * `coming_soon` and say which capability is missing. An image recipe
+ * also needs an environment template in the control plane's
+ * services/app-installer.ts.
  */
 export const APP_CATALOG: readonly AppRecipe[] = [
   {
@@ -193,23 +230,32 @@ export const APP_CATALOG: readonly AppRecipe[] = [
     id: "ghost",
     name: "Ghost",
     tagline: "Publishing and newsletters for independent writers.",
-    description: "A Node.js publishing platform with memberships and email built in.",
+    description:
+      "A Node.js publishing platform with memberships and email built in. Kaname runs the official image beside its own MySQL 8 on a private network, keeps both data directories on the server, and puts the blog behind HTTPS.",
     category: "cms",
     version: "5",
     homepage: "https://ghost.org",
     license: "MIT",
-    availability: "coming_soon",
-    unavailable_reason: CONTAINER_VERB_MISSING,
+    availability: "available",
+    unavailable_reason: null,
     requirements: {
       runtime: "container",
       runtime_version: null,
       capabilities: ["nginx", "docker"],
-      database: { engines: ["mysql"], prefix: "ghost" },
+      database: null,
       min_memory_mb: 1024,
       min_disk_mb: 2048,
     },
-    source: { kind: "image", image: "ghost:5", port: 2368 },
-    config: "none",
+    source: {
+      kind: "image",
+      image: "ghost:5",
+      port: 2368,
+      data_path: "/var/lib/ghost/content",
+      data_uid: null,
+      // Ghost supports MySQL 8 and only MySQL 8 in production.
+      database: { engine: "mysql", image: "mysql:8.0", data_path: "/var/lib/mysql" },
+    },
+    config: "ghost",
     writable_paths: [],
     finish: "Open /ghost on the site to create the owner account.",
   },
@@ -217,23 +263,31 @@ export const APP_CATALOG: readonly AppRecipe[] = [
     id: "nextcloud",
     name: "Nextcloud",
     tagline: "Files, calendars and contacts on your own server.",
-    description: "A self-hosted alternative to a cloud drive, with sync clients for every device.",
+    description:
+      "A self-hosted alternative to a cloud drive, with sync clients for every device. Kaname runs the official image beside its own PostgreSQL, tells it the domain it answers on and that it sits behind HTTPS, and keeps your files on the server.",
     category: "storage",
     version: "30",
     homepage: "https://nextcloud.com",
     license: "AGPL-3.0",
-    availability: "coming_soon",
-    unavailable_reason: CONTAINER_VERB_MISSING,
+    availability: "available",
+    unavailable_reason: null,
     requirements: {
       runtime: "container",
       runtime_version: null,
       capabilities: ["nginx", "docker"],
-      database: { engines: ["postgres", "mariadb", "mysql"], prefix: "nc" },
+      database: null,
       min_memory_mb: 2048,
       min_disk_mb: 10240,
     },
-    source: { kind: "image", image: "nextcloud:30", port: 80 },
-    config: "none",
+    source: {
+      kind: "image",
+      image: "nextcloud:30",
+      port: 80,
+      data_path: "/var/www/html",
+      data_uid: null,
+      database: { engine: "postgres", image: "postgres:16-alpine", data_path: "/var/lib/postgresql/data" },
+    },
+    config: "nextcloud",
     writable_paths: [],
     finish: "Open the site to create the administrator account.",
   },
@@ -241,13 +295,14 @@ export const APP_CATALOG: readonly AppRecipe[] = [
     id: "uptime-kuma",
     name: "Uptime Kuma",
     tagline: "A status page and uptime monitor you host yourself.",
-    description: "Checks HTTP, TCP, DNS and more on a schedule and tells you when something stops.",
+    description:
+      "Checks HTTP, TCP, DNS and more on a schedule and tells you when something stops. It keeps everything in SQLite inside its own data directory, so there is no database to run beside it.",
     category: "monitoring",
     version: "1",
     homepage: "https://uptime.kuma.pet",
     license: "MIT",
-    availability: "coming_soon",
-    unavailable_reason: CONTAINER_VERB_MISSING,
+    availability: "available",
+    unavailable_reason: null,
     requirements: {
       runtime: "container",
       runtime_version: null,
@@ -256,8 +311,15 @@ export const APP_CATALOG: readonly AppRecipe[] = [
       min_memory_mb: 256,
       min_disk_mb: 512,
     },
-    source: { kind: "image", image: "louislam/uptime-kuma:1", port: 3001 },
-    config: "none",
+    source: {
+      kind: "image",
+      image: "louislam/uptime-kuma:1",
+      port: 3001,
+      data_path: "/app/data",
+      data_uid: null,
+      database: null,
+    },
+    config: "uptime-kuma",
     writable_paths: [],
     finish: "Open the site to create the administrator account.",
   },
@@ -265,23 +327,32 @@ export const APP_CATALOG: readonly AppRecipe[] = [
     id: "n8n",
     name: "n8n",
     tagline: "Workflow automation with a visual editor.",
-    description: "Connects APIs, queues and schedules into workflows you can read and version.",
+    description:
+      "Connects APIs, queues and schedules into workflows you can read and version. Kaname runs it on PostgreSQL, as n8n recommends for production, with webhook URLs on your domain and an encryption key kept sealed.",
     category: "automation",
     version: "1",
     homepage: "https://n8n.io",
     license: "Sustainable Use",
-    availability: "coming_soon",
-    unavailable_reason: CONTAINER_VERB_MISSING,
+    availability: "available",
+    unavailable_reason: null,
     requirements: {
       runtime: "container",
       runtime_version: null,
       capabilities: ["nginx", "docker"],
-      database: { engines: ["postgres"], prefix: "n8n" },
+      database: null,
       min_memory_mb: 1024,
       min_disk_mb: 1024,
     },
-    source: { kind: "image", image: "n8nio/n8n:1", port: 5678 },
-    config: "none",
+    source: {
+      kind: "image",
+      image: "n8nio/n8n:1",
+      port: 5678,
+      data_path: "/home/node/.n8n",
+      // The image runs as `node` and does not take its data directory over.
+      data_uid: 1000,
+      database: { engine: "postgres", image: "postgres:16-alpine", data_path: "/var/lib/postgresql/data" },
+    },
+    config: "n8n",
     writable_paths: [],
     finish: "Open the site to create the owner account.",
   },
@@ -289,23 +360,31 @@ export const APP_CATALOG: readonly AppRecipe[] = [
     id: "gitea",
     name: "Gitea",
     tagline: "A lightweight Git service with pull requests and CI.",
-    description: "Repositories, issues, reviews and packages in one small binary.",
+    description:
+      "Repositories, issues, reviews and packages in one small binary. Kaname runs it on PostgreSQL with clone URLs on your domain. Git over SSH is switched off: clone and push over HTTPS.",
     category: "developer",
     version: "1.22",
     homepage: "https://about.gitea.com",
     license: "MIT",
-    availability: "coming_soon",
-    unavailable_reason: CONTAINER_VERB_MISSING,
+    availability: "available",
+    unavailable_reason: null,
     requirements: {
       runtime: "container",
       runtime_version: null,
       capabilities: ["nginx", "docker"],
-      database: { engines: ["postgres", "mariadb", "mysql"], prefix: "gitea" },
+      database: null,
       min_memory_mb: 512,
       min_disk_mb: 2048,
     },
-    source: { kind: "image", image: "gitea/gitea:1.22", port: 3000 },
-    config: "none",
+    source: {
+      kind: "image",
+      image: "gitea/gitea:1.22",
+      port: 3000,
+      data_path: "/data",
+      data_uid: null,
+      database: { engine: "postgres", image: "postgres:16-alpine", data_path: "/var/lib/postgresql/data" },
+    },
+    config: "gitea",
     writable_paths: [],
     finish: "Open the site to finish the initial configuration.",
   },
@@ -397,6 +476,11 @@ export const APP_INSTALL_STEP_IDS = [
   "database",
   "files",
   "configure",
+  // Image recipes (KD-040).
+  "pull",
+  "network",
+  "db_container",
+  "app_container",
   "site",
   "certificate",
   "verify",
@@ -420,6 +504,52 @@ export function appInstallSteps(
   options: { ssl: boolean },
 ): AppInstallStepSpec[] {
   const steps: AppInstallStepSpec[] = [];
+  const source = recipe.source;
+  if (source.kind === "image") {
+    const images = source.database ? `${source.image} and ${source.database.image}` : source.image;
+    steps.push({
+      id: "pull",
+      title: "Pull the image",
+      description: `Download ${images} onto the server.`,
+    });
+    steps.push({
+      id: "network",
+      title: "Create a private network",
+      description: "A network of its own, so the app and its database reach each other and nothing else.",
+    });
+    if (source.database) {
+      steps.push({
+        id: "db_container",
+        title: `Start the database (${source.database.engine === "mysql" ? "MySQL" : "PostgreSQL"})`,
+        description:
+          "A database container with a generated password kept encrypted. It is never published outside the private network.",
+      });
+    }
+    steps.push({
+      id: "app_container",
+      title: `Start ${recipe.name}`,
+      description:
+        "The app container, with its data kept on the server and its port open on this server's loopback address only.",
+    });
+    steps.push({
+      id: "site",
+      title: "Create the website",
+      description: "A virtual host for the domain that proxies to the app, websockets included.",
+    });
+    if (options.ssl) {
+      steps.push({
+        id: "certificate",
+        title: "Secure it with HTTPS",
+        description: "A Let's Encrypt certificate for the domain, renewed automatically.",
+      });
+    }
+    steps.push({
+      id: "verify",
+      title: "Check it answers",
+      description: "The containers are running, the app answers on its port, and the web server configuration is valid.",
+    });
+    return steps;
+  }
   if (recipe.requirements.database) {
     steps.push({
       id: "database",
@@ -507,6 +637,10 @@ export const appInstallPlan = z.object({
   database: z.string().nullable(),
   db_user: z.string().nullable(),
   steps: z.array(z.object({ id: appInstallStepId, title: z.string(), description: z.string() })),
+  /** Image recipes: the loopback port the app is published on. Null otherwise. */
+  app_port: z.number().int().nullable(),
+  /** Image recipes: the containers the install will run. Empty otherwise. */
+  containers: z.array(z.object({ role: z.string(), image: z.string() })),
   /** Things worth knowing that do not stop the install. */
   notices: z.array(z.string()),
 });
@@ -580,6 +714,8 @@ export const appInstall = z.object({
   database_id: uuid.nullable(),
   db_user_id: uuid.nullable(),
   certificate_id: uuid.nullable(),
+  /** Image recipes: the loopback port the app container is published on. */
+  app_port: z.number().int().nullable(),
   steps: z.array(appInstallStep),
   error: z.object({ code: z.string(), message: z.string() }).nullable(),
   /** The job that is installing or removing it, for the live log. */
