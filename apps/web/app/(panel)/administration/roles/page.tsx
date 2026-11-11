@@ -150,7 +150,9 @@ export default function RolesPage() {
   return (
     <>
       <ResourcePage<Role>
+        eyebrow="Administration"
         title="Roles"
+        lede="Named sets of permissions, optionally limited to some servers. A user holds one or more; system roles cannot be edited."
         state={state}
         query={query}
         columns={columns}

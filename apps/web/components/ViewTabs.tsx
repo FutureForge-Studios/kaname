@@ -48,17 +48,18 @@ export function ViewTabs({ tabs, current, label, className }: ViewTabsProps) {
             href={tab.href}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "inline-flex h-8 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 font-medium",
-              "outline-none transition-[color,border-color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
+              "kn-label inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3",
+              "outline-none transition-[color,border-color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
+              "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
               active
                 ? "border-[var(--kn-accent-500)] text-[var(--kn-text)]"
-                : "border-transparent text-[var(--kn-text-2)] hover:text-[var(--kn-text)]",
+                : "border-transparent text-[var(--kn-text-3)] hover:text-[var(--kn-text)]",
             )}
           >
             {Icon && <Icon size={14} className="shrink-0" aria-hidden />}
             {tab.label}
             {tab.badge !== undefined && tab.badge !== null && (
-              <span className="kn-num text-xs text-[var(--kn-text-3)]">{tab.badge}</span>
+              <span className="kn-num text-2xs tracking-normal text-[var(--kn-text-3)]">{tab.badge}</span>
             )}
           </Link>
         );

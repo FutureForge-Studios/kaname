@@ -51,9 +51,9 @@ export const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(function S
         role="switch"
         disabled={disabled}
         className={cn(
-          "peer shrink-0 cursor-pointer appearance-none rounded-[var(--kn-r-sm)] border",
-          "border-[var(--kn-border-strong)] bg-[var(--kn-surface-3)]",
-          "checked:border-[var(--kn-accent-600)] checked:bg-[var(--kn-accent-600)]",
+          "peer shrink-0 cursor-pointer appearance-none rounded-[var(--kn-r-pill)] border",
+          "border-[var(--kn-border-strong)] bg-[var(--kn-field-bg)]",
+          "checked:border-[var(--kn-accent-500)] checked:bg-[var(--kn-accent-500)]",
           "transition-[background-color,border-color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
           "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]",
           "disabled:cursor-not-allowed",
@@ -65,7 +65,7 @@ export const Switch = React.forwardRef<HTMLInputElement, SwitchProps>(function S
       <span
         aria-hidden
         className={cn(
-          "pointer-events-none absolute left-0.5 top-0.5 rounded-[var(--kn-r-xs)]",
+          "pointer-events-none absolute left-0.5 top-0.5 rounded-[var(--kn-r-pill)]",
           "bg-[var(--kn-text-2)] peer-checked:bg-[var(--kn-accent-fg)]",
           "transition-[transform,background-color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
           variant(THUMB_SIZES, size, "sm"),

@@ -15,13 +15,14 @@ import {
   MenuItem,
   MenuSeparator,
   MonoText,
+  NumberedSection,
   PropertyList,
   PropertyRow,
   RelativeTime,
-  ResourceHeader,
   SectionCard,
   Skeleton,
   StatusBadge,
+  StatusLine,
   Switch,
   Tab,
   TabList,
@@ -31,6 +32,7 @@ import {
 } from "@kaname/ui";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { PageError } from "@/components/PageError";
+import { DetailHeader, DetailHeaderSkeleton } from "../../_components/DetailHeader";
 import { useCan, useResource } from "@/lib/queries";
 import { formatCount, formatDuration, formatPercent } from "@/lib/format";
 import { ContainerExec } from "../../_components/ContainerExec";
@@ -148,11 +150,11 @@ export default function ContainerDetailPage() {
   if (query.isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b border-[var(--kn-border)] px-6 pb-4 pt-4">
-          <Skeleton className="h-3 w-40" label="Loading container" />
-          <Skeleton className="mt-3 h-6 w-64" />
-        </div>
-        <div className="px-6 py-4">
+        <DetailHeaderSkeleton>
+          <Skeleton className="h-5 w-40 rounded-[var(--kn-r-pill)]" label="Loading container" />
+          <Skeleton className="mt-4 h-7 w-64" />
+        </DetailHeaderSkeleton>
+        <div className="px-6 py-6">
           <Skeleton className="h-64" />
         </div>
       </div>
@@ -162,10 +164,10 @@ export default function ContainerDetailPage() {
   if (query.isError || !container) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b border-[var(--kn-border)] px-6 pb-4 pt-4">
+        <DetailHeaderSkeleton>
           <Breadcrumbs />
-        </div>
-        <div className="px-6 py-4">
+        </DetailHeaderSkeleton>
+        <div className="px-6 py-6">
           <PageError
             error={query.error ?? new Error("This container is no longer in the cached list.")}
             onRetry={() => void query.refetch()}
@@ -260,7 +262,8 @@ export default function ContainerDetailPage() {
 
   return (
     <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-1 flex-col">
-      <ResourceHeader
+      <DetailHeader
+        eyebrow="Container"
         breadcrumb={<Breadcrumbs trailing={container.name} />}
         name={container.name}
         identity={`${container.server_name} · ${container.image}`}
@@ -268,6 +271,23 @@ export default function ContainerDetailPage() {
         lastSeenAt={server?.last_seen_at}
         health={server?.health}
         healthReasons={server?.health_reasons}
+        status={
+          <StatusLine tone={CONTAINER_STATE_TONE[container.state]} pulse={running}>
+            {container.status}
+            {running && container.started_at && (
+              <>
+                {" · "}up {formatDuration(Date.now() - Date.parse(container.started_at))}
+              </>
+            )}
+            {" · "}
+            {formatCount(container.restart_count)} restart
+            {container.restart_count === 1 ? "" : "s"}
+            {" · "}
+            {container.ports.length === 0
+              ? "no published ports"
+              : `${formatCount(container.ports.length)} port${container.ports.length === 1 ? "" : "s"}`}
+          </StatusLine>
+        }
         badges={
           <>
             <StatusBadge tone={CONTAINER_STATE_TONE[container.state]} size="xs">
@@ -326,81 +346,150 @@ export default function ContainerDetailPage() {
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col px-6 py-4">
+      <div className="flex min-h-0 flex-1 flex-col px-6 py-6">
         <TabPanel value="overview">
-          <DetailLayout rail={rail}>
-            <SectionCard title="Ports" padded={false}>
-              {container.ports.length === 0 ? (
-                <p className="px-4 py-3 text-[var(--kn-text-3)]">No published ports.</p>
-              ) : (
-                <ul className="flex flex-col">
-                  {container.ports.map((port) => (
-                    <li
-                      key={`${port.host_ip ?? ""}:${port.host_port ?? "-"}:${port.container_port}/${port.protocol}`}
-                      className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0"
-                    >
-                      <MonoText className="min-w-0 flex-1 truncate">
-                        {port.host_port === null
-                          ? "not published"
-                          : `${port.host_ip ?? "0.0.0.0"}:${port.host_port}`}
-                      </MonoText>
-                      <span className="text-[var(--kn-text-3)]">→</span>
-                      <MonoText muted className="w-32 shrink-0">
-                        {port.container_port}/{port.protocol}
-                      </MonoText>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </SectionCard>
+          <DetailLayout rail={rail} className="gap-6">
+            <NumberedSection
+              index={1}
+              title="Network"
+              caption="Where traffic reaches it from the host."
+            >
+              <div className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-2">
+                <SectionCard title="Published ports" headingLevel={3} padded={false}>
+                  {container.ports.length === 0 ? (
+                    <p className="px-4 py-3 text-[var(--kn-text-3)]">No published ports.</p>
+                  ) : (
+                    <ul className="flex flex-col">
+                      {container.ports.map((port) => (
+                        <li
+                          key={`${port.host_ip ?? ""}:${port.host_port ?? "-"}:${port.container_port}/${port.protocol}`}
+                          className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0"
+                        >
+                          <MonoText className="min-w-0 flex-1 truncate">
+                            {port.host_port === null
+                              ? "not published"
+                              : `${port.host_ip ?? "0.0.0.0"}:${port.host_port}`}
+                          </MonoText>
+                          <span className="text-[var(--kn-text-3)]">→</span>
+                          <MonoText muted className="w-32 shrink-0">
+                            {port.container_port}/{port.protocol}
+                          </MonoText>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </SectionCard>
 
-            <SectionCard title="Mounts" padded={false}>
-              {mounts.length === 0 ? (
-                <p className="px-4 py-3 text-[var(--kn-text-3)]">
-                  {container.inspect === null
-                    ? "The host is unreachable, so the live definition could not be read."
-                    : "No volumes or bind mounts."}
-                </p>
-              ) : (
-                <ul className="flex flex-col">
-                  {mounts.map((mount) => (
-                    <li
-                      key={`${mount.source}:${mount.destination}`}
-                      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0"
-                    >
-                      <MonoText className="min-w-0 flex-1 truncate">{mount.source}</MonoText>
-                      <span className="text-[var(--kn-text-3)]">→</span>
-                      <MonoText muted className="min-w-0 flex-1 truncate">
-                        {mount.destination}
-                      </MonoText>
-                      <Badge tone="neutral" size="xs">
-                        {mount.kind}
-                      </Badge>
-                      <Badge tone={mount.rw ? "warn" : "neutral"} size="xs">
-                        {mount.rw ? "rw" : "ro"}
-                      </Badge>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </SectionCard>
+                <SectionCard title="Networks" headingLevel={3}>
+                  {container.networks.length === 0 ? (
+                    <p className="text-[var(--kn-text-3)]">No networks attached.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1">
+                      {container.networks.map((network) => (
+                        <Tag key={network} size="xs" mono>
+                          {network}
+                        </Tag>
+                      ))}
+                    </div>
+                  )}
+                </SectionCard>
+              </div>
+            </NumberedSection>
 
-            <div className="grid min-w-0 grid-cols-1 gap-4 xl:grid-cols-2">
-              <SectionCard title="Networks">
-                {container.networks.length === 0 ? (
-                  <p className="text-[var(--kn-text-3)]">No networks attached.</p>
+            <NumberedSection
+              index={2}
+              title="Mounts"
+              caption="Volumes and bind mounts from the live definition."
+            >
+              <SectionCard padded={false}>
+                {mounts.length === 0 ? (
+                  <p className="px-4 py-3 text-[var(--kn-text-3)]">
+                    {container.inspect === null
+                      ? "The host is unreachable, so the live definition could not be read."
+                      : "No volumes or bind mounts."}
+                  </p>
                 ) : (
-                  <div className="flex flex-wrap gap-1">
-                    {container.networks.map((network) => (
-                      <Tag key={network} size="xs" mono>
-                        {network}
-                      </Tag>
+                  <ul className="flex flex-col">
+                    {mounts.map((mount) => (
+                      <li
+                        key={`${mount.source}:${mount.destination}`}
+                        className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0"
+                      >
+                        <MonoText className="min-w-0 flex-1 truncate">{mount.source}</MonoText>
+                        <span className="text-[var(--kn-text-3)]">→</span>
+                        <MonoText muted className="min-w-0 flex-1 truncate">
+                          {mount.destination}
+                        </MonoText>
+                        <Badge tone="neutral" size="xs">
+                          {mount.kind}
+                        </Badge>
+                        <Badge tone={mount.rw ? "warn" : "neutral"} size="xs">
+                          {mount.rw ? "rw" : "ro"}
+                        </Badge>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 )}
               </SectionCard>
+            </NumberedSection>
 
-              <SectionCard title="Labels">
+            <NumberedSection
+              index={3}
+              title="Environment"
+              caption="Masked against shoulders and screenshots, not against the network."
+              actions={
+                env.length > 0 && (
+                  <Switch
+                    size="sm"
+                    checked={revealed}
+                    onChange={(event) => setRevealed(event.target.checked)}
+                    label="Reveal secrets"
+                  />
+                )
+              }
+            >
+              <SectionCard padded={false}>
+                {env.length === 0 ? (
+                  <p className="px-4 py-3 text-[var(--kn-text-3)]">
+                    {container.inspect === null
+                      ? "The host is unreachable, so the live definition could not be read."
+                      : "No environment variables."}
+                  </p>
+                ) : (
+                  <ul className="flex flex-col">
+                    {env.map((entry) => {
+                      const secret = SECRET_KEY.test(entry.key);
+                      const hidden = secret && !revealed;
+                      return (
+                        <li
+                          key={entry.key}
+                          className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-1.5 last:border-b-0"
+                        >
+                          <MonoText className="w-64 shrink-0 truncate">{entry.key}</MonoText>
+                          {hidden ? (
+                            <span className="kn-mono text-[var(--kn-text-3)]">
+                              •••••••• ({formatCount(entry.value.length)} chars)
+                            </span>
+                          ) : (
+                            <MonoText muted className="min-w-0 flex-1 truncate">
+                              {entry.value || "—"}
+                            </MonoText>
+                          )}
+                          {secret && (
+                            <Badge tone="warn" size="xs">
+                              secret
+                            </Badge>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </SectionCard>
+            </NumberedSection>
+
+            <NumberedSection index={4} title="Labels" caption="Metadata the runtime carries.">
+              <SectionCard>
                 {Object.keys(container.labels).length === 0 ? (
                   <p className="text-[var(--kn-text-3)]">No labels.</p>
                 ) : (
@@ -413,82 +502,35 @@ export default function ContainerDetailPage() {
                   </div>
                 )}
               </SectionCard>
-            </div>
-
-            <SectionCard
-              title="Environment"
-              description="Values arrive with the container definition. Masking is against shoulders and screenshots, not against the network."
-              padded={false}
-              actions={
-                env.length > 0 && (
-                  <Switch
-                    size="sm"
-                    checked={revealed}
-                    onChange={(event) => setRevealed(event.target.checked)}
-                    label="Reveal secrets"
-                  />
-                )
-              }
-            >
-              {env.length === 0 ? (
-                <p className="px-4 py-3 text-[var(--kn-text-3)]">
-                  {container.inspect === null
-                    ? "The host is unreachable, so the live definition could not be read."
-                    : "No environment variables."}
-                </p>
-              ) : (
-                <ul className="flex flex-col">
-                  {env.map((entry) => {
-                    const secret = SECRET_KEY.test(entry.key);
-                    const hidden = secret && !revealed;
-                    return (
-                      <li
-                        key={entry.key}
-                        className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-1.5 last:border-b-0"
-                      >
-                        <MonoText className="w-64 shrink-0 truncate">{entry.key}</MonoText>
-                        {hidden ? (
-                          <span className="kn-mono text-[var(--kn-text-3)]">
-                            •••••••• ({formatCount(entry.value.length)} chars)
-                          </span>
-                        ) : (
-                          <MonoText muted className="min-w-0 flex-1 truncate">
-                            {entry.value || "—"}
-                          </MonoText>
-                        )}
-                        {secret && (
-                          <Badge tone="warn" size="xs">
-                            secret
-                          </Badge>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </SectionCard>
+            </NumberedSection>
           </DetailLayout>
         </TabPanel>
 
         <TabPanel value="logs">
-          <LogTailPanel
-            path={`/containers/${container.id}/logs`}
-            label={`Output from ${container.name}`}
-            height={560}
-            unavailable={
-              connected ? undefined : (
-                <>
-                  <p className="text-[var(--kn-text)]">
-                    {container.server_name}&apos;s agent is not connected.
-                  </p>
-                  <p className="mt-1">
-                    Container output is read live from the host, so there is nothing to follow until
-                    it dials back in.
-                  </p>
-                </>
-              )
-            }
-          />
+          <NumberedSection
+            index={1}
+            title="Output"
+            caption="stdout and stderr, followed live from the host."
+          >
+            <LogTailPanel
+              path={`/containers/${container.id}/logs`}
+              label={`Output from ${container.name}`}
+              height={560}
+              unavailable={
+                connected ? undefined : (
+                  <>
+                    <p className="text-[var(--kn-text)]">
+                      {container.server_name}&apos;s agent is not connected.
+                    </p>
+                    <p className="mt-1">
+                      Container output is read live from the host, so there is nothing to follow
+                      until it dials back in.
+                    </p>
+                  </>
+                )
+              }
+            />
+          </NumberedSection>
         </TabPanel>
 
         <TabPanel value="exec">

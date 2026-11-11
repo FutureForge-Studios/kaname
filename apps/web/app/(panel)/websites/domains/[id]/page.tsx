@@ -25,12 +25,14 @@ import {
   IconButton,
   MenuItem,
   MenuSeparator,
+  MonoLabel,
   MonoText,
   PropertyList,
   PropertyRow,
   RelativeTime,
   ResourceHeader,
   SectionCard,
+  StatusLine,
   Tag,
   type DataTableColumn,
   type DataTableRowAction,
@@ -42,7 +44,13 @@ import type { ApiError } from "@/lib/api";
 import { CertificateDialog } from "../../_components/CertificateDialog";
 import { DnsRecordDialog } from "../../_components/DnsRecordDialog";
 import { DomainDialog } from "../../_components/DomainDialog";
-import { DetailBody, DetailFailed, DetailLoading } from "../../_components/detail";
+import {
+  DetailBody,
+  DetailEyebrow,
+  DetailFailed,
+  DetailIdentity,
+  DetailLoading,
+} from "../../_components/detail";
 import { useDnsColumns } from "../../_components/dnsColumns";
 import {
   useCertificates,
@@ -56,12 +64,15 @@ import {
 } from "../../_components/queries";
 import {
   CertificateStatusBadge,
+  DNS_PROVIDER_LABELS,
   DnsProviderBadge,
   DomainStatusBadge,
   Expiry,
   HostAxes,
   ProxiedBadge,
   VerificationBadge,
+  domainStatusTone,
+  lineTone,
   useServerById,
 } from "../../_components/status";
 
@@ -121,11 +132,14 @@ export default function DomainDetailPage({ params }: { params: Promise<{ id: str
     <>
       <div className="flex min-h-0 flex-1 flex-col">
         <ResourceHeader
+          breadcrumb={<DetailEyebrow kind="Domain" />}
           name={domain.name}
           identity={
-            domain.registrar
-              ? `${domain.registrar}${domain.dns_zone_id ? ` · zone ${domain.dns_zone_id}` : ""}`
-              : domain.nameservers.join("  ") || "No registrar recorded"
+            <DetailIdentity status={<DomainStatusLine domain={domain} />}>
+              {domain.registrar
+                ? `${domain.registrar}${domain.dns_zone_id ? ` · zone ${domain.dns_zone_id}` : ""}`
+                : domain.nameservers.join("  ") || "No registrar recorded"}
+            </DetailIdentity>
           }
           connection={server?.connection}
           lastSeenAt={server?.last_seen_at}
@@ -281,7 +295,9 @@ export default function DomainDetailPage({ params }: { params: Promise<{ id: str
 
                 {domain.nameservers.length > 0 && (
                   <div className="mt-3 border-t border-[var(--kn-border-subtle)] pt-3">
-                    <p className="mb-1.5 text-[var(--kn-text-2)]">Delegation</p>
+                    <MonoLabel as="p" size="xs" tone="muted" className="mb-2">
+                      Delegation
+                    </MonoLabel>
                     <div className="flex flex-wrap gap-1">
                       {domain.nameservers.map((nameserver) => (
                         <Tag key={nameserver} size="xs" mono>
@@ -337,6 +353,34 @@ export default function DomainDetailPage({ params }: { params: Promise<{ id: str
         }
       />
     </>
+  );
+}
+
+/* ----------------------------- condition ---------------------------- */
+
+const VERIFIED_BY: Record<Domain["verified"]["method"], string> = {
+  dns_txt: "a TXT record",
+  http_file: "an HTTP file",
+  nameserver: "its nameservers",
+  none: "nothing yet",
+};
+
+/** One sentence under the name: is it ours, and who answers for it. */
+function DomainStatusLine({ domain }: { domain: Domain }) {
+  const where =
+    domain.dns_provider === "manual"
+      ? "published by hand"
+      : `served by ${DNS_PROVIDER_LABELS[domain.dns_provider]}`;
+  const records = `${formatCount(domain.record_count)} record${domain.record_count === 1 ? "" : "s"}`;
+
+  return (
+    <StatusLine tone={lineTone(domainStatusTone(domain.status))}>
+      {domain.verified.ok
+        ? `Control proved by ${VERIFIED_BY[domain.verified.method]}`
+        : "Control not proved yet"}
+      {` · ${records} ${where}`}
+      {domain.site_name ? ` · answers on ${domain.site_name}` : " · not attached to a site"}
+    </StatusLine>
   );
 }
 
@@ -420,8 +464,8 @@ function DomainRecords({ domain, onAdd, onEdit, onSync, syncing }: DomainRecords
   return (
     <>
       <SectionCard
+        index={1}
         title="DNS records"
-        icon={Network}
         padded={false}
         headingLevel={3}
         actions={
@@ -486,6 +530,7 @@ function DomainRecords({ domain, onAdd, onEdit, onSync, syncing }: DomainRecords
                   variant="primary"
                   size="sm"
                   icon={Plus}
+                  arrow
                   disabled={!writable}
                   onClick={onAdd}
                 >
@@ -580,8 +625,9 @@ function DomainCertificates({ domain, onIssue }: { domain: Domain; onIssue: () =
 
   return (
     <SectionCard
+      index={2}
       title="Certificates"
-      icon={ShieldCheck}
+      caption="Issued for this name."
       padded={false}
       headingLevel={3}
       actions={
@@ -622,7 +668,7 @@ function DomainCertificates({ domain, onIssue }: { domain: Domain; onIssue: () =
             description="HTTPS will not answer for it until one is issued and installed on a host."
             size="sm"
             action={
-              <Button variant="primary" size="sm" icon={ShieldCheck} onClick={onIssue}>
+              <Button variant="primary" size="sm" icon={ShieldCheck} arrow onClick={onIssue}>
                 Issue a certificate
               </Button>
             }

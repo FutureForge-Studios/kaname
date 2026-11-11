@@ -3,7 +3,7 @@
 import * as React from "react";
 import type { DnsRecord, DnsRecordType, Domain } from "@kaname/contract";
 import { CopyableCode, FormField, Input, Select, Switch, Textarea } from "@kaname/ui";
-import { FormDialog, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
 import {
   DNS_RECORD_TYPES,
   DNS_TYPE_SPECS,
@@ -166,128 +166,134 @@ export function DnsRecordDialog({
       onSubmit={submit}
       size="lg"
     >
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[104px_minmax(0,1fr)]">
-        <FormField label="Type" required>
-          <Select
-            value={form.type}
-            onChange={(event) => set("type", event.target.value as DnsRecordType)}
-            options={DNS_RECORD_TYPES.map((type) => ({ value: type, label: type }))}
-            mono
-          />
-        </FormField>
+      <FormSection index={1} title="Record">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[104px_minmax(0,1fr)]">
+          <FormField label="Type" required>
+            <Select
+              value={form.type}
+              onChange={(event) => set("type", event.target.value as DnsRecordType)}
+              options={DNS_RECORD_TYPES.map((type) => ({ value: type, label: type }))}
+              mono
+            />
+          </FormField>
+
+          <FormField
+            label="Name"
+            description={`@ is ${domain.name}. A bare label is appended to it.`}
+            error={errorFor("name")}
+            required
+          >
+            <Input
+              value={form.name}
+              onChange={(event) => set("name", event.target.value)}
+              placeholder="@"
+              mono
+              autoComplete="off"
+              spellCheck={false}
+              data-autofocus=""
+            />
+          </FormField>
+        </div>
 
         <FormField
-          label="Name"
-          description={`@ is ${domain.name}. A bare label is appended to it.`}
-          error={errorFor("name")}
+          label={spec.contentLabel}
+          description={spec.contentHint}
+          error={errorFor("content")}
           required
         >
-          <Input
-            value={form.name}
-            onChange={(event) => set("name", event.target.value)}
-            placeholder="@"
-            mono
-            autoComplete="off"
-            spellCheck={false}
-            data-autofocus=""
-          />
+          {form.type === "TXT" ? (
+            <Textarea
+              value={form.content}
+              onChange={(event) => set("content", event.target.value)}
+              placeholder={spec.contentPlaceholder}
+              rows={3}
+              mono
+              spellCheck={false}
+            />
+          ) : (
+            <Input
+              value={form.content}
+              onChange={(event) => set("content", event.target.value)}
+              placeholder={spec.contentPlaceholder}
+              mono
+              autoComplete="off"
+              spellCheck={false}
+            />
+          )}
         </FormField>
-      </div>
+      </FormSection>
 
-      <FormField
-        label={spec.contentLabel}
-        description={spec.contentHint}
-        error={errorFor("content")}
-        required
-      >
-        {form.type === "TXT" ? (
-          <Textarea
-            value={form.content}
-            onChange={(event) => set("content", event.target.value)}
-            placeholder={spec.contentPlaceholder}
-            rows={3}
-            mono
-            spellCheck={false}
-          />
-        ) : (
-          <Input
-            value={form.content}
-            onChange={(event) => set("content", event.target.value)}
-            placeholder={spec.contentPlaceholder}
-            mono
-            autoComplete="off"
-            spellCheck={false}
-          />
-        )}
-      </FormField>
-
-      <div
-        className={
-          spec.priority === "required"
-            ? "grid grid-cols-1 gap-3 sm:grid-cols-3"
-            : "grid grid-cols-1 gap-3 sm:grid-cols-2"
-        }
-      >
-        <FormField label="Cache for" description="How long resolvers may keep the answer.">
-          <Select
-            value={TTL_PRESETS.some((preset) => preset.value === form.ttl) ? form.ttl : "custom"}
-            onChange={(event) => {
-              if (event.target.value !== "custom") set("ttl", event.target.value);
-            }}
-            options={[...TTL_PRESETS, { value: "custom", label: "Custom" }]}
-          />
-        </FormField>
-
-        <FormField
-          label="TTL in seconds"
-          description="1 or below lets the provider choose."
-          error={errorFor("ttl")}
+      <FormSection index={2} title="Caching and edge">
+        <div
+          className={
+            spec.priority === "required"
+              ? "grid grid-cols-1 gap-3 sm:grid-cols-3"
+              : "grid grid-cols-1 gap-3 sm:grid-cols-2"
+          }
         >
-          <Input
-            type="number"
-            min={0}
-            max={604800}
-            value={form.ttl}
-            onChange={(event) => set("ttl", event.target.value)}
-            mono
-          />
-        </FormField>
+          <FormField label="Cache for" description="How long resolvers may keep the answer.">
+            <Select
+              value={TTL_PRESETS.some((preset) => preset.value === form.ttl) ? form.ttl : "custom"}
+              onChange={(event) => {
+                if (event.target.value !== "custom") set("ttl", event.target.value);
+              }}
+              options={[...TTL_PRESETS, { value: "custom", label: "Custom" }]}
+            />
+          </FormField>
 
-        {spec.priority === "required" && (
           <FormField
-            label="Priority"
-            description="Lower is tried first."
-            error={errorFor("priority")}
-            required
+            label="TTL in seconds"
+            description="1 or below lets the provider choose."
+            error={errorFor("ttl")}
           >
             <Input
               type="number"
               min={0}
-              max={65535}
-              value={form.priority}
-              onChange={(event) => set("priority", event.target.value)}
-              placeholder="10"
+              max={604800}
+              value={form.ttl}
+              onChange={(event) => set("ttl", event.target.value)}
               mono
             />
           </FormField>
+
+          {spec.priority === "required" && (
+            <FormField
+              label="Priority"
+              description="Lower is tried first."
+              error={errorFor("priority")}
+              required
+            >
+              <Input
+                type="number"
+                min={0}
+                max={65535}
+                value={form.priority}
+                onChange={(event) => set("priority", event.target.value)}
+                placeholder="10"
+                mono
+              />
+            </FormField>
+          )}
+        </div>
+
+        {isProxyable(form.type) && (
+          <Switch
+            checked={proxyable && form.proxied}
+            onChange={(event) => set("proxied", event.target.checked)}
+            disabled={!proxyable}
+            label="Serve through the provider's edge"
+            description={
+              proxyable
+                ? "Hides the origin address. Never enable it on a name that carries mail."
+                : `${domain.dns_provider === "manual" ? "A manual zone" : "This provider"} cannot proxy records.`
+            }
+          />
         )}
-      </div>
+      </FormSection>
 
-      {isProxyable(form.type) && (
-        <Switch
-          checked={proxyable && form.proxied}
-          onChange={(event) => set("proxied", event.target.checked)}
-          disabled={!proxyable}
-          label="Serve through the provider's edge"
-          description={
-            proxyable
-              ? "Hides the origin address. Never enable it on a name that carries mail."
-              : `${domain.dns_provider === "manual" ? "A manual zone" : "This provider"} cannot proxy records.`
-          }
-        />
-      )}
-
-      <CopyableCode value={preview} label="Zone line" block />
+      <FormSection index={3} title="Preview">
+        <CopyableCode value={preview} label="Zone line" block />
+      </FormSection>
     </FormDialog>
   );
 }

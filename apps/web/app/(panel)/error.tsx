@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { PageHeader } from "@kaname/ui";
+import { Eyebrow, PageHeader } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
 
 /*
@@ -23,8 +23,12 @@ export default function PanelError({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader title="This page did not render" subtitle={error.digest ?? undefined} />
-      <div className="px-6 py-4">
+      <PageHeader
+        eyebrow={<Eyebrow tone="danger">Error</Eyebrow>}
+        title="This page did not render"
+        subtitle={error.digest ?? undefined}
+      />
+      <div className="px-6 py-5">
         <PageError error={error} onRetry={reset} />
       </div>
     </div>

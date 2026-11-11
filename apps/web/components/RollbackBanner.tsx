@@ -55,10 +55,10 @@ export function LockoutNotice({ assessment, subject, className }: LockoutNoticeP
     <div
       role={critical.length > 0 ? "alert" : "status"}
       className={cn(
-        "rounded-[var(--kn-r-md)] border p-3",
+        "rounded-[var(--kn-r-lg)] border p-3.5",
         tone === "danger"
-          ? "border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]"
-          : "border-[var(--kn-warn)] bg-[var(--kn-warn-soft)]",
+          ? "border-[color-mix(in_srgb,var(--kn-danger)_45%,transparent)] bg-[var(--kn-danger-soft)]"
+          : "border-[color-mix(in_srgb,var(--kn-warn)_45%,transparent)] bg-[var(--kn-warn-soft)]",
         className,
       )}
     >
@@ -192,17 +192,17 @@ export function RollbackBanner({
       role="status"
       aria-live="polite"
       className={cn(
-        "flex flex-col gap-3 rounded-[var(--kn-r-md)] border p-3",
-        tone === "danger" && "border-[var(--kn-danger)] bg-[var(--kn-danger-soft)]",
-        tone === "warn" && "border-[var(--kn-warn)] bg-[var(--kn-warn-soft)]",
-        tone === "neutral" && "border-[var(--kn-border-strong)] bg-[var(--kn-surface-2)]",
+        "flex flex-col gap-3 rounded-[var(--kn-r-lg)] border p-3.5",
+        tone === "danger" && "border-[color-mix(in_srgb,var(--kn-danger)_45%,transparent)] bg-[var(--kn-danger-soft)]",
+        tone === "warn" && "border-[color-mix(in_srgb,var(--kn-warn)_45%,transparent)] bg-[var(--kn-warn-soft)]",
+        tone === "neutral" && "border-[var(--kn-border-strong)] bg-[var(--kn-surface)]",
         className,
       )}
     >
       <div className="flex items-start gap-3">
         <span
           className={cn(
-            "mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--kn-r-sm)]",
+            "mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--kn-r-pill)]",
             tone === "danger" && "bg-[var(--kn-danger-soft)] text-[var(--kn-danger)]",
             tone === "warn" && "bg-[var(--kn-warn-soft)] text-[var(--kn-warn)]",
             tone === "neutral" && "bg-[var(--kn-neutral-soft)] text-[var(--kn-text-2)]",

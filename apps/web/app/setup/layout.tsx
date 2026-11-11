@@ -15,5 +15,6 @@ export const metadata: Metadata = {
 };
 
 export default function SetupLayout({ children }: { children: ReactNode }) {
-  return <div className="min-h-dvh bg-[var(--kn-bg)]">{children}</div>;
+  // The canvas (grid, rails, glow) is drawn by the wizard's own frame.
+  return <>{children}</>;
 }

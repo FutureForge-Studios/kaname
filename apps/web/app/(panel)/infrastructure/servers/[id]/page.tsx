@@ -24,7 +24,6 @@ import {
   IconButton,
   MenuItem,
   MenuSeparator,
-  ResourceHeader,
   Skeleton,
   Tab,
   TabList,
@@ -41,6 +40,7 @@ import { ServerContainersTab } from "../../_components/ServerContainersTab";
 import { ServerStorageTab } from "../../_components/ServerStorageTab";
 import { ServerLogsTab } from "../../_components/ServerLogsTab";
 import { useServerCommands } from "../../_components/ServerCommands";
+import { DetailHeader, DetailHeaderSkeleton, HostStatusLine } from "../../_components/DetailHeader";
 import { hasContainerRuntime } from "../../_lib/infra";
 
 /* ------------------------------------------------------------------ *
@@ -91,12 +91,12 @@ export default function ServerDetailPage() {
   if (query.isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b border-[var(--kn-border)] px-6 pb-4 pt-4">
-          <Skeleton className="h-3 w-40" label="Loading server" />
-          <Skeleton className="mt-3 h-6 w-56" />
+        <DetailHeaderSkeleton>
+          <Skeleton className="h-5 w-40 rounded-[var(--kn-r-pill)]" label="Loading server" />
+          <Skeleton className="mt-4 h-7 w-56" />
           <Skeleton className="mt-2 h-3 w-72" />
-        </div>
-        <div className="px-6 py-4">
+        </DetailHeaderSkeleton>
+        <div className="px-6 py-6">
           <Skeleton className="h-64" />
         </div>
       </div>
@@ -106,10 +106,10 @@ export default function ServerDetailPage() {
   if (query.isError || !server) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b border-[var(--kn-border)] px-6 pb-4 pt-4">
+        <DetailHeaderSkeleton>
           <Breadcrumbs />
-        </div>
-        <div className="px-6 py-4">
+        </DetailHeaderSkeleton>
+        <div className="px-6 py-6">
           <PageError
             error={query.error ?? new Error("This server is not in the fleet.")}
             onRetry={() => void query.refetch()}
@@ -125,7 +125,8 @@ export default function ServerDetailPage() {
 
   return (
     <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-1 flex-col">
-      <ResourceHeader
+      <DetailHeader
+        eyebrow="Server"
         breadcrumb={<Breadcrumbs trailing={server.name} />}
         name={server.name}
         identity={
@@ -139,6 +140,7 @@ export default function ServerDetailPage() {
         lastSeenAt={server.last_seen_at}
         health={server.health}
         healthReasons={server.health_reasons}
+        status={<HostStatusLine host={server} />}
         badges={
           server.simulated ? (
             <Badge tone="info" size="xs">
@@ -243,7 +245,7 @@ export default function ServerDetailPage() {
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col px-6 py-4">
+      <div className="flex min-h-0 flex-1 flex-col px-6 py-6">
         <TabPanel value="overview">
           <ServerOverview server={server} commands={commands} />
         </TabPanel>

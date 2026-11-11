@@ -4,23 +4,28 @@ import { cn } from "@kaname/ui";
 /* ------------------------------------------------------------------ *
  * The Kaname mark.
  *
- * A keystone — the tapered wedge at the crown of an arch that holds
- * every other stone in place — drawn as one closed path with the
- * central point marked. Two elements only, because the mark has to
- * survive 16px in the sidebar and 16px as a favicon.
+ * Drawn in the FutureForge family: solid, forward-leaning slabs in the
+ * brand purple, two-tone, no outline. Where the FutureForge mark is an
+ * F made of two raked bars, Kaname's is a K made of three — a raked
+ * stem and two arms that meet it at one point. That meeting point is
+ * the name: 要 (kaname) is the pivot pin of a folding fan, the one
+ * piece everything else turns on.
  *
- * Abstract on purpose: the name is Japanese, the symbol is structural.
- * There is no glyph, no torii, no seal.
+ * Three filled polygons only, because the mark has to survive 16px in
+ * the sidebar and 16px as a favicon. app/icon.svg and app/apple-icon.svg
+ * repeat this geometry with literal colours.
  * ------------------------------------------------------------------ */
 
 export interface LogoProps extends Omit<React.SVGProps<SVGSVGElement>, "children"> {
   size?: number;
   /** Hidden from assistive tech when a sibling already names the product. */
   title?: string;
+  /** One flat colour (currentColor) instead of the two-tone purple. */
+  mono?: boolean;
 }
 
 export const Logo = React.forwardRef<SVGSVGElement, LogoProps>(function Logo(
-  { size = 20, title, className, ...props },
+  { size = 20, title, mono = false, className, ...props },
   ref,
 ) {
   return (
@@ -30,18 +35,24 @@ export const Logo = React.forwardRef<SVGSVGElement, LogoProps>(function Logo(
       height={size}
       viewBox="0 0 24 24"
       fill="none"
-      stroke="currentColor"
-      strokeWidth={1.75}
-      strokeLinejoin="round"
-      strokeLinecap="round"
       role={title ? "img" : undefined}
       aria-hidden={title ? undefined : true}
       className={cn("shrink-0", className)}
       {...props}
     >
       {title && <title>{title}</title>}
-      <path d="M5.6 5h12.8l-2.6 14H8.2z" />
-      <circle cx="12" cy="12" r="1.9" fill="currentColor" stroke="none" />
+      {/* stem */}
+      <path d="M6.2 3h4.6L7.8 21H3.2z" fill={mono ? "currentColor" : "var(--kn-accent-500)"} />
+      {/* upper arm */}
+      <path
+        d="M16.1 3h5.3l-7.5 9.2h-4.6z"
+        fill={mono ? "currentColor" : "var(--kn-accent-400)"}
+      />
+      {/* lower arm */}
+      <path
+        d="M9.9 13.4h4.7L19.2 21h-5.1z"
+        fill={mono ? "currentColor" : "var(--kn-accent-500)"}
+      />
     </svg>
   );
 });
@@ -59,12 +70,17 @@ export const Wordmark = React.forwardRef<HTMLSpanElement, WordmarkProps>(functio
   return (
     <span
       ref={ref}
-      className={cn("inline-flex select-none items-center gap-2", className)}
+      className={cn("inline-flex select-none items-center gap-2.5", className)}
       {...props}
     >
-      <Logo size={size} className="text-[var(--kn-accent-400)]" />
+      <Logo size={size} />
       {!markOnly && (
-        <span className="text-md font-medium tracking-tight text-[var(--kn-text)]">Kaname</span>
+        <span
+          className="font-medium leading-none tracking-[-0.03em] text-[var(--kn-text)]"
+          style={{ fontSize: Math.round(size * 0.82) }}
+        >
+          Kaname
+        </span>
       )}
       <span className="sr-only">{markOnly ? "Kaname" : ""}</span>
     </span>

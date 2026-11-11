@@ -2,7 +2,17 @@
 
 import * as React from "react";
 import type { ArchiveInput, FileEntry } from "@kaname/contract";
-import { ConfirmDialog, FormField, Input, MonoText, Select, Switch, cn } from "@kaname/ui";
+import {
+  Button,
+  ConfirmDialog,
+  FormField,
+  Input,
+  MonoLabel,
+  MonoText,
+  Select,
+  Switch,
+  cn,
+} from "@kaname/ui";
 import { FormDialog, fieldErrors } from "../../_components/FormDialog";
 import {
   useArchive,
@@ -123,7 +133,7 @@ function TargetSummary({ entries }: { entries: readonly FileEntry[] }) {
     return <MonoText className="text-[var(--kn-text)]">{entries[0]!.path}</MonoText>;
   }
   return (
-    <ul className="max-h-32 overflow-y-auto rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-2 py-1.5">
+    <ul className="max-h-32 overflow-y-auto rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-3 py-2">
       {entries.map((entry) => (
         <li key={entry.path} className="kn-mono truncate text-[var(--kn-text-2)]">
           {entry.path}
@@ -832,19 +842,17 @@ export function UploadQueue({ uploads, onCancel, onDismiss, className }: UploadQ
     <section
       aria-label="Uploads"
       className={cn(
-        "overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)]",
+        "overflow-hidden rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)]",
         className,
       )}
     >
-      <div className="flex h-9 items-center justify-between gap-3 border-b border-[var(--kn-border)] px-4">
-        <h2 className="font-medium text-[var(--kn-text)]">Uploads</h2>
-        <button
-          type="button"
-          onClick={onDismiss}
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-        >
+      <div className="flex h-10 items-center justify-between gap-3 border-b border-[var(--kn-border)] px-4">
+        <MonoLabel as="h2" size="xs" tone="muted">
+          Uploads
+        </MonoLabel>
+        <Button variant="ghost" size="xs" onClick={onDismiss}>
           Clear finished
-        </button>
+        </Button>
       </div>
       <ul>
         {uploads.map((upload) => {
@@ -865,7 +873,7 @@ export function UploadQueue({ uploads, onCancel, onDismiss, className }: UploadQ
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={Math.round(percent)}
-                  className="h-0.5 w-full overflow-hidden rounded-[var(--kn-r-xs)] bg-[var(--kn-border)]"
+                  className="h-1 w-full overflow-hidden rounded-[var(--kn-r-pill)] bg-[var(--kn-surface-3)]"
                 >
                   <div
                     className={cn(
@@ -898,13 +906,14 @@ export function UploadQueue({ uploads, onCancel, onDismiss, className }: UploadQ
               </span>
 
               {upload.status === "uploading" && (
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="shrink-0"
                   onClick={() => onCancel(upload.id)}
-                  className="shrink-0 rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
                 >
                   Cancel
-                </button>
+                </Button>
               )}
             </li>
           );

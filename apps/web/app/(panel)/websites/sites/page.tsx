@@ -27,7 +27,7 @@ import { useCan } from "@/lib/queries";
 import { CertificateDialog } from "../_components/CertificateDialog";
 import { DeployDialog } from "../_components/DeployDialog";
 import { SiteDialog } from "../_components/SiteDialog";
-import { FilterSelect } from "../_components/filters";
+import { FilterSelect, ScopeBar } from "../_components/filters";
 import { useDeleteSite, useReloadSites, useSites } from "../_components/queries";
 import {
   DeploymentStatusBadge,
@@ -263,7 +263,9 @@ export default function SitesPage() {
   return (
     <>
       <ResourcePage<Site>
+        eyebrow="Websites"
         title="Sites"
+        lede="A site is a vhost Kaname writes and reloads for you: domains in, a webroot or upstream out."
         subtitle={selection.server ? selection.server.hostname : "Every host in scope"}
         primaryAction={newSite}
         state={state}
@@ -318,7 +320,9 @@ export default function SitesPage() {
           </Button>
         )}
       >
-        <ServerPicker selection={selection} allowAll />
+        <ScopeBar>
+          <ServerPicker selection={selection} allowAll />
+        </ScopeBar>
       </ResourcePage>
 
       <SiteDialog open={creating} onOpenChange={setCreating} defaultServerId={selection.serverId} />

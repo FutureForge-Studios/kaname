@@ -63,7 +63,9 @@ export default function ServicesPage() {
   return (
     <>
       <ResourcePage<Service>
+        eyebrow="Infrastructure"
         title="Services"
+        lede="systemd units on every host, read from the agent and cached so thirty hosts stay one fast list."
         subtitle={
           query.data
             ? `${formatCount(query.data.meta.total)} units${selection.server ? ` on ${selection.server.name}` : " across the fleet"}`
@@ -77,6 +79,7 @@ export default function ServicesPage() {
         searchPlaceholder="Search unit or description"
         filters={
           <>
+            <ServerPicker selection={selection} allowAll allLabel="All servers" />
             <Select
               size="sm"
               aria-label="Filter by unit state"
@@ -105,10 +108,6 @@ export default function ServicesPage() {
         emptyDescription="Kaname reads the unit list from each host and caches it. Pick a server and sync it from the host."
         errorContext="Services"
       >
-        <div className="flex flex-wrap items-center gap-3">
-          <ServerPicker selection={selection} allowAll allLabel="All servers" />
-        </div>
-
         <HostSync
           syncedAt={syncedAt}
           server={selection.server}

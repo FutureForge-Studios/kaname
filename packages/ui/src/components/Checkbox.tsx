@@ -21,7 +21,7 @@ const MARK_SIZES: Record<ControlSize, number> = { sm: 12, md: 14 };
 const DOT_SIZES: Record<ControlSize, string> = { sm: "h-1.5 w-1.5", md: "h-2 w-2" };
 
 const CONTROL_BASE = cn(
-  "peer shrink-0 appearance-none border bg-[var(--kn-surface-2)]",
+  "peer shrink-0 appearance-none border bg-[var(--kn-field-bg)]",
   "transition-[background-color,border-color,opacity] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
   "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]",
   "disabled:cursor-not-allowed",
@@ -45,7 +45,7 @@ interface LabelledControlProps {
 function borderFor(invalid: boolean): string {
   return invalid
     ? "border-[var(--kn-danger)]"
-    : "border-[var(--kn-border-strong)] checked:border-[var(--kn-accent-600)]";
+    : "border-[var(--kn-border-strong)] checked:border-[var(--kn-accent-500)]";
 }
 
 function Labelled({
@@ -126,7 +126,7 @@ export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(functi
         className={cn(
           CONTROL_BASE,
           "rounded-[var(--kn-r-xs)]",
-          "checked:bg-[var(--kn-accent-600)] indeterminate:border-[var(--kn-accent-600)] indeterminate:bg-[var(--kn-accent-600)]",
+          "checked:bg-[var(--kn-accent-500)] indeterminate:border-[var(--kn-accent-500)] indeterminate:bg-[var(--kn-accent-500)]",
           borderFor(isInvalid),
           variant(BOX_SIZES, size, "sm"),
           className,
@@ -287,7 +287,7 @@ export const Radio = React.forwardRef<HTMLInputElement, RadioProps>(function Rad
           /* The circle is the only thing telling a radio from a checkbox at
            * 16px, so this is the one place a pill radius earns its keep. */
           "rounded-[var(--kn-r-pill)]",
-          "checked:bg-[var(--kn-accent-600)]",
+          "checked:bg-[var(--kn-accent-500)]",
           borderFor(isInvalid),
           variant(BOX_SIZES, size, "sm"),
           className,

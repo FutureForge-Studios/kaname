@@ -4,10 +4,10 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import type { SetupState, SetupStep } from "@kaname/contract";
-import { Button, Skeleton } from "@kaname/ui";
+import { Button, Skeleton, StatusLine } from "@kaname/ui";
 import { ApiError, api } from "@/lib/api";
 import { useSession } from "@/lib/queries";
-import { Card, Frame, StepHeading, toError } from "./_components/chrome";
+import { Frame, StepActions, StepHeading, StepShell, toError } from "./_components/chrome";
 import { InstanceStep, OwnerStep, ServerStep, WelcomeStep } from "./_components/install-steps";
 import {
   AddressStep,
@@ -62,21 +62,22 @@ export default function SetupPage() {
   if (error && !state) {
     return (
       <Frame>
-        <Card>
-          <div className="flex flex-col gap-5">
+        <StepShell
+          heading={
             <StepHeading
               title="The control plane is not answering"
-              hint={
-                <>
-                  {error.message}
-                  {error.remediation?.summary && <> {error.remediation.summary}</>}
-                </>
-              }
+              hint={error.remediation?.summary}
             />
-            <div className="flex justify-end border-t border-[var(--kn-border)] pt-5">
+          }
+        >
+          <div className="flex flex-col gap-5">
+            <StatusLine tone="danger">
+              {error.message}
+            </StatusLine>
+            <StepActions>
               <Button
                 variant="primary"
-                size="md"
+                size="lg"
                 icon={RefreshCw}
                 autoFocus
                 onClick={() => {
@@ -86,9 +87,9 @@ export default function SetupPage() {
               >
                 Try again
               </Button>
-            </div>
+            </StepActions>
           </div>
-        </Card>
+        </StepShell>
       </Frame>
     );
   }
@@ -96,12 +97,21 @@ export default function SetupPage() {
   if (!state) {
     return (
       <Frame>
-        <Card>
-          <Skeleton className="h-6 w-48" label="Loading setup" />
-          <Skeleton className="mt-3 h-4 w-full" />
-          <Skeleton className="mt-6 h-8 w-full" />
-          <Skeleton className="mt-4 h-8 w-full" />
-        </Card>
+        <StepShell
+          heading={
+            <div className="flex flex-col gap-5">
+              <Skeleton className="h-6 w-24" label="Loading setup" />
+              <Skeleton className="h-10 w-72 max-w-full" />
+              <Skeleton className="h-10 w-56 max-w-full" />
+              <Skeleton className="h-4 w-full max-w-md" />
+            </div>
+          }
+        >
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="mt-6 h-9 w-full" />
+          <Skeleton className="mt-4 h-9 w-full" />
+          <Skeleton className="mt-8 h-11 w-36" />
+        </StepShell>
       </Frame>
     );
   }
@@ -110,7 +120,7 @@ export default function SetupPage() {
   const props = { state, onAdvance: setState, onStale: load };
 
   return (
-    <Frame step={step}>
+    <Frame step={step} outcomes={state.outcomes}>
       {/* Keyed by step so each one mounts fresh: its first field takes
           focus and no draft from the previous screen leaks into it. */}
       <React.Fragment key={step}>

@@ -1,33 +1,40 @@
 # Kaname design system
 
-> **Visual language: the FF Studios design (FutureForge Studios), with an Apple-style UI layer.**
-> Palette, type lanes and the one-accent rule come from the ffstudios design system; corners,
-> materials, depth, motion and focus follow Apple's platform conventions. Kaname keeps its own
-> `--kn-*` token names; only the values changed. Decision record: KD-036.
+> **Visual language: FutureForge Studios — [ffstudios.io](https://ffstudios.io) — adapted to a
+> dense infrastructure control panel.** Ink canvas, paper text, one brand purple, hairlines
+> instead of fills, pills for actions, mono uppercase tracked labels for everything that
+> annotates, a faint blueprint grid with frame rails behind the content. Kaname keeps its own
+> `--kn-*` token names; only the values changed. Decision record: KD-038 (supersedes KD-036).
+>
+> Building or restyling a page? Read [`redesign-guide.md`](redesign-guide.md) — it has every
+> primitive with a snippet and the page anatomy. This file is the rules and the reasons.
 
 The rules that keep thirty-odd pages feeling like one product. If a page needs something that
 is not here, the component in `@kaname/ui` grows a prop — it does not get a local variant.
 
 ---
 
-## 1. What this is not
+## 1. What this is, and is not
+
+It **is** the ffstudios.io language: big tight-tracked headlines, a purple gradient on the
+second line of a hero, mono uppercase labels, eyebrow chips with a purple square, numbered
+section rows ("01  Title ······· caption"), leader annotations, pill buttons with a trailing
+arrow, hairline cards with an inset panel, a blueprint grid with frame rails and "+"
+registration marks, a teal dot and a sentence for status.
+
+It is **adapted**, not transplanted. The marketing site sells; this panel is operated forty
+times a day. So tables stay 36px-row dense, anything greppable stays monospace in its own case,
+status colour means status and nothing else, and the hero scale is reserved for onboarding,
+sign-in and first-run states.
 
 Deliberately not referenced, at any level: cPanel, Plesk, DirectAdmin, Webmin, HestiaCP,
 CyberPanel, aaPanel, Bootstrap/Tailwind admin templates, crypto dashboards, cyberpunk
-dashboards, glassmorphism, gradient washes, giant metric cards, pill-shaped everything,
-decorative illustration.
+dashboards, glassmorphism, vibrancy or backdrop blur, gradient washes behind content, giant
+metric cards, decorative illustration.
 
 No literal Japanese imagery either — no anime, samurai, temples, blossoms or decorative kanji.
-The name means *keystone*; the influence lives in restraint and precision, not decoration. The
-only Japanese element in the product is 要 as a secondary mark, used as a glyph, never as
-ornament.
-
-Translucency is not glassmorphism here: exactly two surfaces are materials (the sidebar and the
-top bar, §3), and no card, menu or dialog is ever see-through.
-
-Principles taken from elsewhere — principles only, never layout: Linear's typographic hierarchy
-and density, Vercel's calm treatment of infrastructure, Raycast's command-palette-first
-interaction, GitHub's information density.
+The name means *keystone* / *pivot*; the influence lives in restraint and precision, not
+decoration.
 
 ---
 
@@ -37,79 +44,89 @@ Ink canvas, essentially monochrome, one purple accent used sparingly. Dark is th
 the design target; light ships with the same token names on the ffstudios paper palette.
 
 ```
-                 dark            light
---kn-bg          #0A0A0C         #F5F4F0     canvas (ink / paper)
---kn-bg-inset    #060608         #ECEAE4     the recess: terminal, code wells
---kn-surface     #131316         #FFFFFF     cards, tables
---kn-surface-2   #1A1A1F         #F0EEE9     raised, hover, menus
---kn-surface-3   #24242B         #E8E5DE     pressed, active row
---kn-border      white 8%        #DEDBD3     hairlines
---kn-border-str  white 16%       #C8C4BA     emphasised, hover boundary
---kn-text        #F4F4F5         #0A0A0C     primary          (18.0:1 / 18.0:1 on bg)
---kn-text-2      #B4B4BC         #52525B     secondary        (9.6:1 / 7.0:1)
---kn-text-3      #8A8A93         #6E6E78     tertiary         (5.8:1 / 4.6:1)
+                  dark             light
+--kn-bg           #0A0A0C          #F5F4F0     canvas (ink / paper)
+--kn-bg-inset     #060608          #ECEAE4     the recess: terminal, code wells, CardInset
+--kn-surface      #131316          #FFFFFF     cards, tables (ink-2)
+--kn-surface-2    #1A1A1F          #F0EEE9     menus, popovers, hover (ink-3)
+--kn-surface-3    #24242B          #E6E3DC     pressed, active row
+--kn-border       white 8%         ink 11%     the hairline
+--kn-border-str   white 16%        ink 22%     chips, overlays, secondary pill at rest
+--kn-line-control white 40%        ink 42%     secondary pill on hover, crosshair marks
+--kn-rail         white 8%         ink 8%      frame rails
+--kn-grid-line    white 2.6%       ink 3%      blueprint grid (64px cell)
+--kn-field-bg     white 3%         #FFFFFF     inputs
+--kn-field-border white 14%        ink 18%     inputs
+--kn-text         #F5F4F0          #0A0A0C     primary          (18.0:1 / 18.0:1 on bg)
+--kn-text-2       #B3B2AF          #52525B     muted (paper 72%) (9.3:1 / 7.0:1)
+--kn-text-3       #8E8D8B          #6B6B74     subtle (paper 56%) (6.0:1 / 4.8:1)
 ```
 
-**Accent: FF purple `#7A4FF4`.** Never text at 500 (4.0:1 on ink); it fills, it outlines, it
-lights the brand mark.
+**Accent: FF purple `#7A4FF4`.** It fills the primary pill (white on it is 4.9:1), draws the
+active indicator and the eyebrow square. It is never small text on ink (4.0:1) — text accent is
+400.
 
 ```
-                 dark            light
---kn-accent-300  #C9B8FB         #8B66F6     tints
---kn-accent-400  #A98DF8         #6A3EE8     links, active icons, the one hot datum (7.4:1 / 5.5:1)
---kn-accent-500  #7A4FF4         #7A4FF4     brand, borders, selected outline
---kn-accent-600  #6A3EE8         #6A3EE8     primary button fill (white on it: 6.1:1)
---kn-accent-700  #5A30D4         #5A30D4     pressed
+                  dark             light
+--kn-accent-300   #C9B6FF          #5A30D4     gradient start, highlights
+--kn-accent-400   #A98DF8          #6A3EE8     links, active icons, the one hot datum (7.4:1 / 5.5:1)
+--kn-accent-500   #7A4FF4          #7A4FF4     primary fill, indicators, the purple square
+--kn-accent-600   #6A3EE8          #6A3EE8     primary hover
+--kn-accent-700   #5A30D4          #5A30D4     pressed
+--kn-accent-900   #3B2391          —           primary-deep, glow floor
+--kn-gradient-brand   95deg  #C9B6FF → #A98DF8 30% → #7A4FF4     (.kn-gradient-text / <GradientText>)
+--kn-glow             radial purple, behind feature art only
 ```
 
-On paper, ffstudios' accent-fg `#A98DF8` is only 2.4:1, so 400 takes `primary-ink` `#6A3EE8`
-there. The primary button rests on 600 and hovers to 500 (white on it: 4.9:1).
-
-**Semantic.** From the ffstudios secondary hues, each with a `-soft` background at 14% (12% on
-paper):
+**Semantic colour is the ffstudios accent trio, and it means status — never decoration.**
 
 ```
-                 dark            light
---kn-ok          #4FE3CB teal    #0B7564     (12.4:1 / 5.1:1)
---kn-warn        #FBB13C yellow  #8F5300     (10.8:1 / 5.6:1)
---kn-danger      #F45B69 red     #C42B3C     (6.2:1 / 5.1:1)
---kn-info        #7CB7FF         #22639E     (9.5:1 / 5.7:1) derived: ffstudios has no blue
+                  dark             light
+--kn-ok           #4FE3CB teal     #0B7564     (12.4:1 / 5.1:1)
+--kn-warn         #FBB13C yellow   #8F5300     (10.8:1 / 5.6:1)
+--kn-danger       #F45B69 red      #C42B3C     (6.2:1 / 5.1:1)
+--kn-info         #7CB7FF          #22639E     derived: the ff palette has no blue
 ```
 
-The light values are the same hues darkened until they pass 4.5:1 on paper, white and the
-raised surface. Known gap: white on the dark `--kn-danger` fill (the danger button) is 3.2:1.
+Each has a `-soft` tint (10–12% alpha) used as a chip fill. Chips carry a hairline in their own
+colour (`currentColor` at 24%). Purple is brand and selection; it is not a status.
 
-The rule that matters: in an infrastructure panel, green/amber/red **mean something**. Never
-use a semantic colour decoratively, and never use the accent to indicate state. If a coloured
-element is not conveying status, it is either accent or nothing.
+Rules:
 
-Charts: `--kn-chart-1..6` run accent, then info, ok, warn, danger and a neutral grey.
-
-Dark is the default and the design target; light ships with the same token names.
+- A page uses the gradient at most once, on a headline's second line, and only at hero scale.
+- The glow exists only behind feature art on standalone screens (setup, login, invite). Never
+  inside the panel.
+- No coloured shadows, no gradient fills on surfaces, no tinted cards for decoration.
+- Charts lead with purple, then teal, blue, yellow, red, grey (`--kn-chart-1…6`).
 
 ---
 
 ## 3. Space, size, shape
 
-- **4px grid, strictly.** Tailwind's default scale only. No arbitrary spacing values in a
-  component.
-- **Radius: continuous rounded corners** (Apple UI layer, overriding ffstudios' radius 0):
-  `--kn-r-xs 6px` (swatches, checkboxes), `--kn-r-sm 8px` (controls, badges), `--kn-r-md 10px`
-  (buttons, inputs, cards, tables), `--kn-r-lg 14px` (large panels), `--kn-r-xl 16px` (dialogs,
-  drawers). `9999px` is for status badges and segmented controls only.
-- **Materials:** the sidebar and the top bar are `.kn-material`: the surface at 72% alpha with
-  `backdrop-filter: saturate(180%) blur(20px)` and a 1px hairline. Opaque under
-  `prefers-reduced-transparency: reduce` or where backdrop filters are unsupported. Nothing
-  else is translucent.
-- **Depth** (overriding ffstudios' "no shadows"): each shadow is a tight 1px ambient plus a
-  wide, faint drop. `--kn-shadow-sm` on cards and metric tiles, `-md` on menus, popovers,
-  tooltips and toasts, `-lg` on dialogs and drawers. Never on table rows, never a coloured
-  glow.
-- **Focus:** one halo for the whole product: 3px `--kn-ring` 2px off the edge, following the
-  element's corner. Dark: accent-fg `#A98DF8` at 60% (3.3:1 on canvas). Light: `#6A3EE8` at
-  75% (3.4:1), because 60% falls under 3:1.
+- **Grid:** 4px. Spacing is a closed set (`Stack`/`Inline` `gap` props, Tailwind's scale); no
+  arbitrary values.
+- **Radius:** chips 4–6px (`--kn-r-xs` 4, `--kn-r-sm` 6), fields 8px (`--kn-r-md`), cards and
+  tables 14px (`--kn-r-lg`), dialogs and feature cards 18px (`--kn-r-xl`, the ffstudios card),
+  and **the pill (`--kn-r-pill`) for every action**: buttons, icon buttons, status badges,
+  segmented controls, switches, avatars.
+- **Flat.** No vibrancy, no backdrop blur, no translucency. The sidebar and top bar are solid
+  ink with a hairline, like the ffstudios header (`.kn-material` is kept as a class name and is
+  now simply the canvas colour).
+- **Depth:** none on anything that is part of the page in dark (`--kn-shadow-sm` is empty on
+  ink); on paper, cards get the ffstudios card's one tight line plus a wide, very soft drop.
+  Floating overlays — menus, popovers, tooltips, toasts (`-md`), dialogs and drawers (`-lg`) —
+  keep a restrained neutral drop in both themes and a `--kn-border-strong` outline.
+- **Hairlines carry the structure.** A section is a row with a line under it, not a filled
+  band. Full-bleed hairlines (the page header's) get "+" crosshair marks where they cross the
+  frame rails.
+- **The canvas:** the panel's main area is `.kn-canvas` — the 64px blueprint grid at ~3% plus
+  two vertical rails 12px in from each edge. Content sits on a 24px gutter (`--kn-gutter`), just
+  inside the rails. It must stay calm: nothing else may be drawn on the canvas.
+- **Focus:** one ring for the whole product: 2px `--kn-ring`, 2px off the edge, following the
+  element's corner. Dark `#A98DF8` (7.4:1 on canvas), light `#6A3EE8` (5.5:1).
 - **Density:** table rows are 36px, 30px in compact mode. Base font size is 13px. Section gaps
-  are 16px, not 32px. This product should show a lot without scrolling.
+  are 16–24px. Top bar 52px, sidebar 240px (56px collapsed). This product should show a lot
+  without scrolling.
 - **Card vs table:** default to the table. A card is for something genuinely singular — a
   metric tile, an attention item — not for a list of records.
 
@@ -117,42 +134,49 @@ Dark is the default and the design target; light ships with the same token names
 
 ## 4. Type
 
-The Apple system face for the interface, one mono, one pixel display face in one place.
+Three lanes, each with one job.
 
-- **SF Pro** (`-apple-system`, `"SF Pro Text"`) for the interface, falling back to self-hosted
-  **Inter Variable** off Apple platforms. 13px base, 12px for secondary and table meta, 11px
-  for labels, 16/20/24px for headings. Weight 500 for emphasis; 600 only for page titles.
-  ffstudios' Satoshi is licensed to the ffstudios site only and is never used here.
-- **SF Mono**, falling back to self-hosted **JetBrains Mono** (400/500), for anything an
-  operator would type, copy or grep: IP addresses, ports, paths, hashes, unit names, container
-  ids, log lines, DNS records, commands, SQL identifiers. If it is a technical identifier, it is
-  monospace. This is not decorative: it is what makes a path scannable.
-- **Geist Pixel Square** for page and resource titles only, via `.kn-display`. It ships under
-  the OFL in the `geist` package and loads through `next/font`. The ffstudios pixel rule
-  applies: the face sits on a 0.076em cell, so it is only set where the cell is a whole pixel,
-  2px here (26.32px, 32px line). No tracking, no bold, never below 26.32px, never in body copy,
-  buttons, labels or tables.
-- No call to Google Fonts, ever; every face is either the platform's or self-hosted.
+- **Geist Sans** — interface and headlines. Loaded by `next/font` from the `geist` package
+  (OFL) as `--font-geist-sans`. It stands in for the site's Satoshi, which is licensed to
+  ffstudios.io only and is never used in this public repository. 13px base, 12px secondary,
+  14/16px titles. Weight 500 for emphasis and headlines; nothing bolder.
+  - `.kn-display` — the in-panel page title: 28/32px, weight 500, tracking −0.035em.
+  - `.kn-headline` — the hero: clamp(36px, 5vw, 64px), leading 1.02, tracking −0.045em.
+  - `.kn-title` — card and section titles: weight 500, tracking −0.015em.
+  - `.kn-lede` — 15/24px muted sentence under a headline.
+- **JetBrains Mono** (self-hosted from `@fontsource`, 400/500/600) — two uses:
+  - **Data**, in its own case: anything an operator would type, copy or grep — IPs, ports,
+    paths, hashes, unit names, container ids, log lines, DNS records, commands (`.kn-mono`,
+    `<MonoText>`, `mono` props). This is not decorative: it is what makes a path scannable.
+  - **Labels**, uppercase and wide-tracked (`.kn-label` 11px, `.kn-label-sm` 10px,
+    letter-spacing 0.14em; `<MonoLabel>`): navigation groups, tabs, table headers, metric
+    labels, eyebrows, breadcrumbs, axis and annotation labels. Labels annotate; they are never
+    a value. Never uppercase an identifier.
+- **Geist Pixel Square** (`.kn-pixel`) — kept for small brand accents (a numeral, a version
+  stamp). Never body, never titles.
+- No call to Google Fonts or any font CDN, ever; every face is self-hosted.
 - **Tabular numerals everywhere numbers stack vertically.** Applied globally to tables and to
   `.kn-num`.
-- Sentence case for every label, button and heading. Never Title Case, never ALL CAPS except
-  for a 10px section eyebrow.
+- Sentence case for every heading, button and sentence. Uppercase exists only through the mono
+  label classes — never typed in the source, so screen readers and tests see real words.
 
 ---
 
 ## 5. Motion
 
-140 / 240 / 360 ms (`--kn-dur-fast`, `--kn-dur`, `--kn-dur-slow`, the ffstudios micro and UI
-steps), on Apple's spring-like ease `cubic-bezier(0.32, 0.72, 0, 1)`: it starts quickly and
-settles without overshoot. `opacity` and `transform` only.
+150 / 240 / 400 ms (`--kn-dur-fast`, `--kn-dur`, `--kn-dur-slow`). Two curves, both from the
+ffstudios site: `--kn-ease` is ease-out-expo `cubic-bezier(.16, 1, .3, 1)` for anything that
+moves (overlays entering, the arrow nudge, the sidebar width); `--kn-ease-std` is
+`cubic-bezier(.4, 0, .2, 1)` for colour and border changes. `opacity` and `transform` only.
 
-No bounce, no real spring physics, no page transitions, no staggered list entrances, no skeleton shimmer
-sweeping across the screen. A panel that animates when you are trying to read a disk-usage
-figure is working against you.
+No bounce, no spring physics, no page transitions, no staggered list entrances, no skeleton
+shimmer sweeping across the screen, no scroll-driven animation. A panel that animates when you
+are trying to read a disk-usage figure is working against you.
 
-Three animations exist: `kn-fade-in`, `kn-rise` (4px), `kn-scale-in` (0.98 → 1). Plus
-`kn-spin` for spinners and `kn-pulse-ring` for the one thing that legitimately needs attention:
-a degraded agent connection. Everything respects `prefers-reduced-motion`.
+Three entrance animations exist: `kn-fade-in`, `kn-rise` (4px), `kn-scale-in` (0.98 → 1). Plus
+`kn-spin` for spinners and `kn-pulse-ring` for the one thing that legitimately needs attention.
+The one flourish is the primary action's trailing arrow, which nudges 2px on hover. Everything
+respects `prefers-reduced-motion`.
 
 ---
 
@@ -194,8 +218,8 @@ learnable:
 
 - Search, filter, sort, pagination, bulk actions.
 - **Loading:** `SkeletonRow` matching the real column widths. Never a centred spinner.
-- **Empty:** `EmptyState` with a one-sentence description and the primary action. Calm — no
-  illustration, no oversized icon.
+- **Empty:** `EmptyState` with a one-sentence description and the primary action. Calm — the
+  icon sits on a small blueprint plate; no illustration, no oversized glyph.
 - **Error:** `ErrorState` with the actual problem and what to do about it.
 - **Staleness:** anything read from cache shows "synced 12s ago" with a Refresh control
   ([KD-012](../DECISIONS.md)). Stale data is surfaced, never hidden.
@@ -269,9 +293,11 @@ Tables never scroll horizontally by default. If a column does not fit, it collap
 
 ## 12. The mark
 
-An abstract geometric keystone: a central wedge locking two flanking forms. Built from a small
-number of straight strokes so it survives at 16px in the sidebar and as a favicon, and drawn
-with `currentColor` so it inherits the accent or the text colour depending on context.
+In the FutureForge family: solid, forward-leaning slabs in the brand purple, two-tone, no
+outline. Where the FutureForge mark is an F made of raked bars, Kaname's is a K made of three —
+a raked stem and two arms meeting it at one point. That meeting point is the name: 要 is the
+pivot pin of a folding fan, the keystone everything else turns on. Three filled polygons, so it
+survives 16px in the sidebar and as a favicon (`components/Logo.tsx`, `app/icon.svg`).
 
-The wordmark is "Kaname" set in the interface face at weight 600 with slightly tightened tracking. 要 is a
-secondary mark, used alone where a single glyph is wanted.
+The wordmark is "Kaname" in Geist Sans at weight 500 with −0.03em tracking, set beside the mark
+the way "FutureForge" sits beside its F.

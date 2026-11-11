@@ -233,12 +233,12 @@ export const Drawer = React.forwardRef<HTMLDivElement, DrawerProps>(function Dra
             "transition-transform duration-[var(--kn-dur)] ease-[var(--kn-ease)]",
             right
               ? cn(
-                  "inset-y-0 right-0 h-full border-l border-[var(--kn-border)]",
+                  "inset-y-0 right-0 h-full border-l border-[var(--kn-border-strong)]",
                   variant(RIGHT_SIZES, size, "md"),
                   entered ? "translate-x-0" : "translate-x-full",
                 )
               : cn(
-                  "inset-x-0 bottom-0 max-h-[85vh] border-t border-[var(--kn-border)]",
+                  "inset-x-0 bottom-0 max-h-[85vh] border-t border-[var(--kn-border-strong)]",
                   "rounded-t-[var(--kn-r-xl)]",
                   entered ? "translate-y-0" : "translate-y-full",
                 ),
@@ -275,13 +275,13 @@ export const DrawerHeader = React.forwardRef<HTMLDivElement, DrawerHeaderProps>(
       <div
         ref={ref}
         className={cn(
-          "flex items-start gap-3 border-b border-[var(--kn-border)] px-4 py-3",
+          "flex items-start gap-3 border-b border-[var(--kn-border)] px-5 py-4",
           className,
         )}
         {...props}
       >
         <div className="min-w-0 flex-1">
-          <h2 id={titleId} className="truncate text-md font-medium text-[var(--kn-text)]">
+          <h2 id={titleId} className="kn-title truncate text-lg text-[var(--kn-text)]">
             {title}
           </h2>
           {description !== undefined && description !== null && (
@@ -308,7 +308,7 @@ export const DrawerBody = React.forwardRef<HTMLDivElement, DrawerBodyProps>(func
   return (
     <div
       ref={ref}
-      className={cn("min-h-0 flex-1 overflow-y-auto px-4 py-3", className)}
+      className={cn("min-h-0 flex-1 overflow-y-auto px-5 py-4", className)}
       {...props}
     />
   );
@@ -322,7 +322,7 @@ export const DrawerFooter = React.forwardRef<HTMLDivElement, DrawerFooterProps>(
       <div
         ref={ref}
         className={cn(
-          "flex items-center justify-end gap-2 border-t border-[var(--kn-border)] px-4 py-3",
+          "flex items-center justify-end gap-2 border-t border-[var(--kn-border)] px-5 py-3",
           className,
         )}
         {...props}

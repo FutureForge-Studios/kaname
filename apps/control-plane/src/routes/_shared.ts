@@ -55,7 +55,7 @@ export function scopeFilter(
   column: PgColumn,
 ): SQL | null {
   const principal = helpers(req).requirePrincipal();
-  const scope = req.ctx.auth.scope(principal, permission);
+  const scope = req.ctx.auth.scope(principal, permission, req.ownershipScoped);
   if (scope === "global") return null;
   if (!scope || scope.length === 0) return sql`false`;
   return inArray(column, scope as string[]);
@@ -67,7 +67,7 @@ export function visibleServerIds(
   permission: Permission,
 ): "global" | readonly string[] {
   const principal = helpers(req).requirePrincipal();
-  const scope = req.ctx.auth.scope(principal, permission);
+  const scope = req.ctx.auth.scope(principal, permission, req.ownershipScoped);
   if (scope === "global") return "global";
   return scope ?? [];
 }

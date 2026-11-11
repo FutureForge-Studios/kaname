@@ -15,6 +15,7 @@ import {
   EmptyState,
   FormField,
   Input,
+  LeaderLabel,
   MonoText,
   RelativeTime,
   Select,
@@ -251,8 +252,10 @@ export default function FtpAccountsPage() {
   return (
     <>
       <ResourcePage<FtpAccount>
+        eyebrow="Files"
         title="FTP / SFTP"
         subtitle={selection.server?.hostname}
+        lede="Transfer accounts give someone a home directory on a host without giving them the panel. Click a row for its live sessions."
         state={state}
         query={query}
         columns={columns}
@@ -465,7 +468,7 @@ export default function FtpAccountsPage() {
             )
           }
         >
-          <ul className="rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-2 py-1.5">
+          <ul className="rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] px-3 py-2">
             {deleting.map((account) => (
               <li key={account.id} className="kn-mono truncate text-[var(--kn-text-2)]">
                 {account.username} — {account.home_dir}
@@ -563,6 +566,8 @@ function AccountDialog({
       error={error}
       onSubmit={() => onSubmit({ ...form, homeDir, status: mode === "edit" ? status : undefined })}
     >
+      {mode === "create" && <LeaderLabel index={1}>Account</LeaderLabel>}
+
       {mode === "create" && (
         <FormField label="Server" required error={errors["server_id"]}>
           <Select
@@ -595,6 +600,8 @@ function AccountDialog({
           />
         </FormField>
       )}
+
+      <LeaderLabel index={mode === "create" ? 2 : 1}>Access</LeaderLabel>
 
       <FormField
         label="Protocol"
@@ -663,6 +670,8 @@ function AccountDialog({
           />
         </FormField>
       )}
+
+      <LeaderLabel index={mode === "create" ? 3 : 2}>Credentials</LeaderLabel>
 
       <FormField
         label="SSH public key"

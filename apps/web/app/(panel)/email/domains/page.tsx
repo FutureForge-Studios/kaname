@@ -25,7 +25,7 @@ import { FormDialog, fieldErrors } from "../../_components/FormDialog";
 import { JobActivityBar } from "../../_components/JobActivity";
 import { FilterSelect } from "../../websites/_components/filters";
 import { DnsDrawer } from "../_components/DnsDrawer";
-import { useMailPrerequisite } from "../_components/prerequisites";
+import { MailChainChecklist, useMailPrerequisite } from "../_components/prerequisites";
 import {
   useAddMailDomain,
   useCheckMailDns,
@@ -109,7 +109,11 @@ export default function MailDomainsPage() {
               {domain.domain_name}
             </MonoText>
             {domain.is_primary && (
-              <Badge tone="accent" size="xs" title="The domain this server was installed with. It names the server and cannot be removed.">
+              <Badge
+                tone="accent"
+                size="xs"
+                title="The domain this server was installed with. It names the server and cannot be removed."
+              >
                 Primary
               </Badge>
             )}
@@ -220,7 +224,9 @@ export default function MailDomainsPage() {
   return (
     <>
       <ResourcePage<MailDomain>
+        eyebrow="Email"
         title="Mail domains"
+        lede="Domains your mail servers accept mail for. Click a row for the DNS records it needs, with the exact values to publish."
         subtitle={serverLabel ?? "Every mail server in scope"}
         primaryAction={addButton}
         state={state}
@@ -261,6 +267,7 @@ export default function MailDomainsPage() {
             allowAll
           />
         </div>
+        <MailChainChecklist needs="domain" prerequisite={prerequisite} />
         <JobActivityBar types={DOMAIN_JOB_TYPES} />
       </ResourcePage>
 
@@ -321,7 +328,11 @@ interface AddDomainDialogProps {
 
 function AddDomainDialog({ open, onOpenChange, defaultServerId }: AddDomainDialogProps) {
   const add = useAddMailDomain();
-  const domains = useList<Domain>("domains", { per_page: 200, sort: "name", order: "asc" }, { enabled: open });
+  const domains = useList<Domain>(
+    "domains",
+    { per_page: 200, sort: "name", order: "asc" },
+    { enabled: open },
+  );
   const hosted = useMailDomains();
   const servers = useMailServers();
 
@@ -351,7 +362,11 @@ function AddDomainDialog({ open, onOpenChange, defaultServerId }: AddDomainDialo
       (domains.data?.data ?? []).map((domain) => ({
         value: domain.id,
         label: domain.name,
-        description: hostedIds.has(domain.id) ? "Already hosts mail" : domain.verified ? "Control verified" : "Control not yet verified",
+        description: hostedIds.has(domain.id)
+          ? "Already hosts mail"
+          : domain.verified
+            ? "Control verified"
+            : "Control not yet verified",
         disabled: hostedIds.has(domain.id),
         mono: true,
       })),
@@ -375,13 +390,22 @@ function AddDomainDialog({ open, onOpenChange, defaultServerId }: AddDomainDialo
       onSubmit={() => {
         if (!domainId || !chosenServer || !chosenDomain) return;
         add.mutate(
-          { domain_id: domainId, server_id: chosenServer.server_id, domain_name: chosenDomain.name },
+          {
+            domain_id: domainId,
+            server_id: chosenServer.server_id,
+            domain_name: chosenDomain.name,
+          },
           { onSuccess: () => onOpenChange(false) },
         );
       }}
     >
       <FormField label="Mail server" required error={fields["server_id"]}>
-        <MailServerPicker value={mailServerId} onChange={setMailServerId} size="md" className="w-full" />
+        <MailServerPicker
+          value={mailServerId}
+          onChange={setMailServerId}
+          size="md"
+          className="w-full"
+        />
       </FormField>
 
       <FormField

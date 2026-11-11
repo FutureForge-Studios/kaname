@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Select } from "@kaname/ui";
+import { MonoLabel, Select } from "@kaname/ui";
 
 /* ------------------------------------------------------------------ *
  * FilterSelect — the toolbar control every list in this module uses.
@@ -36,5 +36,27 @@ export function FilterSelect({ label, value, onChange, options, className }: Fil
       boxClassName="w-auto min-w-32"
       options={[{ value: "", label: `Any ${label.toLowerCase()}` }, ...options]}
     />
+  );
+}
+
+/**
+ * The scope row above a list: which host or zone the table is narrowed
+ * to. It is not a filter (it changes what the page is about), so it sits
+ * on its own labelled line rather than in the table toolbar.
+ */
+export function ScopeBar({
+  label = "Scope",
+  children,
+}: {
+  label?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+      <MonoLabel tone="muted" className="w-12 shrink-0">
+        {label}
+      </MonoLabel>
+      {children}
+    </div>
   );
 }

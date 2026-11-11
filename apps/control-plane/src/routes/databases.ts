@@ -104,7 +104,7 @@ function authorizeAnyEngine(req: FastifyRequest, action: DbAction): void {
   const h = helpers(req);
   const principal = h.requirePrincipal();
   const granted = ENGINE_GROUPS.map((g) => dbPermission(g.engine, action)).find(
-    (permission) => req.ctx.auth.scope(principal, permission) !== null,
+    (permission) => req.ctx.auth.scope(principal, permission, req.ownershipScoped) !== null,
   );
   h.authorize(granted ?? dbPermission("mysql", action));
 }
@@ -152,6 +152,8 @@ const SORTABLE_USERS = {
   server: servers.name,
   created_at: dbUsers.createdAt,
 } as const;
+
+import { assertOwned, ownership, type Ownership } from "./_ownership.js";
 
 export async function databaseRoutes(app: FastifyInstance): Promise<void> {
   /* ---------------------------- instances --------------------------- */
@@ -392,13 +394,15 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/databases", async (req, reply) => {
     const q = parseQuery(req, databaseListQuery);
+    const own = ownership(req);
     authorizeAnyEngine(req, "read");
-    const page = await queryDatabases(req, q);
+    const page = await queryDatabases(req, q, own);
     return list(reply, page.rows, paginate(page.total, q.page, q.per_page));
   });
 
   app.get("/databases/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const { database, server } = await loadDatabase(req, id, "read");
     const instance = await instanceRow(req, database.instanceId);
     const users = await grantsByDatabase(req, [database.id]);
@@ -407,6 +411,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/databases", async (req, reply) => {
     const body = parseBody(req, createDatabaseBody);
+    const own = ownership(req);
     authorizeAnyEngine(req, "write");
 
     const instance = await instanceRow(req, body.instance_id);
@@ -435,6 +440,9 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
+    if (own.restricted) await confineDatabase(req, instance, body);
+    await own.reserve("database");
+
     const [database] = await req.ctx.db
       .insert(dbDatabases)
       .values({
@@ -448,6 +456,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
         lastSyncedAt: new Date(),
       })
       .returning();
+    await own.claim("database", database!.id);
 
     await req.ctx.audit.record({
       actor: h.actor(),
@@ -616,6 +625,7 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete("/databases/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const { database, server } = await loadDatabase(req, id, "delete");
 
     const job = await enqueueServerJob(req, {
@@ -633,9 +643,11 @@ export async function databaseRoutes(app: FastifyInstance): Promise<void> {
   /** Live size, straight from the engine. Read-only, so no job. */
   app.get("/databases/:id/size", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     authorizeAnyEngine(req, "read");
 
     const database = await databaseRow(req, id);
+    await assertOwned(req, "database", id, "Database");
     const server = await loadConnectedServer(
       req,
       database.serverId,
@@ -1142,6 +1154,54 @@ type InstanceRow = typeof dbInstances.$inferSelect;
 type DatabaseRow = typeof dbDatabases.$inferSelect;
 type DbUserRow = typeof dbUsers.$inferSelect;
 
+/** Role names every engine ships with; a scoped account may not create or own as one. */
+const RESERVED_DB_ROLES = new Set([
+  "root",
+  "postgres",
+  "mysql",
+  "mariadb",
+  "admin",
+  "replication",
+  "debian-sys-maint",
+  "kaname",
+]);
+
+/**
+ * What a reseller or client may not choose on a shared engine
+ * (KD-039): the database's owner is the user created with it or
+ * nobody, and that user must be new to the instance, so a create can
+ * never touch a role that already exists.
+ */
+async function confineDatabase(
+  req: FastifyRequest,
+  instance: InstanceRow,
+  body: { owner?: string; create_user?: { username: string } },
+): Promise<void> {
+  const username = body.create_user?.username;
+  if (body.owner !== undefined && body.owner !== username) {
+    throw new ApiException("forbidden", "This account cannot give a database to an existing role.", {
+      fields: { owner: "leave empty, or use the user created with the database" },
+    });
+  }
+  if (!username) return;
+  const taken =
+    RESERVED_DB_ROLES.has(username.toLowerCase()) ||
+    username.toLowerCase().startsWith("pg_") ||
+    (
+      await req.ctx.db
+        .select({ id: dbUsers.id })
+        .from(dbUsers)
+        .where(and(eq(dbUsers.instanceId, instance.id), eq(dbUsers.username, username)))
+        .limit(1)
+    ).length > 0;
+  if (taken) {
+    throw conflict(`The user name "${username}" is not available on this server.`, {
+      summary: "Pick a user name that is not in use yet.",
+      actions: [],
+    });
+  }
+}
+
 async function instanceRow(req: FastifyRequest, id: string): Promise<InstanceRow> {
   const rows = await req.ctx.db.select().from(dbInstances).where(eq(dbInstances.id, id)).limit(1);
   const row = rows[0];
@@ -1175,6 +1235,7 @@ async function loadDatabase(
   authorizeAnyEngine(req, action);
   const database = await databaseRow(req, id);
   const server = await loadServer(req, database.serverId, dbPermission(database.engine, action));
+  await assertOwned(req, "database", id, "Database");
   return { database, server };
 }
 
@@ -1198,10 +1259,12 @@ async function loadDbUser(
 async function queryDatabases(
   req: FastifyRequest,
   q: DatabaseListQuery,
+  own?: Ownership,
 ): Promise<{ rows: DatabaseResource[]; total: number }> {
   const term = searchTerm(q.q);
   const where = combine(
     engineScopeFilter(req, "read", dbDatabases.serverId, dbDatabases.engine),
+    own?.filter("database", dbDatabases.id),
     q.server_id ? eq(dbDatabases.serverId, q.server_id) : null,
     q.instance_id ? eq(dbDatabases.instanceId, q.instance_id) : null,
     q.engine ? eq(dbDatabases.engine, q.engine) : null,

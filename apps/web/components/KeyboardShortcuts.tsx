@@ -175,7 +175,7 @@ function ShortcutSheet({ open, onOpenChange, jumps, onOpenJobs }: ShortcutSheetP
           <ShortcutGroup title="Lists and tables" bindings={LIST_BINDINGS} />
 
           <section className="min-w-0">
-            <h3 className="mb-2 text-2xs font-medium uppercase tracking-wider text-[var(--kn-text-3)]">
+            <h3 className="kn-label-sm mb-2 text-[var(--kn-text-3)]">
               Go to
             </h3>
             <ul className="flex flex-col">
@@ -196,7 +196,7 @@ function ShortcutSheet({ open, onOpenChange, jumps, onOpenJobs }: ShortcutSheetP
           </section>
 
           <section className="min-w-0">
-            <h3 className="mb-2 text-2xs font-medium uppercase tracking-wider text-[var(--kn-text-3)]">
+            <h3 className="kn-label-sm mb-2 text-[var(--kn-text-3)]">
               Jobs
             </h3>
             <p className="text-[var(--kn-text-2)]">
@@ -223,7 +223,7 @@ function ShortcutSheet({ open, onOpenChange, jumps, onOpenJobs }: ShortcutSheetP
 function ShortcutGroup({ title, bindings }: { title: string; bindings: readonly Binding[] }) {
   return (
     <section className="min-w-0">
-      <h3 className="mb-2 text-2xs font-medium uppercase tracking-wider text-[var(--kn-text-3)]">
+      <h3 className="kn-label-sm mb-2 text-[var(--kn-text-3)]">
         {title}
       </h3>
       <ul className="flex flex-col">

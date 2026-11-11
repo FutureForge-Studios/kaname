@@ -274,7 +274,9 @@ export default function ServersPage() {
   return (
     <>
       <ResourcePage<Server>
+        eyebrow="Infrastructure"
         title="Servers"
+        lede="Every host Kaname manages, through an agent that dials out. Agent state and health are separate columns on purpose."
         subtitle={query.data ? `${formatCount(query.data.meta.total)} in scope` : undefined}
         primaryAction={addButton}
         state={state}

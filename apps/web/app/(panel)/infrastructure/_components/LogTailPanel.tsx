@@ -2,7 +2,15 @@
 
 import * as React from "react";
 import { RefreshCw } from "lucide-react";
-import { IconButton, LogViewer, Select, StatusBadge, type Tone } from "@kaname/ui";
+import {
+  CardInset,
+  IconButton,
+  LogViewer,
+  MonoLabel,
+  Select,
+  StatusBadge,
+  type Tone,
+} from "@kaname/ui";
 import type { QueryParams } from "@/lib/api";
 import { PageError } from "@/components/PageError";
 import { useLogTail, type LogTailStatus } from "../_lib/logStream";
@@ -76,9 +84,17 @@ export function LogTailPanel({
 
   if (unavailable) {
     return (
-      <div className="rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] px-4 py-6 text-center text-[var(--kn-text-2)]">
-        {unavailable}
-      </div>
+      <CardInset
+        grid
+        padding="lg"
+        className="flex flex-col items-center justify-center text-center text-[var(--kn-text-2)]"
+        style={{ minHeight: typeof height === "number" ? Math.min(height, 240) : 240 }}
+      >
+        <MonoLabel size="xs" tone="subtle" className="mb-3">
+          Stream unavailable
+        </MonoLabel>
+        <div className="max-w-md">{unavailable}</div>
+      </CardInset>
     );
   }
 

@@ -27,7 +27,7 @@ import {
   useMailDomains,
   useMailboxes,
 } from "../_components/queries";
-import { useMailPrerequisite } from "../_components/prerequisites";
+import { MailChainChecklist, useMailPrerequisite } from "../_components/prerequisites";
 import { DomainPicker, MailServerPicker, RowStatusBadge } from "../_components/status";
 
 /* ------------------------------------------------------------------ *
@@ -147,7 +147,9 @@ export default function AliasesPage() {
   return (
     <>
       <ResourcePage<MailAlias>
+        eyebrow="Email"
         title="Aliases"
+        lede="Extra addresses that deliver into a mailbox on the same domain: sales@ into alice@."
         subtitle="Extra addresses that deliver into a mailbox"
         primaryAction={createButton}
         state={state}
@@ -176,6 +178,7 @@ export default function AliasesPage() {
             allowAll
           />
         </div>
+        <MailChainChecklist needs="alias" prerequisite={prerequisite} />
         <JobActivityBar types={ALIAS_JOB_TYPES} />
       </ResourcePage>
 
@@ -240,7 +243,13 @@ function CreateAliasDialog({ open, onOpenChange, defaultDomainId }: CreateAliasD
   }, [domainId]);
 
   const mailboxes = useMailboxes(
-    { mail_domain_id: domainId ?? undefined, status: "active", per_page: 200, sort: "address", order: "asc" },
+    {
+      mail_domain_id: domainId ?? undefined,
+      status: "active",
+      per_page: 200,
+      sort: "address",
+      order: "asc",
+    },
     open && domainId !== null,
   );
 
@@ -294,25 +303,35 @@ function CreateAliasDialog({ open, onOpenChange, defaultDomainId }: CreateAliasD
         hint={<MonoText muted>{address}</MonoText>}
         error={
           fields["local_part"] ??
-          (localPart.length > 0 && !localValid ? "Use letters, digits, dots, dashes or underscores." : undefined)
+          (localPart.length > 0 && !localValid
+            ? "Use letters, digits, dots, dashes or underscores."
+            : undefined)
         }
       >
         <Input
           mono
           value={localPart}
           placeholder="sales"
-          onChange={(event: React.ChangeEvent<HTMLInputElement>) => setLocalPart(event.target.value)}
+          onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+            setLocalPart(event.target.value)
+          }
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
-          trailing={domain ? <span className="kn-mono text-[var(--kn-text-3)]">@{domain.domain_name}</span> : undefined}
+          trailing={
+            domain ? (
+              <span className="kn-mono text-[var(--kn-text-3)]">@{domain.domain_name}</span>
+            ) : undefined
+          }
         />
       </FormField>
 
       <FormField
         label="Delivers to"
         required
-        description={domain ? `An active mailbox on ${domain.domain_name}.` : "Pick a domain first."}
+        description={
+          domain ? `An active mailbox on ${domain.domain_name}.` : "Pick a domain first."
+        }
         error={fields["mailbox_id"]}
       >
         {mailboxes.isLoading ? (

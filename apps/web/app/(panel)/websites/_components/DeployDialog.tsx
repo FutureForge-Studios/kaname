@@ -3,7 +3,7 @@
 import * as React from "react";
 import type { DeploymentSource, Site } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, type ComboboxOption } from "@kaname/ui";
-import { FormDialog, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
 import { useSites, useTriggerDeployment } from "./queries";
 
 /* ------------------------------------------------------------------ *
@@ -112,6 +112,9 @@ export function DeployDialog({
     );
   };
 
+  /* Numbered in reading order: opened from a site, there is no target step. */
+  const step = site ? 0 : 1;
+
   return (
     <FormDialog
       open={open}
@@ -124,85 +127,91 @@ export function DeployDialog({
       onSubmit={submit}
     >
       {!site && (
-        <FormField label="Site" error={errorFor("site_id")} required>
-          <Combobox
-            options={siteOptions}
-            value={form.siteId}
-            onValueChange={(next) => set("siteId", next ?? "")}
-            placeholder="Select a site"
-            emptyMessage="No site matches that name."
-            loading={sites.isLoading}
-            mono
+        <FormSection index={1} title="Target">
+          <FormField label="Site" error={errorFor("site_id")} required>
+            <Combobox
+              options={siteOptions}
+              value={form.siteId}
+              onValueChange={(next) => set("siteId", next ?? "")}
+              placeholder="Select a site"
+              emptyMessage="No site matches that name."
+              loading={sites.isLoading}
+              mono
+            />
+          </FormField>
+        </FormSection>
+      )}
+
+      <FormSection index={step + 1} title="What to build">
+        <FormField label="Source" description="An upload deployment needs no repository.">
+          <Select
+            value={form.source}
+            onChange={(event) => set("source", event.target.value as DeploymentSource)}
+            options={[
+              { value: "git", label: "Git repository" },
+              { value: "upload", label: "Uploaded build" },
+            ]}
           />
         </FormField>
-      )}
 
-      <FormField label="Source" description="An upload deployment needs no repository.">
-        <Select
-          value={form.source}
-          onChange={(event) => set("source", event.target.value as DeploymentSource)}
-          options={[
-            { value: "git", label: "Git repository" },
-            { value: "upload", label: "Uploaded build" },
-          ]}
+        {form.source === "git" && (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <FormField
+              label="Repository"
+              description="Leave blank to use the one on the site."
+              error={errorFor("repo_url")}
+            >
+              <Input
+                value={form.repoUrl}
+                onChange={(event) => set("repoUrl", event.target.value)}
+                placeholder="From the site"
+                mono
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </FormField>
+
+            <FormField
+              label="Branch"
+              description="Defaults to the site's branch."
+              error={errorFor("branch")}
+            >
+              <Input
+                value={form.branch}
+                onChange={(event) => set("branch", event.target.value)}
+                placeholder="main"
+                mono
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </FormField>
+          </div>
+        )}
+      </FormSection>
+
+      <FormSection index={step + 2} title="Which commit">
+        <FormField
+          label="Revision"
+          description="Pin the run to one commit, or leave blank to take the branch head."
+          error={errorFor("commit_sha")}
+        >
+          <Input
+            value={form.commitSha}
+            onChange={(event) => set("commitSha", event.target.value)}
+            placeholder="Branch head"
+            mono
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </FormField>
+
+        <Switch
+          checked={form.force}
+          onChange={(event) => set("force", event.target.checked)}
+          label="Deploy even if this revision already runs"
+          description="Without this, redeploying the running commit is refused as a no-op."
         />
-      </FormField>
-
-      {form.source === "git" && (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField
-            label="Repository"
-            description="Leave blank to use the one on the site."
-            error={errorFor("repo_url")}
-          >
-            <Input
-              value={form.repoUrl}
-              onChange={(event) => set("repoUrl", event.target.value)}
-              placeholder="From the site"
-              mono
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </FormField>
-
-          <FormField
-            label="Branch"
-            description="Defaults to the site's branch."
-            error={errorFor("branch")}
-          >
-            <Input
-              value={form.branch}
-              onChange={(event) => set("branch", event.target.value)}
-              placeholder="main"
-              mono
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </FormField>
-        </div>
-      )}
-
-      <FormField
-        label="Revision"
-        description="Pin the run to one commit, or leave blank to take the branch head."
-        error={errorFor("commit_sha")}
-      >
-        <Input
-          value={form.commitSha}
-          onChange={(event) => set("commitSha", event.target.value)}
-          placeholder="Branch head"
-          mono
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </FormField>
-
-      <Switch
-        checked={form.force}
-        onChange={(event) => set("force", event.target.checked)}
-        label="Deploy even if this revision already runs"
-        description="Without this, redeploying the running commit is refused as a no-op."
-      />
+      </FormSection>
     </FormDialog>
   );
 }

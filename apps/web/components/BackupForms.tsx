@@ -27,6 +27,7 @@ import {
   IconButton,
   Input,
   MonoText,
+  NumberedSection,
   Select,
   StatusBadge,
   Switch,
@@ -362,262 +363,286 @@ export function DestinationDialog({
         <DialogBody>
           <FormError error={error} onRetry={() => save.mutate()} />
 
-          <div className="flex flex-col gap-4">
-            <FormField label="Name" required error={fieldError(error, "name")}>
-              <Input
-                value={draft.name}
-                onChange={(event) => patch({ name: event.target.value })}
-                placeholder="offsite-s3"
-                autoComplete="off"
-                data-autofocus=""
-              />
-            </FormField>
-
-            <FormField
-              label="Kind"
-              required
-              description={
-                editing
-                  ? "A destination's kind is fixed — a different transport is a different destination."
-                  : undefined
-              }
+          <div className="flex flex-col gap-6">
+            <NumberedSection
+              index={1}
+              title="Destination"
+              caption="What it is called, and how it is reached."
+              headingLevel={3}
             >
-              <Select
-                value={draft.kind}
-                disabled={editing}
-                onChange={(event) => patch({ kind: event.target.value as DestinationKind })}
-                options={(Object.keys(DESTINATION_KIND_LABELS) as DestinationKind[]).map(
-                  (kind) => ({ value: kind, label: DESTINATION_KIND_LABELS[kind] }),
-                )}
-              />
-            </FormField>
+              <FormField label="Name" required error={fieldError(error, "name")}>
+                <Input
+                  value={draft.name}
+                  onChange={(event) => patch({ name: event.target.value })}
+                  placeholder="offsite-s3"
+                  autoComplete="off"
+                  data-autofocus=""
+                />
+              </FormField>
 
-            {editing && (
-              <Switch
-                checked={rotate}
-                onChange={(event) => setRotate(event.target.checked)}
-                label="Replace credentials"
-                description="Sending a target again is the only way to rotate a stored credential."
-              />
-            )}
+              <FormField
+                label="Kind"
+                required
+                description={
+                  editing
+                    ? "A destination's kind is fixed — a different transport is a different destination."
+                    : undefined
+                }
+              >
+                <Select
+                  value={draft.kind}
+                  disabled={editing}
+                  onChange={(event) => patch({ kind: event.target.value as DestinationKind })}
+                  options={(Object.keys(DESTINATION_KIND_LABELS) as DestinationKind[]).map(
+                    (kind) => ({ value: kind, label: DESTINATION_KIND_LABELS[kind] }),
+                  )}
+                />
+              </FormField>
 
-            {draft.kind === "local" && (
-              <>
-                <FormField label="Server" required error={fieldError(error, "target.server_id")}>
-                  <Combobox
-                    options={
-                      servers.data?.data.map((server) => ({
-                        value: server.id,
-                        label: server.name,
-                        description: server.hostname,
-                        mono: true,
-                      })) ?? []
-                    }
-                    value={draft.serverId}
-                    onValueChange={(next) => patch({ serverId: next ?? "" })}
-                    loading={servers.isLoading}
-                    placeholder="Select a server"
-                    emptyMessage="No server matches that name."
-                    mono
-                  />
-                </FormField>
-                <FormField
-                  label="Directory"
-                  required
-                  description="Only schedules on this same server can write here."
-                  error={fieldError(error, "target.path")}
-                >
-                  <Input
-                    mono
-                    value={draft.path}
-                    onChange={(event) => patch({ path: event.target.value })}
-                    placeholder="/var/backups/kaname"
-                  />
-                </FormField>
-              </>
-            )}
+              {editing && (
+                <Switch
+                  checked={rotate}
+                  onChange={(event) => setRotate(event.target.checked)}
+                  label="Replace credentials"
+                  description="Sending a target again is the only way to rotate a stored credential."
+                />
+              )}
+            </NumberedSection>
 
-            {(draft.kind === "s3" || draft.kind === "b2") && (
-              <>
-                {draft.kind === "s3" && (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <FormField
-                      label="Endpoint"
-                      description="Leave empty for AWS."
-                      error={fieldError(error, "target.endpoint")}
-                    >
-                      <Input
-                        mono
-                        value={draft.endpoint}
-                        onChange={(event) => patch({ endpoint: event.target.value })}
-                        placeholder="s3.eu-central-1.wasabisys.com"
-                      />
-                    </FormField>
-                    <FormField label="Region" required error={fieldError(error, "target.region")}>
-                      <Input
-                        mono
-                        value={draft.region}
-                        onChange={(event) => patch({ region: event.target.value })}
-                      />
-                    </FormField>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <FormField label="Bucket" required error={fieldError(error, "target.bucket")}>
-                    <Input
+            <NumberedSection
+              index={2}
+              title={draft.kind === "local" ? "Location" : "Location and access"}
+              caption={
+                draft.kind === "local"
+                  ? "A directory on one managed server."
+                  : secretsShown
+                    ? "Credentials are write-only once saved."
+                    : "Stored credentials are kept as they are."
+              }
+              headingLevel={3}
+            >
+              {draft.kind === "local" && (
+                <>
+                  <FormField label="Server" required error={fieldError(error, "target.server_id")}>
+                    <Combobox
+                      options={
+                        servers.data?.data.map((server) => ({
+                          value: server.id,
+                          label: server.name,
+                          description: server.hostname,
+                          mono: true,
+                        })) ?? []
+                      }
+                      value={draft.serverId}
+                      onValueChange={(next) => patch({ serverId: next ?? "" })}
+                      loading={servers.isLoading}
+                      placeholder="Select a server"
+                      emptyMessage="No server matches that name."
                       mono
-                      value={draft.bucket}
-                      onChange={(event) => patch({ bucket: event.target.value })}
                     />
                   </FormField>
                   <FormField
-                    label="Prefix"
-                    description="Repositories are created under it, one per schedule."
-                    error={fieldError(error, "target.prefix")}
+                    label="Directory"
+                    required
+                    description="Only schedules on this same server can write here."
+                    error={fieldError(error, "target.path")}
                   >
-                    <Input
-                      mono
-                      value={draft.prefix}
-                      onChange={(event) => patch({ prefix: event.target.value })}
-                      placeholder="kaname"
-                    />
-                  </FormField>
-                </div>
-
-                {secretsShown && (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <FormField
-                      label={draft.kind === "b2" ? "Key ID" : "Access key ID"}
-                      required
-                      error={fieldError(error, "target.access_key_id")}
-                    >
-                      <Input
-                        mono
-                        autoComplete="off"
-                        value={draft.accessKeyId}
-                        onChange={(event) => patch({ accessKeyId: event.target.value })}
-                      />
-                    </FormField>
-                    <FormField
-                      label={draft.kind === "b2" ? "Application key" : "Secret access key"}
-                      required
-                      error={fieldError(error, "target.secret_access_key")}
-                    >
-                      <Input
-                        mono
-                        type="password"
-                        autoComplete="new-password"
-                        value={draft.secretAccessKey}
-                        onChange={(event) => patch({ secretAccessKey: event.target.value })}
-                      />
-                    </FormField>
-                  </div>
-                )}
-              </>
-            )}
-
-            {draft.kind === "sftp" && (
-              <>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_96px]">
-                  <FormField label="Host" required error={fieldError(error, "target.host")}>
-                    <Input
-                      mono
-                      value={draft.host}
-                      onChange={(event) => patch({ host: event.target.value })}
-                      placeholder="backup.example.com"
-                    />
-                  </FormField>
-                  <FormField label="Port" required error={fieldError(error, "target.port")}>
-                    <Input
-                      mono
-                      inputMode="numeric"
-                      value={draft.port}
-                      onChange={(event) => patch({ port: event.target.value })}
-                    />
-                  </FormField>
-                </div>
-
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <FormField label="Username" required error={fieldError(error, "target.username")}>
-                    <Input
-                      mono
-                      autoComplete="off"
-                      value={draft.username}
-                      onChange={(event) => patch({ username: event.target.value })}
-                    />
-                  </FormField>
-                  <FormField label="Path" required error={fieldError(error, "target.path")}>
                     <Input
                       mono
                       value={draft.path}
                       onChange={(event) => patch({ path: event.target.value })}
-                      placeholder="/srv/backups"
+                      placeholder="/var/backups/kaname"
                     />
                   </FormField>
-                </div>
+                </>
+              )}
 
-                {secretsShown && (
-                  <>
-                    <FormField label="Authentication" required>
-                      <Select
-                        value={draft.authMethod}
-                        onChange={(event) =>
-                          patch({ authMethod: event.target.value as "password" | "key" })
-                        }
-                        options={[
-                          { value: "password", label: "Password" },
-                          { value: "key", label: "Private key" },
-                        ]}
-                      />
-                    </FormField>
-
-                    {draft.authMethod === "password" ? (
+              {(draft.kind === "s3" || draft.kind === "b2") && (
+                <>
+                  {draft.kind === "s3" && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                       <FormField
-                        label="Password"
-                        required
-                        error={fieldError(error, "target.auth.password")}
+                        label="Endpoint"
+                        description="Leave empty for AWS."
+                        error={fieldError(error, "target.endpoint")}
                       >
                         <Input
-                          type="password"
-                          autoComplete="new-password"
-                          value={draft.password}
-                          onChange={(event) => patch({ password: event.target.value })}
+                          mono
+                          value={draft.endpoint}
+                          onChange={(event) => patch({ endpoint: event.target.value })}
+                          placeholder="s3.eu-central-1.wasabisys.com"
                         />
                       </FormField>
-                    ) : (
-                      <>
+                      <FormField label="Region" required error={fieldError(error, "target.region")}>
+                        <Input
+                          mono
+                          value={draft.region}
+                          onChange={(event) => patch({ region: event.target.value })}
+                        />
+                      </FormField>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <FormField label="Bucket" required error={fieldError(error, "target.bucket")}>
+                      <Input
+                        mono
+                        value={draft.bucket}
+                        onChange={(event) => patch({ bucket: event.target.value })}
+                      />
+                    </FormField>
+                    <FormField
+                      label="Prefix"
+                      description="Repositories are created under it, one per schedule."
+                      error={fieldError(error, "target.prefix")}
+                    >
+                      <Input
+                        mono
+                        value={draft.prefix}
+                        onChange={(event) => patch({ prefix: event.target.value })}
+                        placeholder="kaname"
+                      />
+                    </FormField>
+                  </div>
+
+                  {secretsShown && (
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <FormField
+                        label={draft.kind === "b2" ? "Key ID" : "Access key ID"}
+                        required
+                        error={fieldError(error, "target.access_key_id")}
+                      >
+                        <Input
+                          mono
+                          autoComplete="off"
+                          value={draft.accessKeyId}
+                          onChange={(event) => patch({ accessKeyId: event.target.value })}
+                        />
+                      </FormField>
+                      <FormField
+                        label={draft.kind === "b2" ? "Application key" : "Secret access key"}
+                        required
+                        error={fieldError(error, "target.secret_access_key")}
+                      >
+                        <Input
+                          mono
+                          type="password"
+                          autoComplete="new-password"
+                          value={draft.secretAccessKey}
+                          onChange={(event) => patch({ secretAccessKey: event.target.value })}
+                        />
+                      </FormField>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {draft.kind === "sftp" && (
+                <>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_96px]">
+                    <FormField label="Host" required error={fieldError(error, "target.host")}>
+                      <Input
+                        mono
+                        value={draft.host}
+                        onChange={(event) => patch({ host: event.target.value })}
+                        placeholder="backup.example.com"
+                      />
+                    </FormField>
+                    <FormField label="Port" required error={fieldError(error, "target.port")}>
+                      <Input
+                        mono
+                        inputMode="numeric"
+                        value={draft.port}
+                        onChange={(event) => patch({ port: event.target.value })}
+                      />
+                    </FormField>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <FormField
+                      label="Username"
+                      required
+                      error={fieldError(error, "target.username")}
+                    >
+                      <Input
+                        mono
+                        autoComplete="off"
+                        value={draft.username}
+                        onChange={(event) => patch({ username: event.target.value })}
+                      />
+                    </FormField>
+                    <FormField label="Path" required error={fieldError(error, "target.path")}>
+                      <Input
+                        mono
+                        value={draft.path}
+                        onChange={(event) => patch({ path: event.target.value })}
+                        placeholder="/srv/backups"
+                      />
+                    </FormField>
+                  </div>
+
+                  {secretsShown && (
+                    <>
+                      <FormField label="Authentication" required>
+                        <Select
+                          value={draft.authMethod}
+                          onChange={(event) =>
+                            patch({ authMethod: event.target.value as "password" | "key" })
+                          }
+                          options={[
+                            { value: "password", label: "Password" },
+                            { value: "key", label: "Private key" },
+                          ]}
+                        />
+                      </FormField>
+
+                      {draft.authMethod === "password" ? (
                         <FormField
-                          label="Private key"
+                          label="Password"
                           required
-                          description="PEM, including the BEGIN and END lines."
-                          error={fieldError(error, "target.auth.private_key")}
-                        >
-                          <Textarea
-                            mono
-                            rows={4}
-                            spellCheck={false}
-                            value={draft.privateKey}
-                            onChange={(event) => patch({ privateKey: event.target.value })}
-                          />
-                        </FormField>
-                        <FormField
-                          label="Passphrase"
-                          error={fieldError(error, "target.auth.passphrase")}
+                          error={fieldError(error, "target.auth.password")}
                         >
                           <Input
                             type="password"
                             autoComplete="new-password"
-                            value={draft.passphrase}
-                            onChange={(event) => patch({ passphrase: event.target.value })}
+                            value={draft.password}
+                            onChange={(event) => patch({ password: event.target.value })}
                           />
                         </FormField>
-                      </>
-                    )}
-                  </>
-                )}
-              </>
-            )}
+                      ) : (
+                        <>
+                          <FormField
+                            label="Private key"
+                            required
+                            description="PEM, including the BEGIN and END lines."
+                            error={fieldError(error, "target.auth.private_key")}
+                          >
+                            <Textarea
+                              mono
+                              rows={4}
+                              spellCheck={false}
+                              value={draft.privateKey}
+                              onChange={(event) => patch({ privateKey: event.target.value })}
+                            />
+                          </FormField>
+                          <FormField
+                            label="Passphrase"
+                            error={fieldError(error, "target.auth.passphrase")}
+                          >
+                            <Input
+                              type="password"
+                              autoComplete="new-password"
+                              value={draft.passphrase}
+                              onChange={(event) => patch({ passphrase: event.target.value })}
+                            />
+                          </FormField>
+                        </>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </NumberedSection>
 
             <TestResult result={test} />
           </div>
@@ -843,181 +868,220 @@ export function ScheduleDialog({
         <DialogBody>
           <FormError error={error} onRetry={() => save.mutate()} />
 
-          <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <FormField label="Name" required error={fieldError(error, "name")}>
-                <Input
-                  value={draft.name}
-                  onChange={(event) => patch({ name: event.target.value })}
-                  placeholder="web-01 nightly"
-                  autoComplete="off"
-                  data-autofocus=""
-                />
-              </FormField>
+          <div className="flex flex-col gap-6">
+            <NumberedSection
+              index={1}
+              title="What"
+              caption="The host it reads from, and what it takes."
+              headingLevel={3}
+            >
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField label="Name" required error={fieldError(error, "name")}>
+                  <Input
+                    value={draft.name}
+                    onChange={(event) => patch({ name: event.target.value })}
+                    placeholder="web-01 nightly"
+                    autoComplete="off"
+                    data-autofocus=""
+                  />
+                </FormField>
 
+                <FormField
+                  label="Server"
+                  required
+                  description={editing ? "Fixed for the life of the schedule." : undefined}
+                  error={fieldError(error, "server_id")}
+                >
+                  <Combobox
+                    options={
+                      servers.data?.data.map((server) => ({
+                        value: server.id,
+                        label: server.name,
+                        description: server.hostname,
+                        mono: true,
+                      })) ?? []
+                    }
+                    value={editing ? schedule.server_id : draft.serverId}
+                    onValueChange={(next) => patch({ serverId: next ?? "" })}
+                    disabled={editing}
+                    loading={servers.isLoading}
+                    placeholder="Select a server"
+                    emptyMessage="No server matches that name."
+                    mono
+                  />
+                </FormField>
+              </div>
+
+              <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
+                <legend className="kn-label-sm mb-1 p-0 text-[var(--kn-text-2)]">Scope</legend>
+                {draft.scope.map((entry, index) => (
+                  <div
+                    key={index}
+                    className="grid grid-cols-1 items-start gap-2 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] p-2 sm:grid-cols-[160px_minmax(0,1fr)_28px]"
+                  >
+                    <Select
+                      value={entry.kind}
+                      aria-label={`Scope ${index + 1} kind`}
+                      onChange={(event) => {
+                        const next = [...draft.scope];
+                        next[index] = { ...entry, kind: event.target.value as ScopeKind };
+                        patch({ scope: next });
+                      }}
+                      options={(Object.keys(SCOPE_KIND_LABELS) as ScopeKind[]).map((kind) => ({
+                        value: kind,
+                        label: SCOPE_KIND_LABELS[kind],
+                      }))}
+                    />
+                    <Textarea
+                      mono
+                      rows={2}
+                      spellCheck={false}
+                      aria-label={`Scope ${index + 1} selectors`}
+                      placeholder={SCOPE_HINTS[entry.kind]}
+                      value={entry.selectors}
+                      onChange={(event) => {
+                        const next = [...draft.scope];
+                        next[index] = { ...entry, selectors: event.target.value };
+                        patch({ scope: next });
+                      }}
+                    />
+                    <IconButton
+                      icon={Trash2}
+                      label={`Remove scope ${index + 1}`}
+                      size="sm"
+                      disabled={draft.scope.length === 1}
+                      onClick={() =>
+                        patch({ scope: draft.scope.filter((_, position) => position !== index) })
+                      }
+                    />
+                  </div>
+                ))}
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-[var(--kn-text-2)]">
+                    {SCOPE_HINTS[draft.scope[draft.scope.length - 1]?.kind ?? "files"]}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="xs"
+                    icon={Plus}
+                    onClick={() =>
+                      patch({ scope: [...draft.scope, { kind: "files", selectors: "" }] })
+                    }
+                  >
+                    Add scope
+                  </Button>
+                </div>
+                {fieldError(error, "scope") && (
+                  <p role="alert" className="text-xs text-[var(--kn-danger)]">
+                    {fieldError(error, "scope")}
+                  </p>
+                )}
+              </fieldset>
+            </NumberedSection>
+
+            <NumberedSection
+              index={2}
+              title="Where"
+              caption="The destination the snapshots are written to."
+              headingLevel={3}
+            >
               <FormField
-                label="Server"
+                label="Destination"
                 required
-                description={editing ? "Fixed for the life of the schedule." : undefined}
-                error={fieldError(error, "server_id")}
+                description={
+                  destination?.kind === "local"
+                    ? "A local destination is a directory on one host, so only schedules on that same host can write to it."
+                    : undefined
+                }
+                error={fieldError(error, "destination_id")}
               >
                 <Combobox
                   options={
-                    servers.data?.data.map((server) => ({
-                      value: server.id,
-                      label: server.name,
-                      description: server.hostname,
-                      mono: true,
+                    destinations.data?.data.map((row) => ({
+                      value: row.id,
+                      label: row.name,
+                      description: `${DESTINATION_KIND_LABELS[row.kind]} · ${describeDestination(row)}`,
                     })) ?? []
                   }
-                  value={editing ? schedule.server_id : draft.serverId}
-                  onValueChange={(next) => patch({ serverId: next ?? "" })}
-                  disabled={editing}
-                  loading={servers.isLoading}
-                  placeholder="Select a server"
-                  emptyMessage="No server matches that name."
-                  mono
+                  value={draft.destinationId}
+                  onValueChange={(next) => patch({ destinationId: next ?? "" })}
+                  loading={destinations.isLoading}
+                  placeholder="Select a destination"
+                  emptyMessage="No destination matches that name."
                 />
               </FormField>
-            </div>
 
-            <FormField
-              label="Destination"
-              required
-              description={
-                destination?.kind === "local"
-                  ? "A local destination is a directory on one host, so only schedules on that same host can write to it."
-                  : undefined
-              }
-              error={fieldError(error, "destination_id")}
+              <Switch
+                checked={draft.encryption}
+                onChange={(event) => patch({ encryption: event.target.checked })}
+                label="Encrypt the repository"
+                description="Kaname generates and holds the repository password; a restore goes through the panel."
+              />
+            </NumberedSection>
+
+            <NumberedSection
+              index={3}
+              title="When"
+              caption="How often it runs, in which time zone."
+              headingLevel={3}
             >
-              <Combobox
-                options={
-                  destinations.data?.data.map((row) => ({
-                    value: row.id,
-                    label: row.name,
-                    description: `${DESTINATION_KIND_LABELS[row.kind]} · ${describeDestination(row)}`,
-                  })) ?? []
-                }
-                value={draft.destinationId}
-                onValueChange={(next) => patch({ destinationId: next ?? "" })}
-                loading={destinations.isLoading}
-                placeholder="Select a destination"
-                emptyMessage="No destination matches that name."
-              />
-            </FormField>
-
-            <fieldset className="m-0 flex flex-col gap-2 border-0 p-0">
-              <legend className="mb-1 font-medium text-[var(--kn-text)]">Scope</legend>
-              {draft.scope.map((entry, index) => (
-                <div
-                  key={index}
-                  className="grid grid-cols-1 items-start gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] p-2 sm:grid-cols-[160px_minmax(0,1fr)_28px]"
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+                <FormField
+                  label="Cron expression"
+                  required
+                  description={describeCron(draft.cron, draft.timezone)}
+                  error={fieldError(error, "cron")}
                 >
-                  <Select
-                    value={entry.kind}
-                    aria-label={`Scope ${index + 1} kind`}
-                    onChange={(event) => {
-                      const next = [...draft.scope];
-                      next[index] = { ...entry, kind: event.target.value as ScopeKind };
-                      patch({ scope: next });
-                    }}
-                    options={(Object.keys(SCOPE_KIND_LABELS) as ScopeKind[]).map((kind) => ({
-                      value: kind,
-                      label: SCOPE_KIND_LABELS[kind],
-                    }))}
-                  />
-                  <Textarea
+                  <Input
                     mono
-                    rows={2}
+                    value={draft.cron}
+                    onChange={(event) => patch({ cron: event.target.value })}
+                    placeholder="30 2 * * *"
                     spellCheck={false}
-                    aria-label={`Scope ${index + 1} selectors`}
-                    placeholder={SCOPE_HINTS[entry.kind]}
-                    value={entry.selectors}
-                    onChange={(event) => {
-                      const next = [...draft.scope];
-                      next[index] = { ...entry, selectors: event.target.value };
-                      patch({ scope: next });
-                    }}
                   />
-                  <IconButton
-                    icon={Trash2}
-                    label={`Remove scope ${index + 1}`}
-                    size="sm"
-                    disabled={draft.scope.length === 1}
-                    onClick={() =>
-                      patch({ scope: draft.scope.filter((_, position) => position !== index) })
-                    }
+                </FormField>
+
+                <FormField label="Time zone" required error={fieldError(error, "timezone")}>
+                  <Select
+                    mono
+                    value={draft.timezone}
+                    onChange={(event) => patch({ timezone: event.target.value })}
+                    options={zones.map((zone) => ({ value: zone, label: zone }))}
                   />
-                </div>
-              ))}
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm text-[var(--kn-text-2)]">
-                  {SCOPE_HINTS[draft.scope[draft.scope.length - 1]?.kind ?? "files"]}
-                </p>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  icon={Plus}
-                  onClick={() =>
-                    patch({ scope: [...draft.scope, { kind: "files", selectors: "" }] })
-                  }
-                >
-                  Add scope
-                </Button>
+                </FormField>
               </div>
-              {fieldError(error, "scope") && (
-                <p role="alert" className="text-xs text-[var(--kn-danger)]">
-                  {fieldError(error, "scope")}
-                </p>
-              )}
-            </fieldset>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-              <FormField
-                label="Cron expression"
-                required
-                description={describeCron(draft.cron, draft.timezone)}
-                error={fieldError(error, "cron")}
-              >
-                <Input
-                  mono
-                  value={draft.cron}
-                  onChange={(event) => patch({ cron: event.target.value })}
-                  placeholder="30 2 * * *"
-                  spellCheck={false}
-                />
-              </FormField>
-
-              <FormField label="Time zone" required error={fieldError(error, "timezone")}>
+              <FormField label="Common schedules">
                 <Select
-                  mono
-                  value={draft.timezone}
-                  onChange={(event) => patch({ timezone: event.target.value })}
-                  options={zones.map((zone) => ({ value: zone, label: zone }))}
+                  value=""
+                  aria-label="Apply a common schedule"
+                  onChange={(event) => {
+                    if (event.target.value) patch({ cron: event.target.value });
+                  }}
+                  placeholder="Pick one to fill the expression"
+                  options={CRON_PRESETS.map((preset) => ({
+                    value: preset.value,
+                    label: preset.label,
+                  }))}
                 />
               </FormField>
-            </div>
 
-            <FormField label="Common schedules">
-              <Select
-                value=""
-                aria-label="Apply a common schedule"
-                onChange={(event) => {
-                  if (event.target.value) patch({ cron: event.target.value });
-                }}
-                placeholder="Pick one to fill the expression"
-                options={CRON_PRESETS.map((preset) => ({
-                  value: preset.value,
-                  label: preset.label,
-                }))}
+              <Switch
+                checked={draft.enabled}
+                onChange={(event) => patch({ enabled: event.target.checked })}
+                label="Enabled"
+                description="A disabled schedule has no next run and is never picked up by the worker."
               />
-            </FormField>
+            </NumberedSection>
 
-            <fieldset className="m-0 border-0 p-0">
-              <legend className="mb-1 font-medium text-[var(--kn-text)]">Retention</legend>
-              <p className="mb-2 text-sm text-[var(--kn-text-2)]">
+            <NumberedSection
+              index={4}
+              title="Retention"
+              caption="How many snapshots the destination keeps."
+              headingLevel={3}
+            >
+              <p className="text-sm text-[var(--kn-text-2)]">
                 {describeRetention(toRetention(draft))}. Everything else is pruned from the
                 destination.
               </p>
@@ -1060,22 +1124,7 @@ export function ScheduleDialog({
                   {fieldError(error, "retention")}
                 </p>
               )}
-            </fieldset>
-
-            <div className="flex flex-col gap-3">
-              <Switch
-                checked={draft.encryption}
-                onChange={(event) => patch({ encryption: event.target.checked })}
-                label="Encrypt the repository"
-                description="Kaname generates and holds the repository password; a restore goes through the panel."
-              />
-              <Switch
-                checked={draft.enabled}
-                onChange={(event) => patch({ enabled: event.target.checked })}
-                label="Enabled"
-                description="A disabled schedule has no next run and is never picked up by the worker."
-              />
-            </div>
+            </NumberedSection>
           </div>
         </DialogBody>
 

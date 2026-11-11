@@ -20,19 +20,29 @@ import {
   Badge,
   Button,
   ByteSize,
+  Card,
+  CardInset,
   ConfirmDialog,
   DataTable,
   DetailLayout,
   Duration,
   EmptyState,
   IconButton,
+  LeaderLabel,
+  MonoLabel,
+  NumberedSection,
+  PageBody,
   PropertyList,
   PropertyRow,
   RelativeTime,
   ResourceHeader,
   SectionCard,
   Skeleton,
+  StatusLine,
+  cn,
+  formatBytes,
   type DataTableColumn,
+  type Tone,
 } from "@kaname/ui";
 import {
   RestoreDialog,
@@ -44,7 +54,7 @@ import {
 import { PageError } from "@/components/PageError";
 import { api } from "@/lib/api";
 import { describeCron } from "@/lib/cron";
-import { formatCount } from "@/lib/format";
+import { formatCount, formatDateTime } from "@/lib/format";
 import {
   useCan,
   useList,
@@ -198,67 +208,79 @@ export default function BackupSchedulePage() {
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col px-6 py-4">
+      <PageBody gap="md">
+        <ScheduleStatus schedule={row} />
+
         <DetailLayout
           rail={
-            <SectionCard title="Configuration" icon={Archive}>
-              <PropertyList dense labelWidth="sm">
-                <PropertyRow label="Server" mono copyValue={row.server_name}>
-                  <Link
-                    href={`/infrastructure/servers/${row.server_id}`}
-                    className="text-[var(--kn-accent-400)] outline-none hover:underline"
+            <SectionCard title="Configuration" icon={Archive} headingLevel={3}>
+              <div className="flex flex-col gap-4">
+                <ConfigGroup index={1} label="What">
+                  <PropertyRow label="Server" mono copyValue={row.server_name}>
+                    <Link
+                      href={`/infrastructure/servers/${row.server_id}`}
+                      className="text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+                    >
+                      {row.server_name}
+                    </Link>
+                  </PropertyRow>
+                  <PropertyRow label="Scope">{describeScope(row.scope)}</PropertyRow>
+                </ConfigGroup>
+                <ConfigGroup index={2} label="Where">
+                  <PropertyRow label="Destination">
+                    <Link
+                      href={`/backups?tab=destinations&q=${encodeURIComponent(row.destination_name)}`}
+                      className="text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+                    >
+                      {row.destination_name}
+                    </Link>
+                  </PropertyRow>
+                  <PropertyRow
+                    label="Encryption"
+                    hint="Kaname holds the repository password; restores go through the panel"
                   >
-                    {row.server_name}
-                  </Link>
-                </PropertyRow>
-                <PropertyRow label="Destination">
-                  <Link
-                    href={`/backups?tab=destinations&q=${encodeURIComponent(row.destination_name)}`}
-                    className="text-[var(--kn-accent-400)] outline-none hover:underline"
-                  >
-                    {row.destination_name}
-                  </Link>
-                </PropertyRow>
-                <PropertyRow label="Runs" hint="The cron expression this schedule is stored with">
-                  {describeCron(row.cron, row.timezone)}
-                </PropertyRow>
-                <PropertyRow label="Expression" mono copyValue={row.cron}>
-                  {row.cron}
-                </PropertyRow>
-                <PropertyRow label="Scope">{describeScope(row.scope)}</PropertyRow>
-                <PropertyRow label="Retention">{describeRetention(row.retention)}</PropertyRow>
-                <PropertyRow
-                  label="Encryption"
-                  hint="Kaname holds the repository password; restores go through the panel"
-                >
-                  {row.encryption ? "On" : "Off"}
-                </PropertyRow>
-                <PropertyRow label="Last run">
-                  <RelativeTime value={row.last_run_at} fallback="never" />
-                </PropertyRow>
-                <PropertyRow label="Next run">
-                  {row.enabled ? (
-                    <RelativeTime value={row.next_run_at} fallback="not scheduled" />
-                  ) : (
-                    "disabled"
-                  )}
-                </PropertyRow>
-                <PropertyRow label="Created">
-                  <RelativeTime value={row.created_at} />
-                </PropertyRow>
-              </PropertyList>
+                    {row.encryption ? "On" : "Off"}
+                  </PropertyRow>
+                </ConfigGroup>
+                <ConfigGroup index={3} label="When">
+                  <PropertyRow label="Runs" hint="The cron expression this schedule is stored with">
+                    {describeCron(row.cron, row.timezone)}
+                  </PropertyRow>
+                  <PropertyRow label="Expression" mono copyValue={row.cron}>
+                    {row.cron}
+                  </PropertyRow>
+                  <PropertyRow label="Last run">
+                    <RelativeTime value={row.last_run_at} fallback="never" />
+                  </PropertyRow>
+                  <PropertyRow label="Next run">
+                    {row.enabled ? (
+                      <RelativeTime value={row.next_run_at} fallback="not scheduled" />
+                    ) : (
+                      "disabled"
+                    )}
+                  </PropertyRow>
+                </ConfigGroup>
+                <ConfigGroup index={4} label="Retention">
+                  <PropertyRow label="Keeps">{describeRetention(row.retention)}</PropertyRow>
+                  <PropertyRow label="Created">
+                    <RelativeTime value={row.created_at} />
+                  </PropertyRow>
+                </ConfigGroup>
+              </div>
             </SectionCard>
           }
         >
-          <RunHistory scheduleId={id} />
-          <RestorePoints
-            scheduleId={id}
-            canRestore={can("backups.restore:exec", row.server_id)}
-            canVerify={can("backups.schedules:read", row.server_id)}
-            onRestore={setRestoring}
-          />
+          <div className="flex min-w-0 flex-col gap-8">
+            <RunHistory scheduleId={id} />
+            <RestorePoints
+              scheduleId={id}
+              canRestore={can("backups.restore:exec", row.server_id)}
+              canVerify={can("backups.schedules:read", row.server_id)}
+              onRestore={setRestoring}
+            />
+          </div>
         </DetailLayout>
-      </div>
+      </PageBody>
 
       <ScheduleDialog open={editing} onOpenChange={setEditing} schedule={row} />
       <RestoreDialog
@@ -277,6 +299,60 @@ export default function BackupSchedulePage() {
         loading={remove.isPending}
         onConfirm={() => remove.mutate()}
       />
+    </div>
+  );
+}
+
+/** The schedule's condition as one sentence: the last outcome and what comes next. */
+function ScheduleStatus({ schedule }: { schedule: BackupSchedule }) {
+  const next = schedule.enabled ? (
+    <>
+      next run <RelativeTime value={schedule.next_run_at} fallback="not scheduled" />
+    </>
+  ) : (
+    "disabled, so nothing runs until it is enabled again"
+  );
+
+  if (schedule.last_run_status === null) {
+    return (
+      <StatusLine tone="warn">
+        Never run — this schedule is not protecting anything yet · {next}
+      </StatusLine>
+    );
+  }
+
+  const tone: Tone = !schedule.enabled
+    ? "warn"
+    : schedule.last_run_status === "failed"
+      ? "danger"
+      : schedule.last_run_status === "partial"
+        ? "warn"
+        : schedule.last_run_status === "running"
+          ? "info"
+          : "ok";
+
+  return (
+    <StatusLine tone={tone} pulse={schedule.last_run_status === "running"}>
+      Last run {schedule.last_run_status} <RelativeTime value={schedule.last_run_at} /> · {next}
+    </StatusLine>
+  );
+}
+
+function ConfigGroup({
+  index,
+  label,
+  children,
+}: {
+  index: number;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <LeaderLabel index={index}>{label}</LeaderLabel>
+      <PropertyList dense labelWidth="sm">
+        {children}
+      </PropertyList>
     </div>
   );
 }
@@ -370,20 +446,23 @@ function RunHistory({ scheduleId }: { scheduleId: string }) {
     [],
   );
 
+  const runs = query.data?.data ?? [];
+
   return (
-    <SectionCard
+    <NumberedSection
+      index={1}
       title="Run history"
-      icon={History}
-      padded={false}
+      caption={`The last ${RUN_PAGE_SIZE} attempts, scheduled or manual.`}
       actions={
         <Link
           href={`/backups?tab=runs&schedule_id=${scheduleId}`}
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
+          className="kn-label-sm rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
         >
           All runs
         </Link>
       }
     >
+      {runs.length > 0 && <RunTimeline runs={runs} />}
       <DataTable<BackupRun>
         columns={columns}
         rows={query.data?.data ?? []}
@@ -411,9 +490,86 @@ function RunHistory({ scheduleId }: { scheduleId: string }) {
             size="sm"
           />
         }
-        className="rounded-none border-0"
       />
-    </SectionCard>
+    </NumberedSection>
+  );
+}
+
+/* ---------------------------- run timeline -------------------------- */
+
+const RUN_BAR_FILLS: Record<BackupRun["status"], string> = {
+  succeeded: "bg-[var(--kn-ok)]",
+  partial: "bg-[var(--kn-warn)]",
+  failed: "bg-[var(--kn-danger)]",
+  running: "bg-[var(--kn-info)]",
+  queued: "bg-[var(--kn-text-3)]",
+  cancelled: "bg-[var(--kn-text-3)]",
+};
+
+/*
+ * The runs as a strip, oldest on the left: one bar per attempt, its
+ * height the bytes written relative to the largest, its colour the
+ * outcome. A run that wrote nothing still gets a short bar so a failure
+ * is a red mark rather than a gap. Each bar opens the run's job.
+ */
+function RunTimeline({ runs }: { runs: readonly BackupRun[] }) {
+  const ordered = [...runs].reverse();
+  const max = Math.max(1, ...ordered.map((run) => run.bytes ?? 0));
+  const tally = ordered.reduce<Partial<Record<BackupRun["status"], number>>>((acc, run) => {
+    acc[run.status] = (acc[run.status] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <Card padding="sm" className="flex flex-col gap-3">
+      <CardInset grid padding="none" className="px-3 pb-2 pt-3">
+        <ol
+          aria-label="Run timeline, oldest first"
+          className="m-0 flex h-24 list-none items-end justify-end gap-1.5 p-0"
+        >
+          {ordered.map((run) => {
+            const height = Math.max(6, Math.round(((run.bytes ?? 0) / max) * 100));
+            const label = `${run.status}, ${run.trigger}, started ${formatDateTime(run.started_at)}, wrote ${formatBytes(run.bytes ?? 0)}`;
+            return (
+              <li key={run.id} className="flex h-full min-w-0 max-w-6 flex-1 items-end">
+                <Link
+                  href={`/jobs/${run.job_id}`}
+                  aria-label={label}
+                  title={run.error ? `${label} — ${run.error}` : label}
+                  className={cn(
+                    "block w-full rounded-t-[var(--kn-r-xs)] opacity-70 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
+                    RUN_BAR_FILLS[run.status],
+                  )}
+                  style={{ height: `${height}%` }}
+                />
+              </li>
+            );
+          })}
+        </ol>
+        <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--kn-border)] pt-1.5">
+          <MonoLabel size="xs">
+            <RelativeTime value={ordered[0]!.started_at} />
+          </MonoLabel>
+          <MonoLabel size="xs">Latest</MonoLabel>
+        </div>
+      </CardInset>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        {(Object.keys(RUN_BAR_FILLS) as BackupRun["status"][])
+          .filter((status) => tally[status])
+          .map((status) => (
+            <span
+              key={status}
+              className="flex items-center gap-1.5 text-sm text-[var(--kn-text-2)]"
+            >
+              <span aria-hidden className={cn("size-2 rounded-xs", RUN_BAR_FILLS[status])} />
+              <span className="kn-num">{formatCount(tally[status]!)}</span> {status}
+            </span>
+          ))}
+        <span className="ml-auto text-sm text-[var(--kn-text-3)]">
+          Bar height is bytes written.
+        </span>
+      </div>
+    </Card>
   );
 }
 
@@ -499,14 +655,14 @@ function RestorePoints({ scheduleId, canRestore, canVerify, onRestore }: Restore
   );
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={2}
       title="Restore points"
-      icon={ShieldCheck}
-      padded={false}
+      caption="What a successful run leaves behind."
       actions={
         <Link
           href={`/backups?tab=restore-points&schedule_id=${scheduleId}`}
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
+          className="kn-label-sm rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
         >
           All restore points
         </Link>
@@ -556,8 +712,7 @@ function RestorePoints({ scheduleId, canRestore, canVerify, onRestore }: Restore
             size="sm"
           />
         }
-        className="rounded-none border-0"
       />
-    </SectionCard>
+    </NumberedSection>
   );
 }

@@ -35,7 +35,7 @@ import { useCan } from "@/lib/queries";
 import { CertificateDialog } from "../_components/CertificateDialog";
 import { InstallCertificateDialog } from "../_components/InstallCertificateDialog";
 import { JobPanel } from "../_components/JobPanel";
-import { FilterSelect } from "../_components/filters";
+import { FilterSelect, ScopeBar } from "../_components/filters";
 import {
   useCertificates,
   useExpiringCertificates,
@@ -315,7 +315,9 @@ export default function SslPage() {
   return (
     <>
       <ResourcePage<Certificate>
+        eyebrow="Websites"
         title="SSL / TLS"
+        lede="Certificates on every host, issued and renewed as jobs inside the 30-day window."
         subtitle={selection.server ? selection.server.hostname : "Every host in scope"}
         primaryAction={issueCertificate}
         headerActions={installCertificate}
@@ -372,7 +374,9 @@ export default function SslPage() {
           </Button>
         )}
       >
-        <ServerPicker selection={selection} allowAll />
+        <ScopeBar>
+          <ServerPicker selection={selection} allowAll />
+        </ScopeBar>
 
         {watchedJobId && (
           <JobPanel

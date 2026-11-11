@@ -201,7 +201,7 @@ export const Popover = React.forwardRef<HTMLDivElement, PopoverProps>(function P
             onKeyDown={handleKeyDown}
             className={cn(
               "z-[70] min-w-48 overflow-y-auto text-base text-[var(--kn-text)] outline-none",
-              "rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)] p-3",
+              "rounded-[var(--kn-r-lg)] border border-[var(--kn-border-strong)] bg-[var(--kn-surface-2)] p-3",
               "shadow-[var(--kn-shadow-md)] animate-[var(--animate-scale-in)]",
               className,
             )}

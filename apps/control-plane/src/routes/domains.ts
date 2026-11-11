@@ -71,16 +71,20 @@ type DomainApiRow = {
   record_count: number;
 };
 
+import { assertOwned, ownership } from "./_ownership.js";
+
 export async function domainRoutes(app: FastifyInstance): Promise<void> {
   /* ------------------------------ list ------------------------------ */
 
   app.get("/domains", async (req, reply) => {
     const q = parseQuery(req, domainListQuery);
+    const own = ownership(req);
     helpers(req).authorize("websites.domains:read");
 
     const term = searchTerm(q.q);
     const where = combine(
       domainScope(req, "websites.domains:read"),
+      own.filter("domain", domains.id),
       q.site_id ? eq(domains.siteId, q.site_id) : null,
       q.server_id ? eq(domains.serverId, q.server_id) : null,
       q.dns_provider ? eq(domains.dnsProvider, q.dns_provider) : null,
@@ -118,6 +122,7 @@ export async function domainRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/domains/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     await loadDomainRow(req, id, "websites.domains:read");
     return item(reply, await domainApi(req.ctx.db, id));
   });
@@ -126,8 +131,10 @@ export async function domainRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/domains", async (req, reply) => {
     const body = parseBody(req, createDomainInput);
+    const own = ownership(req);
     const h = helpers(req);
     const name = normalizeName(body.name);
+    if (own.restricted) confineDomain(body);
 
     // A domain is server-scoped only once it has a server; until then the
     // caller just needs the permission somewhere.
@@ -147,6 +154,7 @@ export async function domainRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (body.site_id) await assertSiteVisible(req, body.site_id);
+    await own.reserve("domain");
 
     const [row] = await req.ctx.db
       .insert(domains)
@@ -161,6 +169,7 @@ export async function domainRoutes(app: FastifyInstance): Promise<void> {
         status: "pending",
       })
       .returning();
+    await own.claim("domain", row!.id);
 
     await req.ctx.audit.record({
       actor: h.actor(),
@@ -186,8 +195,10 @@ export async function domainRoutes(app: FastifyInstance): Promise<void> {
   app.patch("/domains/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
     const body = parseBody(req, updateDomainInput);
+    const own = ownership(req);
     const before = await loadDomainRow(req, id, "websites.domains:write");
     const h = helpers(req);
+    if (own.restricted) confineDomain(body);
 
     if (body.name && normalizeName(body.name) !== before.name) {
       throw conflict(
@@ -256,6 +267,7 @@ export async function domainRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete("/domains/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const domain = await loadDomainRow(req, id, "websites.domains:delete");
     const h = helpers(req);
 
@@ -532,7 +544,24 @@ export async function loadDomainRow(
   const row = rows[0];
   if (!row) throw notFound("Domain", domainId);
   helpers(req).authorize(permission, row.serverId);
+  await assertOwned(req, "domain", domainId, "Domain");
   return row;
+}
+
+/**
+ * A DNS provider binding uses credentials that belong to the install,
+ * so a reseller or client keeps a domain on manual DNS (KD-039).
+ */
+function confineDomain(body: { dns_provider?: string; dns_zone_id?: string }): void {
+  if ((body.dns_provider !== undefined && body.dns_provider !== "manual") || body.dns_zone_id) {
+    throw new ApiException("forbidden", "This account cannot connect a domain to a DNS provider.", {
+      fields: { dns_provider: "must be manual" },
+      remediation: {
+        summary: "Publish the records at your DNS host yourself, or ask your provider to connect it.",
+        actions: [],
+      },
+    });
+  }
 }
 
 /**
@@ -666,4 +695,5 @@ async function assertSiteVisible(req: FastifyRequest, siteId: string): Promise<v
   const row = rows[0];
   if (!row) throw notFound("Site", siteId);
   helpers(req).authorize("websites.sites:write", row.serverId);
+  await assertOwned(req, "site", siteId, "Site");
 }

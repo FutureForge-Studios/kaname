@@ -22,6 +22,7 @@ import {
   Badge,
   Button,
   ByteSize,
+  Card,
   ConfirmDialog,
   CopyableCode,
   DataTable,
@@ -30,7 +31,10 @@ import {
   EmptyState,
   JobStatusPill,
   MetricTile,
+  MonoLabel,
   MonoText,
+  NumberedSection,
+  PageBody,
   PropertyList,
   PropertyRow,
   RelativeTime,
@@ -38,10 +42,12 @@ import {
   SectionCard,
   Skeleton,
   StatusBadge,
+  StatusLine,
   formatBytes,
   type DataTableColumn,
 } from "@kaname/ui";
 import {
+  ConnectionWells,
   DumpDialog,
   RestoreDialog,
   connectionTemplate,
@@ -52,7 +58,7 @@ import {
 import { PageError } from "@/components/PageError";
 import { api, type ApiError, type ListResult } from "@/lib/api";
 import { queryKeys, useCan, useList, useMutationWithJob, useResource } from "@/lib/queries";
-import { formatCount, formatDateTime, humanize } from "@/lib/format";
+import { formatCount, formatDateTime, humanize, joinMeta } from "@/lib/format";
 
 /* ------------------------------------------------------------------ *
  * One database.
@@ -264,8 +270,25 @@ export default function DatabaseDetailPage() {
         }
       />
 
-      <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <PageBody gap="md">
+        <StatusLine tone={row.last_backup_at ? "ok" : "warn"}>
+          {row.last_backup_at ? (
+            <>
+              Last backed up <RelativeTime value={row.last_backup_at} />
+            </>
+          ) : (
+            "Never backed up by Kaname"
+          )}
+          {" · "}
+          {joinMeta(
+            `${formatBytes(latest(samples)?.size_bytes ?? row.size_bytes)} across ${formatCount(latest(samples)?.table_count ?? row.table_count)} tables`,
+            row.users.length === 0
+              ? "no user granted"
+              : `${formatCount(row.users.length)} ${row.users.length === 1 ? "user" : "users"} granted`,
+          )}
+        </StatusLine>
+
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <MetricTile
             size="sm"
             icon={Gauge}
@@ -301,7 +324,7 @@ export default function DatabaseDetailPage() {
                 <PropertyRow label="Server">
                   <Link
                     href={`/infrastructure/servers/${row.server_id}`}
-                    className="text-[var(--kn-accent-400)] hover:underline"
+                    className="kn-mono text-[var(--kn-accent-400)] hover:underline"
                   >
                     {row.server_name}
                   </Link>
@@ -325,67 +348,86 @@ export default function DatabaseDetailPage() {
             </SectionCard>
           }
         >
-          <SizeCard
-            samples={samples}
-            sampling={sample.isFetching}
-            error={sample.error}
-            onSample={takeSample}
-          />
+          <div className="flex min-w-0 flex-col gap-8">
+            <NumberedSection
+              index={1}
+              title="Connection"
+              caption="Placeholders only. Passwords are never read back."
+            >
+              {instance.data ? (
+                <ConnectionWells
+                  meta={meta}
+                  host={instance.data.host}
+                  port={instance.data.port}
+                  database={row.name}
+                  label={`${row.engine} · ${row.name}`}
+                  stacked
+                />
+              ) : (
+                <CopyableCode
+                  value={row.connection_string_template}
+                  label={`URI · ${row.engine} · ${row.name}`}
+                  block
+                />
+              )}
+              <p className="text-sm text-[var(--kn-text-3)]">
+                The password placeholder is deliberate. Stored credentials are envelope-encrypted
+                and are never read back into the panel; rotate a user&apos;s password to be shown a
+                new one once.
+              </p>
+            </NumberedSection>
 
-          <SectionCard
-            title="Users granted on this database"
-            icon={KeyRound}
-            padded={false}
-            headingLevel={3}
-          >
-            <GrantedUsers query={users} hostPatterns={meta.hostPatterns} />
-          </SectionCard>
+            <NumberedSection
+              index={2}
+              title="Users & grants"
+              caption="Who can reach this database, and with which privileges."
+              actions={
+                <Link
+                  href={`/databases/${group}?view=users&database_id=${row.id}`}
+                  className="kn-label-sm rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+                >
+                  Manage users
+                </Link>
+              }
+            >
+              <GrantedUsers query={users} hostPatterns={meta.hostPatterns} />
+            </NumberedSection>
 
-          <SectionCard
-            title="Backup history"
-            icon={Archive}
-            padded={false}
-            headingLevel={3}
-            footer={
-              <>
-                Dump and restore jobs recorded for this database. Scheduled backups that include it
-                are listed under{" "}
-                <Link href="/backups" className="text-[var(--kn-accent-400)] hover:underline">
+            <SizeCard
+              samples={samples}
+              sampling={sample.isFetching}
+              error={sample.error}
+              onSample={takeSample}
+            />
+
+            <NumberedSection
+              index={4}
+              title="Backups"
+              caption="Dumps and restores of this database."
+            >
+              <BackupHistory
+                rows={history}
+                loading={dumps.isLoading || restores.isLoading}
+                error={dumps.error ?? restores.error}
+                onRetry={() => {
+                  void dumps.refetch();
+                  void restores.refetch();
+                }}
+              />
+              <p className="text-sm text-[var(--kn-text-3)]">
+                Scheduled backups that include this database are listed under{" "}
+                <Link
+                  href="/backups"
+                  className="text-[var(--kn-accent-400)] hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+                >
                   Backups
                 </Link>
                 .
-              </>
-            }
-          >
-            <BackupHistory
-              rows={history}
-              loading={dumps.isLoading || restores.isLoading}
-              error={dumps.error ?? restores.error}
-              onRetry={() => {
-                void dumps.refetch();
-                void restores.refetch();
-              }}
-            />
-          </SectionCard>
-
-          <SectionCard title="Connection" icon={KeyRound} headingLevel={3}>
-            <CopyableCode
-              value={
-                instance.data
-                  ? connectionTemplate(meta, instance.data.host, instance.data.port, row.name)
-                  : row.connection_string_template
-              }
-              label={`${row.engine} · ${row.name}`}
-              block
-            />
-            <p className="mt-2 text-[var(--kn-text-2)]">
-              The password placeholder is deliberate. Stored credentials are envelope-encrypted and
-              are never read back into the panel; rotate a user&apos;s password to be shown a new
-              one once.
-            </p>
-          </SectionCard>
+              </p>
+            </NumberedSection>
+          </div>
         </DetailLayout>
-      </div>
+      </PageBody>
 
       <DumpDialog
         database={dumping ? row : null}
@@ -492,75 +534,79 @@ function SizeCard({ samples, sampling, error, onSample }: SizeCardProps) {
   ];
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={3}
       title="Size and tables"
-      icon={Gauge}
-      headingLevel={3}
+      caption="Live reads from the engine, this session only."
       actions={
         <Button variant="secondary" size="xs" loading={sampling} onClick={onSample}>
           Sample now
         </Button>
       }
-      footer={
-        <>
+    >
+      {error && <PageError error={error} onRetry={onSample} context="Size" />}
+
+      <Card padding="none" className="overflow-hidden">
+        {samples.length < 2 ? (
+          <EmptyState
+            icon={Gauge}
+            title={
+              samples.length === 0
+                ? "No sample yet"
+                : `One sample: ${formatBytes(samples[0]!.size_bytes)} across ${formatCount(samples[0]!.table_count)} tables`
+            }
+            description="Take a second sample to see movement. Nothing is plotted from a single point."
+            action={
+              <Button variant="secondary" size="sm" loading={sampling} onClick={onSample}>
+                Sample now
+              </Button>
+            }
+            size="sm"
+          />
+        ) : (
+          <div className="p-4">
+            <AreaChart
+              series={series}
+              title={`Size of this database across ${samples.length} samples`}
+              height={180}
+              formatValue={(value) => formatBytes(value, "binary", 1)}
+              emptyLabel="No samples yet"
+            />
+            <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-[var(--kn-border)] pt-3 sm:grid-cols-4">
+              <SampleStat label="First sample" value={formatDateTime(samples[0]!.sampled_at)} />
+              <SampleStat
+                label="Latest sample"
+                value={formatDateTime(samples[samples.length - 1]!.sampled_at)}
+              />
+              <SampleStat
+                label="Change"
+                value={formatDelta(
+                  samples[samples.length - 1]!.size_bytes - samples[0]!.size_bytes,
+                )}
+              />
+              <SampleStat
+                label="Tables"
+                value={formatCount(samples[samples.length - 1]!.table_count)}
+              />
+            </dl>
+          </div>
+        )}
+        <p className="border-t border-[var(--kn-border)] px-4 py-2 text-sm text-[var(--kn-text-3)]">
           Kaname stores one current size per database, not a history. These are the samples read
           from the engine since this page opened — the first is the cached value and its own
           timestamp. Each sample is a live read on the host.
-        </>
-      }
-    >
-      {error && <PageError error={error} onRetry={onSample} context="Size" className="mb-3" />}
-
-      {samples.length < 2 ? (
-        <EmptyState
-          icon={Gauge}
-          title={
-            samples.length === 0
-              ? "No sample yet"
-              : `One sample: ${formatBytes(samples[0]!.size_bytes)} across ${formatCount(samples[0]!.table_count)} tables`
-          }
-          description="Take a second sample to see movement. Nothing is plotted from a single point."
-          action={
-            <Button variant="secondary" size="sm" loading={sampling} onClick={onSample}>
-              Sample now
-            </Button>
-          }
-          size="sm"
-        />
-      ) : (
-        <>
-          <AreaChart
-            series={series}
-            title={`Size of this database across ${samples.length} samples`}
-            height={180}
-            formatValue={(value) => formatBytes(value, "binary", 1)}
-            emptyLabel="No samples yet"
-          />
-          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
-            <SampleStat label="First sample" value={formatDateTime(samples[0]!.sampled_at)} />
-            <SampleStat
-              label="Latest sample"
-              value={formatDateTime(samples[samples.length - 1]!.sampled_at)}
-            />
-            <SampleStat
-              label="Change"
-              value={formatDelta(samples[samples.length - 1]!.size_bytes - samples[0]!.size_bytes)}
-            />
-            <SampleStat
-              label="Tables"
-              value={formatCount(samples[samples.length - 1]!.table_count)}
-            />
-          </dl>
-        </>
-      )}
-    </SectionCard>
+        </p>
+      </Card>
+    </NumberedSection>
   );
 }
 
 function SampleStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <dt className="truncate text-xs text-[var(--kn-text-3)]">{label}</dt>
+      <MonoLabel as="dt" size="xs" className="truncate">
+        {label}
+      </MonoLabel>
       <dd className="kn-num m-0 truncate text-[var(--kn-text)]">{value}</dd>
     </div>
   );
@@ -669,7 +715,6 @@ function GrantedUsers({
           size="sm"
         />
       }
-      className="rounded-none border-0"
     />
   );
 }
@@ -765,7 +810,6 @@ function BackupHistory({
           size="sm"
         />
       }
-      className="rounded-none border-0"
     />
   );
 }

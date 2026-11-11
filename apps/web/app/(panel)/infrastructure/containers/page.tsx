@@ -60,7 +60,9 @@ export default function ContainersPage() {
   return (
     <>
       <ResourcePage<Container>
+        eyebrow="Infrastructure"
         title="Containers"
+        lede="Docker and podman containers across the fleet, cached per host and re-read on demand."
         subtitle={
           query.data
             ? `${formatCount(query.data.meta.total)} containers${selection.server ? ` on ${selection.server.name}` : " across the fleet"}`
@@ -74,14 +76,17 @@ export default function ContainersPage() {
         tableLabel="Containers"
         searchPlaceholder="Search name or image"
         filters={
-          <Select
-            size="sm"
-            aria-label="Filter by container state"
-            options={STATE_OPTIONS}
-            value={state.filters["state"] ?? ""}
-            onChange={(event) => state.setFilter("state", event.target.value || null)}
-            boxClassName="w-36"
-          />
+          <>
+            <ServerPicker selection={selection} allowAll allLabel="All servers" />
+            <Select
+              size="sm"
+              aria-label="Filter by container state"
+              options={STATE_OPTIONS}
+              value={state.filters["state"] ?? ""}
+              onChange={(event) => state.setFilter("state", event.target.value || null)}
+              boxClassName="w-36"
+            />
+          </>
         }
         selectable
         bulkActions={(ids) => commands.bulkActions(ids, rows)}
@@ -92,10 +97,6 @@ export default function ContainersPage() {
         emptyDescription="Kaname reads the container list from each host that advertises docker or podman. Pick a server and sync it from the host."
         errorContext="Containers"
       >
-        <div className="flex flex-wrap items-center gap-3">
-          <ServerPicker selection={selection} allowAll allLabel="All servers" />
-        </div>
-
         <HostSync
           syncedAt={syncedAt}
           server={selection.server}

@@ -11,7 +11,7 @@ import {
   LogViewer,
   PageHeader,
   SectionCard,
-  cn,
+  StatusLine,
   type LogLine,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
@@ -194,7 +194,9 @@ export default function MailLogsPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Email"
         title="Mail logs"
+        lede="A live tail of the mail engine's log, read straight off the host. The filter runs on the host, so a busy server does not flood the socket."
         subtitle={selected?.hostname ?? "Live from the mail engine on the host"}
         actions={
           <Button
@@ -211,7 +213,10 @@ export default function MailLogsPage() {
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
         <div className="flex flex-wrap items-center gap-3">
-          <MailServerPicker value={selected?.id ?? null} onChange={(_id, server) => select(server)} />
+          <MailServerPicker
+            value={selected?.id ?? null}
+            onChange={(_id, server) => select(server)}
+          />
           {selected && <HostCell serverId={selected.server_id} serverName={selected.server_name} />}
 
           <form
@@ -225,7 +230,9 @@ export default function MailLogsPage() {
               size="sm"
               mono
               value={filter}
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) => setFilter(event.target.value)}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>) =>
+                setFilter(event.target.value)
+              }
               placeholder="Filter on the host"
               aria-label="Filter the tail on the host"
               boxClassName="w-64"
@@ -249,23 +256,14 @@ export default function MailLogsPage() {
             )}
           </form>
 
-          <span
-            className="ml-auto flex items-center gap-1.5 text-xs text-[var(--kn-text-3)]"
+          <StatusLine
+            tone={status === "open" ? "ok" : status === "closed" ? "neutral" : "warn"}
+            pulse={status === "connecting" || status === "reconnecting"}
+            className="kn-mono ml-auto text-xs"
             title="Filtering happens on the host, so a busy server does not push every line down this socket."
           >
-            <span
-              aria-hidden
-              className={cn(
-                "h-1.5 w-1.5 rounded-[var(--kn-r-pill)]",
-                status === "open"
-                  ? "bg-[var(--kn-ok)]"
-                  : status === "closed"
-                    ? "bg-[var(--kn-text-3)]"
-                    : "bg-[var(--kn-warn)] animate-[kn-pulse-ring_1.8s_ease-in-out_infinite]",
-              )}
-            />
             {STATUS_LABELS[status]}
-          </span>
+          </StatusLine>
         </div>
 
         {mailServers.isError && (

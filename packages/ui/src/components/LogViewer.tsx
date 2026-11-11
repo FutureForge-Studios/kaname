@@ -434,7 +434,7 @@ export const LogViewer = React.forwardRef<HTMLDivElement, LogViewerProps>(functi
     <div
       ref={ref}
       className={cn(
-        "relative flex min-w-0 flex-col overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)]",
+        "relative flex min-w-0 flex-col overflow-hidden rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)]",
         className,
       )}
       {...props}

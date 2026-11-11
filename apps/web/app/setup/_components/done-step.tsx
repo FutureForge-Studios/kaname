@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ChevronRight, Globe, ShieldCheck, TriangleAlert } from "lucide-react";
+import { ChevronRight, Globe, ShieldCheck, TriangleAlert } from "lucide-react";
 import {
   OPTIONAL_SETUP_STEPS,
   SETUP_STEP_LABELS,
@@ -16,10 +16,10 @@ import {
   type Site,
   type User,
 } from "@kaname/contract";
-import { Badge, Button, MonoText, Skeleton } from "@kaname/ui";
+import { Badge, Button, CheckItem, CheckList, MonoText, Skeleton, StatusLine } from "@kaname/ui";
 import type { PanelAddressApplying } from "@/lib/address";
 import { api, type ListResult } from "@/lib/api";
-import { Card, StepError, StepHeading, toError, useStepAction } from "./chrome";
+import { StepActions, StepError, StepHeading, StepShell, toError, useStepAction } from "./chrome";
 
 /* ------------------------------------------------------------------ *
  * 11. Done — what was set up, read back from the modules themselves
@@ -179,42 +179,65 @@ export function DoneStep({ state, onStale }: { state: SetupState; onStale: () =>
 
   if (applied) {
     return (
-      <Card>
-        <div className="flex flex-col gap-5">
+      <StepShell
+        heading={
           <StepHeading
             icon={Globe}
             title={`Setting up ${applied.domain}`}
+            accent={`${applied.domain}`}
             hint="Kaname is restarting to pick up the name and asking the certificate authority for a certificate. That usually lands inside a minute."
           />
-          <p className="text-[var(--kn-text-2)]">
+        }
+      >
+        <div className="flex flex-col gap-5">
+          <StatusLine tone="info" pulse>
+            Restarting, then requesting the certificate.
+          </StatusLine>
+          <p className="m-0 text-[var(--kn-text-2)]">
             The address you are on keeps answering throughout, so nothing depends on the certificate
             arriving. Once it does, <MonoText className="text-[var(--kn-text)]">{applied.public_url}</MonoText>{" "}
             answers too — and if the A record is not pointing here yet, correct it and the request
             retries on its own. The new name asks you to sign in once.
           </p>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--kn-border)] pt-5">
-            <Button type="button" variant="ghost" size="md" onClick={() => router.replace("/")}>
-              Stay on this address
-            </Button>
+          <StepActions
+            start={
+              <Button type="button" variant="ghost" size="md" onClick={() => router.replace("/")}>
+                Stay on this address
+              </Button>
+            }
+          >
             <Button
               type="button"
               variant="primary"
-              size="md"
-              iconRight={ArrowRight}
+              size="lg"
+              arrow
               autoFocus
               onClick={() => window.location.assign(applied.public_url)}
             >
               Open {applied.domain ?? applied.public_url}
             </Button>
-          </div>
+          </StepActions>
           <MasterKeyNote />
         </div>
-      </Card>
+      </StepShell>
     );
   }
 
   return (
-    <Card>
+    <StepShell
+      heading={
+        <StepHeading
+          icon={ShieldCheck}
+          title={`${state.instance_name ?? "Kaname"} is ready`}
+          accent="is ready"
+          hint={`${
+            state.servers_connected === 1
+              ? "One server is connected."
+              : `${state.servers_connected} servers are connected.`
+          } Here is what was set up. Every action from now on is recorded in the audit trail.`}
+        />
+      }
+    >
       <form
         className="flex flex-col gap-5"
         onSubmit={(event) => {
@@ -222,53 +245,45 @@ export function DoneStep({ state, onStale }: { state: SetupState; onStale: () =>
           void finish();
         }}
       >
-        <StepHeading
-          icon={ShieldCheck}
-          title={`${state.instance_name ?? "Kaname"} is ready`}
-          hint={`${
-            state.servers_connected === 1
-              ? "One server is connected."
-              : `${state.servers_connected} servers are connected.`
-          } Here is what was set up. Every action from now on is recorded in the audit trail.`}
-        />
-
         {facts === null ? (
           <Skeleton className="h-64 rounded-[var(--kn-r-md)]" label="Reading what was set up" />
         ) : (
-          <ul className="divide-y divide-[var(--kn-border)] overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)]">
+          <CheckList divided="between" className="-my-3.5">
             {OPTIONAL_SETUP_STEPS.map((step) => {
               const outcome = state.outcomes[step];
               const link = AREA_LINKS[step];
               return (
-                <li key={step}>
-                  <Link
-                    href={link.href}
-                    className="group flex items-center gap-3 px-4 py-3 outline-none transition-colors duration-[var(--kn-dur-fast)] hover:bg-[var(--kn-surface-3)] focus-visible:bg-[var(--kn-surface-3)]"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium text-[var(--kn-text)]">{SETUP_STEP_LABELS[step]}</p>
-                      <p className="truncate text-sm text-[var(--kn-text-2)]">
-                        {describe(step, facts, domain)}
-                      </p>
-                    </div>
-                    <Badge tone={outcome === "done" ? "ok" : "neutral"} size="xs">
-                      {outcome === "done" ? "Set up" : "Later"}
-                    </Badge>
-                    <span className="sr-only">Open {link.label}</span>
-                    <ChevronRight
-                      size={14}
-                      aria-hidden
-                      className="shrink-0 text-[var(--kn-text-3)] group-hover:text-[var(--kn-text-2)]"
-                    />
-                  </Link>
-                </li>
+                <CheckItem
+                  key={step}
+                  className="group relative"
+                  state={outcome === "done" ? "done" : "todo"}
+                  title={SETUP_STEP_LABELS[step]}
+                  description={<span className="block truncate">{describe(step, facts, domain)}</span>}
+                  action={
+                    <>
+                      <Badge tone={outcome === "done" ? "ok" : "neutral"} size="sm">
+                        {outcome === "done" ? "Set up" : "Later"}
+                      </Badge>
+                      {/* The whole row is the link: its hit area is stretched over the item. */}
+                      <Link
+                        href={link.href}
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--kn-r-pill)] text-[var(--kn-text-3)] outline-none transition-colors duration-[var(--kn-dur-fast)] after:absolute after:inset-0 group-hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+                      >
+                        <span className="sr-only">
+                          {SETUP_STEP_LABELS[step]}: open {link.label}
+                        </span>
+                        <ChevronRight size={14} aria-hidden />
+                      </Link>
+                    </>
+                  }
+                />
               );
             })}
-          </ul>
+          </CheckList>
         )}
 
         {domain && (
-          <p className="text-sm text-[var(--kn-text-2)]">
+          <p className="m-0 text-sm text-[var(--kn-text-2)]">
             Finishing names this panel <MonoText className="text-[var(--kn-text)]">{domain}</MonoText>.
             Kaname restarts once to apply it, and this address keeps working while it does.
           </p>
@@ -276,28 +291,30 @@ export function DoneStep({ state, onStale }: { state: SetupState; onStale: () =>
 
         <StepError error={error ? toError(error) : null} />
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--kn-border)] pt-5">
-          <div>
-            {error && completed && (
+        <StepActions
+          start={
+            error &&
+            completed && (
               <Button type="button" variant="ghost" size="md" onClick={() => router.replace("/")}>
                 Continue without the domain
               </Button>
-            )}
-          </div>
-          <Button type="submit" variant="primary" size="md" iconRight={ArrowRight} loading={pending} autoFocus>
+            )
+          }
+        >
+          <Button type="submit" variant="primary" size="lg" arrow={!pending} loading={pending} autoFocus>
             {error && completed ? "Try again" : "Open the Command Center"}
           </Button>
-        </div>
+        </StepActions>
 
         <MasterKeyNote />
       </form>
-    </Card>
+    </StepShell>
   );
 }
 
 function MasterKeyNote() {
   return (
-    <p className="flex items-start gap-2 text-sm text-[var(--kn-text-3)]">
+    <p className="m-0 flex items-start gap-2 text-sm text-[var(--kn-text-3)]">
       <TriangleAlert size={14} className="mt-0.5 shrink-0 text-[var(--kn-warn)]" aria-hidden />
       <span>
         Back up <MonoText>KANAME_MASTER_KEY</MonoText> from the environment file the installer wrote.

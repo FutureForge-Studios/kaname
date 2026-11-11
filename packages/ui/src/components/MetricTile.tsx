@@ -6,7 +6,8 @@ import { cn, variant } from "../lib/cn.js";
 import type { Tone } from "./Badge.js";
 
 /* ------------------------------------------------------------------ *
- * MetricTile — a dense readout, not a dashboard card.
+ * MetricTile — a dense readout, not a dashboard card. A mono uppercase
+ * label over one large tight-tracked numeral, in a hairline box.
  *
  * Eight of these sit across a Command Center row, so the tile is sized
  * by its number: one line of label, one line of value. Direction and
@@ -20,8 +21,8 @@ type IconComponent = React.ComponentType<{ size?: number | string; className?: s
 export type MetricTileSize = "sm" | "md";
 
 const VALUE_SIZES: Record<MetricTileSize, string> = {
-  sm: "text-lg",
-  md: "text-xl",
+  sm: "text-xl",
+  md: "text-2xl",
 };
 
 const VALUE_TONES: Record<Tone, string> = {
@@ -95,27 +96,32 @@ export const MetricTile = React.forwardRef<HTMLDivElement, MetricTileProps>(func
     <div
       ref={ref}
       className={cn(
-        "min-w-0 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] px-3 py-2.5 shadow-[var(--kn-shadow-sm)]",
+        "min-w-0 rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)] px-3.5 py-3 shadow-[var(--kn-shadow-sm)]",
         className,
       )}
       {...props}
     >
       <div className="flex items-center gap-1.5">
         {Icon && <Icon size={12} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />}
-        <span className="truncate text-xs text-[var(--kn-text-2)]">{label}</span>
+        <span
+          className="kn-label-sm truncate tracking-[0.08em] text-[var(--kn-text-3)]"
+          title={typeof label === "string" ? label : undefined}
+        >
+          {label}
+        </span>
       </div>
 
-      <div className="mt-1 flex items-baseline gap-1">
+      <div className="mt-2 flex items-baseline gap-1">
         <span
           className={cn(
-            "kn-num font-medium leading-none",
+            "kn-num font-medium leading-none tracking-[var(--kn-tracking-display)]",
             variant(VALUE_SIZES, size, "md"),
             variant(VALUE_TONES, tone, "neutral"),
           )}
         >
           {value}
         </span>
-        {unit && <span className="text-xs text-[var(--kn-text-3)]">{unit}</span>}
+        {unit && <span className="kn-mono text-xs text-[var(--kn-text-3)]">{unit}</span>}
 
         {delta && DeltaIcon && (
           <span

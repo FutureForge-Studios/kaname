@@ -14,7 +14,7 @@ export function RecordingNotice({ recorded, serverName }: { recorded: boolean; s
     return (
       <div
         role="status"
-        className="flex items-start gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-info)] bg-[var(--kn-info-soft)] p-2.5"
+        className="flex items-start gap-2 rounded-[var(--kn-r-md)] border border-[color-mix(in_srgb,var(--kn-info)_45%,transparent)] bg-[var(--kn-info-soft)] px-3 py-2.5"
       >
         <RadioTower size={14} className="mt-0.5 shrink-0 text-[var(--kn-info)]" aria-hidden />
         <p className="text-[var(--kn-text)]">
@@ -29,7 +29,7 @@ export function RecordingNotice({ recorded, serverName }: { recorded: boolean; s
   return (
     <div
       role="status"
-      className="flex items-start gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-warn)] bg-[var(--kn-warn-soft)] p-2.5"
+      className="flex items-start gap-2 rounded-[var(--kn-r-md)] border border-[color-mix(in_srgb,var(--kn-warn)_45%,transparent)] bg-[var(--kn-warn-soft)] px-3 py-2.5"
     >
       <ShieldAlert size={14} className="mt-0.5 shrink-0 text-[var(--kn-warn)]" aria-hidden />
       <p className="text-[var(--kn-text)]">

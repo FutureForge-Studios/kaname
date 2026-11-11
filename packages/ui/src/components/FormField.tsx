@@ -242,7 +242,7 @@ export const Fieldset = React.forwardRef<HTMLFieldSetElement, FieldsetProps>(fun
       {legend !== undefined && (
         <legend
           className={cn(
-            "p-0 text-md font-medium text-[var(--kn-text)]",
+            "kn-title p-0 text-md text-[var(--kn-text)]",
             description !== undefined ? "mb-1" : "mb-3",
           )}
         >

@@ -26,6 +26,7 @@ import { AgentOfflineError, AgentRpcError } from "../agent/hub.js";
 import { ftpJobHandlers } from "./ftp.js";
 import { mailJobHandlers } from "./mail.js";
 import { websiteJobHandlers } from "./websites.js";
+import { appJobHandlers } from "./apps.js";
 import { banHandler, unbanHandler } from "./threats.js";
 import type { JobContext, JobHandler, JobWorker } from "./worker.js";
 
@@ -657,6 +658,9 @@ export function registerJobHandlers(worker: JobWorker): void {
 
     /* suspend/resume, cert.install, dns and deployments: see ./websites.ts */
     ...websiteJobHandlers(),
+
+    /* the one-click app installer: see ./apps.ts */
+    ...appJobHandlers(),
 
     /* mail (Yunori Mail Server): see ./mail.ts */
     ...mailJobHandlers(),

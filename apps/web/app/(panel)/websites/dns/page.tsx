@@ -27,6 +27,7 @@ import {
   RelativeTime,
   SectionCard,
   Skeleton,
+  StatusLine,
   cn,
   type ComboboxOption,
   type DataTableRowAction,
@@ -39,7 +40,7 @@ import { useCan, useJob } from "@/lib/queries";
 import { DnsRecordDialog } from "../_components/DnsRecordDialog";
 import { useDnsColumns } from "../_components/dnsColumns";
 import { DNS_RECORD_TYPES } from "../_components/dnsTypes";
-import { FilterSelect } from "../_components/filters";
+import { FilterSelect, ScopeBar } from "../_components/filters";
 import { JobPanel } from "../_components/JobPanel";
 import {
   useApplyDns,
@@ -249,7 +250,9 @@ export default function DnsPage() {
   return (
     <>
       <ResourcePage<DnsRecord>
+        eyebrow="Websites"
         title="DNS"
+        lede="Records Kaname keeps for each zone, checked against what the provider actually serves."
         subtitle={domain ? domain.name : "Every zone in scope"}
         primaryAction={addRecord}
         headerActions={
@@ -375,7 +378,7 @@ export default function DnsPage() {
           );
         }}
       >
-        <div className="flex flex-wrap items-center gap-3">
+        <ScopeBar label="Zone">
           <Combobox
             options={domainOptions}
             value={domainId ?? ""}
@@ -390,21 +393,23 @@ export default function DnsPage() {
             className="w-64"
           />
           {domain && (
-            <div className="flex flex-wrap items-center gap-2 text-[var(--kn-text-2)]">
-              <Badge tone={domain.dns_provider === "manual" ? "neutral" : "info"} size="xs">
+            <StatusLine tone={zoneTone(domain, staged)}>
+              <span className="text-[var(--kn-text)]">
                 {DNS_PROVIDER_LABELS[domain.dns_provider]}
-              </Badge>
-              <span>
-                {formatCount(domain.record_count)} records · nameservers{" "}
-                {domain.nameservers.length > 0 ? (
-                  <MonoText muted>{domain.nameservers.join(", ")}</MonoText>
-                ) : (
-                  "unknown"
-                )}
               </span>
-            </div>
+              {` · ${formatCount(domain.record_count)} records · `}
+              {domain.dns_provider !== "manual" && staged > 0
+                ? `${formatCount(staged)} staged · `
+                : ""}
+              nameservers{" "}
+              {domain.nameservers.length > 0 ? (
+                <MonoText muted>{domain.nameservers.join(", ")}</MonoText>
+              ) : (
+                "unknown"
+              )}
+            </StatusLine>
           )}
-        </div>
+        </ScopeBar>
 
         {domains.isError && (
           <PageError
@@ -509,6 +514,13 @@ export default function DnsPage() {
       </ConfirmDialog>
     </>
   );
+}
+
+/** The zone's condition: drift waiting to be applied is the one thing to act on. */
+function zoneTone(domain: Domain, staged: number): Tone {
+  if (domain.status === "error") return "danger";
+  if (domain.dns_provider !== "manual" && staged > 0) return "warn";
+  return domain.verified.ok ? "ok" : "neutral";
 }
 
 /** Domains carry the host a DNS permission is scoped against. */

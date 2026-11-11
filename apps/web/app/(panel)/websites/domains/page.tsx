@@ -19,7 +19,7 @@ import { formatCount } from "@/lib/format";
 import { useCan } from "@/lib/queries";
 import { CertificateDialog } from "../_components/CertificateDialog";
 import { DomainDialog } from "../_components/DomainDialog";
-import { FilterSelect } from "../_components/filters";
+import { FilterSelect, ScopeBar } from "../_components/filters";
 import { useDeleteDomain, useDomains, useVerifyDomains } from "../_components/queries";
 import {
   DNS_PROVIDER_LABELS,
@@ -272,7 +272,9 @@ export default function DomainsPage() {
   return (
     <>
       <ResourcePage<Domain>
+        eyebrow="Websites"
         title="Domains"
+        lede="Names Kaname answers for, who serves their zone, and whether control has been proved."
         subtitle={selection.server ? selection.server.hostname : "Every host in scope"}
         primaryAction={addDomain}
         state={state}
@@ -335,7 +337,9 @@ export default function DomainsPage() {
           );
         }}
       >
-        <ServerPicker selection={selection} allowAll />
+        <ScopeBar>
+          <ServerPicker selection={selection} allowAll />
+        </ScopeBar>
       </ResourcePage>
 
       <DomainDialog

@@ -784,3 +784,92 @@ applies.
 **Cost accepted.** A user cannot cancel a colleague's job without `infra.servers:write`, even one
 of a kind they could start themselves. API keys have no creator identity on a job, so they cancel
 only with `infra.servers:write`.
+
+## KD-038 — The panel speaks the ffstudios.io design language; KD-036's Apple layer is superseded
+
+**Decision.** The whole product, onboarding through dashboard, is drawn in the design language
+of ffstudios.io (FutureForge Studios), adapted to a dense control panel. The Apple UI layer of
+KD-036 is removed: no vibrancy or backdrop blur, no soft card shadows on ink, no SF Pro, no
+spring ease, no 3px halo. In its place:
+
+- **Canvas.** Flat ink (`#0A0A0C`) with a faint 64px blueprint grid, two vertical frame rails
+  bounding the content column, and "+" crosshair marks where a full-bleed hairline meets the
+  rails. Sidebar and top bar are solid ink with a hairline.
+- **Shape.** Every action is a pill (primary: filled purple, optional trailing arrow;
+  secondary: hairline ghost). Chips are 4–6px, fields 8px, cards and tables 14px, dialogs and
+  feature cards 18px. Hairlines carry structure; shadows exist only on floating overlays (and
+  a very soft card drop on paper).
+- **Type.** Geist Sans (OFL, `geist` package, via `next/font`) for interface and tight-tracked
+  headlines; JetBrains Mono for data and for the uppercase, 0.14em-tracked labels used by
+  navigation groups, tabs, table headers, metric labels, eyebrows and breadcrumbs. Geist Pixel
+  is demoted from page titles to an optional small accent.
+- **Vocabulary.** New kit primitives carry the site's signature pieces: `Eyebrow`,
+  `MonoLabel`, `GradientText`, `LeaderLabel`, `StatusLine`, `SectionHeader` /
+  `NumberedSection`, `CheckList` / `CheckItem`, `Card` / `CardInset`, `GridBackdrop`,
+  `Crosshair`, `PageHero`, `PageBody`, `SegmentedControl`; `PageHeader` gains `eyebrow`,
+  `lede` and `status`, `SectionCard` gains `index` and `caption`, `Button` gains `arrow` and
+  size `lg`.
+- **Motion.** The site's curves: ease-out-expo `cubic-bezier(.16,1,.3,1)` for movement,
+  `cubic-bezier(.4,0,.2,1)` for colour, at 150 / 240 / 400 ms.
+
+Every `--kn-*` token name and every component's public API is unchanged (props were only
+added), so no page had to move for the foundation to land. Rules and reasons:
+`docs/design-system.md`; migration guide for pages: `docs/redesign-guide.md`.
+
+**Why.** The owner asked for everything to be redesigned in the ffstudios.io language — the
+studio's own site — rather than that palette under another platform's manners. One language
+across the studio's products is the point; the Apple layer was the part that made Kaname look
+like something else.
+
+**Deliberate deviations from the site.** Satoshi is licensed to ffstudios.io and this
+repository is public, so headlines are Geist Sans. The marketing scale (64px headlines, the
+purple glow, the gradient line) is confined to setup, sign-in, invite and first-run states;
+routine pages use the same anatomy at working density (28px titles, 36px rows). Sidebar leaves
+stay sentence-case sans — thirty uppercase mono links are slower to scan than the site's five —
+while group labels, tabs and breadcrumbs take the mono treatment. The secondary pill rests at
+white 16% and reaches the site's 40% line on hover, because a toolbar of five 40% outlines
+shouts. Identifiers are never uppercased. The operator rules that predate this (status colour
+means status, the two status axes never collapse, monospace for anything greppable, density)
+are untouched.
+
+**Cost accepted.** Mono uppercase labels are wider than the sans they replace, so a long table
+header or metric label truncates sooner in a narrow column (headers are tracked 0.10em rather
+than 0.14em to limit this). Pills round the ends of a button group. The grid and rails are two
+more background layers on the scroll container; they are CSS gradients and cost nothing
+measurable. Light theme accent text keeps its own value (`#6A3EE8`) because primary-soft is
+2.4:1 on paper.
+
+## KD-039 — View modes and scoped accounts: resellers without tenancy
+
+**Decision.** Two independent ideas, never mixed:
+
+- **View mode** (`simplified` | `advanced`) is a per-user preference stored on `users.view_mode`
+  and switched from the top bar. It hides pages and changes the home; it never changes what the
+  API allows.
+- **Audience** (`operator` | `reseller` | `client`) is who the account is. A reseller is a user;
+  a client is a user whose `parent_id` is its reseller. There is no `org_id`, no tenant table
+  and no billing. What a scoped account may touch is one row per resource in `resource_owners`
+  (`site`, `domain`, `mailbox`, `database`), plus the servers listed in `account_limits`.
+
+Scoped accounts get a fixed grant list that is **inert** until a route opts in with
+`ownership(req)` (`apps/control-plane/src/routes/_ownership.ts`): that call is the route saying
+"I filter by owner", and returns `filter`, `assertOwns` (404, never "exists but not yours"),
+`reserve` (quota) and `claim`. A route that never opts in refuses scoped accounts, so every
+infrastructure, security and administration route stays operator-only without being edited.
+Quotas (sites, domains, mailboxes, databases, disk MB; null = no limit of its own) are set per
+reseller by an operator and per client by the reseller within its own; a reseller's usage counts
+its clients'. Branding (display name, up to four logo characters, support email/URL) belongs to
+the reseller and is shown to its clients.
+
+Owners and admins can **view as client / reseller**: a presentation-only preview held in the
+browser. It filters navigation and the home, is bannered, exits in one click, and never grants,
+impersonates or changes a request.
+
+**Why.** The owner wants to hand sites and mailboxes to clients and to small resellers without
+Kaname becoming shared-hosting software. Ownership rows on top of the existing scoped RBAC give
+that with one table and one helper; a tenant column would have touched every query.
+
+**Cost accepted.** Disk usage is what Kaname can measure without walking filesystems (database
+sizes plus mailbox allowances), so a site's files do not count. A resource has one owner; a
+reseller "sharing" a site with two clients is not modelled. PLAN.md §0's non-goal narrows to
+multi-tenant hierarchies and billing.

@@ -14,14 +14,14 @@ export default function PanelNotFound() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader title="Not found" />
+      <PageHeader eyebrow="404" title="Not found" />
       <div className="flex min-h-0 flex-1 items-center justify-center px-6 py-4">
         <EmptyState
           icon={Compass}
           title="There is nothing at this address"
           description="The resource may have been removed, or it belongs to a server this account is not scoped to."
           action={
-            <Button variant="primary" size="sm" onClick={() => router.push("/")}>
+            <Button variant="primary" size="sm" arrow onClick={() => router.push("/")}>
               Go to the Command Center
             </Button>
           }

@@ -120,16 +120,20 @@ const removeSiteQuery = z.object({
   delete_webroot: z.enum(["true", "false"]).default("false"),
 });
 
+import { assertOwned, ownership } from "./_ownership.js";
+
 export async function siteRoutes(app: FastifyInstance): Promise<void> {
   /* ------------------------------ list ------------------------------ */
 
   app.get("/sites", async (req, reply) => {
     const q = parseQuery(req, siteListQuery);
+    const own = ownership(req);
     helpers(req).authorize("websites.sites:read");
 
     const term = searchTerm(q.q);
     const where = combine(
       scopeFilter(req, "websites.sites:read", sites.serverId),
+      own.filter("site", sites.id),
       q.server_id ? eq(sites.serverId, q.server_id) : null,
       q.runtime ? eq(sites.runtime, q.runtime) : null,
       q.status ? eq(sites.status, q.status) : null,
@@ -170,6 +174,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/sites/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     await loadSiteRow(req, id, "websites.sites:read");
     return item(reply, await siteApi(req.ctx.db, id));
   });
@@ -178,8 +183,10 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/sites", async (req, reply) => {
     const body = parseBody(req, createSiteInput);
+    const own = ownership(req);
     const server = await loadServer(req, body.server_id, "websites.sites:write");
     const h = helpers(req);
+    if (own.restricted) confineSite(req, body);
 
     assertUpstream(body.runtime, body.upstream);
 
@@ -197,6 +204,11 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
 
     const names = serverNames(body.primary_domain, body.domains);
     const known = await assertDomainsAvailable(req.ctx.db, names, null);
+    // A name already in Kaname may be attached only by whoever owns it,
+    // and every new one counts against the domain allowance.
+    for (const domain of known) await own.assertOwns("domain", domain.id, "Domain");
+    await own.reserve("site");
+    await own.reserve("domain", names.length - known.length);
 
     const [row] = await req.ctx.db
       .insert(sites)
@@ -215,6 +227,8 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       .returning();
 
     await attachDomains(req.ctx.db, row!, names, known);
+    await own.claim("site", row!.id);
+    await claimSiteDomains(req, own, row!.id);
 
     const job = await enqueueServerJob(req, {
       type: "site.create",
@@ -262,9 +276,23 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
   app.patch("/sites/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
     const body = parseBody(req, updateSiteInput);
+    const own = ownership(req);
     const before = await loadSiteRow(req, id, "websites.sites:write");
     const server = await loadServer(req, before.serverId, "websites.sites:write");
     const h = helpers(req);
+    if (own.restricted) confineSiteUpdate(body);
+
+    // Settled before anything is written, so a refused rename changes nothing.
+    if (own.restricted && (body.primary_domain !== undefined || body.domains !== undefined)) {
+      const current = await currentNames(req.ctx.db, id, siteConfig(before).primary_domain);
+      const wanted = serverNames(
+        body.primary_domain ?? siteConfig(before).primary_domain ?? "",
+        body.domains ?? current,
+      ).filter(Boolean);
+      const existing = await assertDomainsAvailable(req.ctx.db, wanted, id);
+      for (const domain of existing) await own.assertOwns("domain", domain.id, "Domain");
+      await own.reserve("domain", wanted.length - existing.length);
+    }
 
     const runtime = body.runtime ?? before.runtime;
     assertUpstream(runtime, body.upstream ?? before.upstream ?? undefined);
@@ -316,6 +344,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       names = serverNames(primary, body.domains ?? attached);
       const known = await assertDomainsAvailable(req.ctx.db, names, id);
       await attachDomains(req.ctx.db, row!, names, known);
+      await claimSiteDomains(req, own, id);
     }
 
     const job = await enqueueServerJob(req, {
@@ -369,6 +398,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
   app.delete("/sites/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
     const q = parseQuery(req, removeSiteQuery);
+    ownership(req);
     const site = await loadSiteRow(req, id, "websites.sites:delete");
     const server = await loadServer(req, site.serverId, "websites.sites:delete");
     const h = helpers(req);
@@ -418,6 +448,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post("/sites/:id/suspend", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const site = await loadSiteRow(req, id, "websites.sites:write");
     const server = await loadServer(req, site.serverId, "websites.sites:write");
     if (site.status === "suspended") {
@@ -437,6 +468,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/sites/:id/resume", async (req, reply) => {
     const { id } = parseParams(req, idParam);
+    ownership(req);
     const site = await loadSiteRow(req, id, "websites.sites:write");
     const server = await loadServer(req, site.serverId, "websites.sites:write");
     if (site.status !== "suspended" && site.status !== "error") {
@@ -551,7 +583,96 @@ export async function loadSiteRow(
   const row = rows[0];
   if (!row) throw notFound("Site", siteId);
   helpers(req).authorize(permission, row.serverId);
+  await assertOwned(req, "site", siteId, "Site");
   return row;
+}
+
+/* ------------------------------------------------------------------ *
+ * What a reseller or client may not choose (KD-039).
+ *
+ * An operator picks a webroot, a POSIX owner and an upstream because
+ * the host is theirs. A scoped account sharing that host must not: a
+ * webroot of /etc publishes it, an upstream of 127.0.0.1 reaches
+ * whatever listens there, and an owner of root runs as root. So the
+ * webroot is derived from the account, and the rest is refused.
+ * ------------------------------------------------------------------ */
+
+const SCOPED_RUNTIMES: readonly string[] = ["static", "php"];
+
+function scopedWebroot(req: FastifyRequest, siteName: string): string {
+  return `/var/www/accounts/${helpers(req).requirePrincipal().id}/${siteName}`;
+}
+
+function confineSite(
+  req: FastifyRequest,
+  body: { name: string; webroot: string; runtime: string; upstream?: string; owner?: string },
+): void {
+  if (!SCOPED_RUNTIMES.includes(body.runtime) || body.upstream !== undefined) {
+    throw new ApiException(
+      "forbidden",
+      "This account can create static and PHP sites only.",
+      {
+        fields: { runtime: "choose static or php" },
+        remediation: {
+          summary:
+            "Proxied and long-running runtimes reach other services on the host, so only an operator can set them up.",
+          actions: [],
+        },
+      },
+    );
+  }
+  if (body.owner !== undefined) {
+    throw new ApiException("forbidden", "This account cannot choose the system user a site runs as.", {
+      fields: { owner: "leave empty" },
+    });
+  }
+  // The name becomes a folder under the account's own directory.
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*$/.test(body.name)) {
+    throw new ApiException("validation_failed", "Use letters, digits, dots, dashes and underscores.", {
+      fields: { name: "letters, digits, dots, dashes and underscores only" },
+    });
+  }
+  body.webroot = scopedWebroot(req, body.name);
+}
+
+function confineSiteUpdate(body: {
+  name?: string;
+  webroot?: string;
+  runtime?: string;
+  upstream?: string;
+  owner?: string;
+}): void {
+  const refused = (["name", "webroot", "upstream", "owner"] as const).filter(
+    (key) => body[key] !== undefined,
+  );
+  if (refused.length > 0 || (body.runtime !== undefined && !SCOPED_RUNTIMES.includes(body.runtime))) {
+    throw new ApiException(
+      "forbidden",
+      "This account cannot change a site's name, folder, system user or upstream.",
+      {
+        fields: Object.fromEntries(
+          [...refused, ...(refused.length === 0 ? ["runtime"] : [])].map((key) => [
+            key,
+            "cannot be changed from this account",
+          ]),
+        ),
+      },
+    );
+  }
+}
+
+/** Every domain now attached to the site belongs to whoever attached it. */
+async function claimSiteDomains(
+  req: FastifyRequest,
+  own: ReturnType<typeof ownership>,
+  siteId: string,
+): Promise<void> {
+  if (!own.restricted) return;
+  const attached = await req.ctx.db
+    .select({ id: domains.id })
+    .from(domains)
+    .where(eq(domains.siteId, siteId));
+  for (const domain of attached) await own.claim("domain", domain.id);
 }
 
 export async function siteApi(db: Database, siteId: string): Promise<Site> {

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { and, asc, desc, eq, gt, sql } from "@kaname/db";
 import { jobLogs, jobs, servers } from "@kaname/db/schema";
 import { idParam, jobListQueryExtra, jobLogQuery, listQuery } from "@kaname/contract";
@@ -14,6 +14,29 @@ import { releaseAbandoned } from "../jobs/threats.js";
  * SSE, which is why a mutation can render a real status pill instead of
  * a spinner that lies (KD-008).
  * ------------------------------------------------------------------ */
+
+/**
+ * A job an operator may read is one on a server they can see. A
+ * reseller or client has no server-level read at all (KD-039), but
+ * must still be able to watch the work they started, so for them the
+ * rule is narrower and different: their own jobs, and nothing else.
+ */
+async function loadReadableJob(req: FastifyRequest, id: string) {
+  const h = helpers(req);
+  const principal = h.requirePrincipal();
+  if (principal.scoped) {
+    if (!principal.mfaSatisfied) h.authorize("infra.servers:read");
+    const own = await req.ctx.queue.get(id);
+    if (!own || own.created_by !== principal.id) throw notFound("Job", id);
+    return own;
+  }
+
+  h.authorize("infra.servers:read");
+  const job = await req.ctx.queue.get(id);
+  if (!job) throw notFound("Job", id);
+  if (job.server_id) h.authorize("infra.servers:read", job.server_id);
+  return job;
+}
 
 export async function jobRoutes(app: FastifyInstance): Promise<void> {
   app.get("/jobs", async (req, reply) => {
@@ -53,11 +76,7 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/jobs/:id", async (req, reply) => {
     const { id } = parseParams(req, idParam);
-    helpers(req).authorize("infra.servers:read");
-
-    const job = await req.ctx.queue.get(id);
-    if (!job) throw notFound("Job", id);
-    if (job.server_id) helpers(req).authorize("infra.servers:read", job.server_id);
+    const job = await loadReadableJob(req, id);
 
     const children = await req.ctx.db
       .select({ n: sql<number>`count(*)::int` })
@@ -70,11 +89,7 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
   app.get("/jobs/:id/logs", async (req, reply) => {
     const { id } = parseParams(req, idParam);
     const q = parseQuery(req, jobLogQuery);
-    helpers(req).authorize("infra.servers:read");
-
-    const job = await req.ctx.queue.get(id);
-    if (!job) throw notFound("Job", id);
-    if (job.server_id) helpers(req).authorize("infra.servers:read", job.server_id);
+    const job = await loadReadableJob(req, id);
 
     const rows = await req.ctx.db
       .select()

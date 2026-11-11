@@ -512,8 +512,8 @@ export const Combobox = React.forwardRef<HTMLDivElement, ComboboxProps>(
               style={popoverStyle}
               className={cn(
                 "z-[70] overflow-y-auto py-1 text-base text-[var(--kn-text)]",
-                "border border-[var(--kn-border-strong)] bg-[var(--kn-surface)]",
-                "rounded-[var(--kn-r-md)] shadow-[var(--kn-shadow-md)]",
+                "border border-[var(--kn-border-strong)] bg-[var(--kn-surface-2)]",
+                "rounded-[var(--kn-r-lg)] shadow-[var(--kn-shadow-md)]",
                 "animate-[var(--animate-rise)]",
                 listClassName,
               )}

@@ -270,6 +270,10 @@ export interface ResourcePageProps<T> {
   title: React.ReactNode;
   /** Technical second line: a hostname, a path, a connection string. */
   subtitle?: React.ReactNode;
+  /** The module's name as the eyebrow chip above the title, e.g. "Websites". */
+  eyebrow?: React.ReactNode;
+  /** One muted sentence under the title saying what the list is for. */
+  lede?: React.ReactNode;
   tabs?: React.ReactNode;
   /** The one thing this page exists to let you do. */
   primaryAction?: React.ReactNode;
@@ -321,6 +325,8 @@ export interface ResourcePageProps<T> {
 export function ResourcePage<T>({
   title,
   subtitle,
+  eyebrow,
+  lede,
   tabs,
   primaryAction,
   headerActions,
@@ -375,7 +381,7 @@ export function ResourcePage<T>({
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {query.dataUpdatedAt > 0 && (
-          <span className="hidden items-center gap-1 text-xs text-[var(--kn-text-3)] md:inline-flex">
+          <span className="kn-label-sm hidden items-center gap-1 tracking-[0.08em] text-[var(--kn-text-3)] md:inline-flex">
             synced <RelativeTime value={query.dataUpdatedAt} />
           </span>
         )}
@@ -395,6 +401,8 @@ export function ResourcePage<T>({
       <PageHeader
         title={title}
         subtitle={subtitle}
+        eyebrow={eyebrow}
+        lede={lede}
         tabs={tabs}
         actions={
           (primaryAction || headerActions) && (
@@ -406,7 +414,7 @@ export function ResourcePage<T>({
         }
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-5">
         {children}
 
         <DataTable<T>

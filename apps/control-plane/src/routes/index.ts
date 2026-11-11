@@ -10,6 +10,7 @@ import { domainRoutes } from "./domains.js";
 import { dnsRoutes } from "./dns.js";
 import { certificateRoutes } from "./certificates.js";
 import { deploymentRoutes } from "./deployments.js";
+import { appRoutes } from "./apps.js";
 import { fileRoutes } from "./files.js";
 import { ftpRoutes } from "./ftp.js";
 import { storageRoutes } from "./storage.js";
@@ -21,6 +22,7 @@ import { monitoringRoutes } from "./monitoring.js";
 import { logRoutes } from "./logs.js";
 import { terminalRoutes } from "./terminal.js";
 import { adminRoutes } from "./admin.js";
+import { accountRoutes } from "./accounts.js";
 import { jobRoutes } from "./jobs.js";
 import { eventRoutes } from "./events.js";
 import { searchRoutes } from "./search.js";
@@ -49,6 +51,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   await app.register(dnsRoutes);
   await app.register(certificateRoutes);
   await app.register(deploymentRoutes);
+  await app.register(appRoutes);
 
   await app.register(fileRoutes);
   await app.register(ftpRoutes);
@@ -64,6 +67,7 @@ export async function registerApiRoutes(app: FastifyInstance): Promise<void> {
   await app.register(terminalRoutes);
 
   await app.register(adminRoutes);
+  await app.register(accountRoutes);
   await app.register(updateRoutes);
   await app.register(jobRoutes);
   await app.register(eventRoutes);

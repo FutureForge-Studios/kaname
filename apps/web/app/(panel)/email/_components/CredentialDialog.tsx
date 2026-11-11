@@ -2,14 +2,7 @@
 
 import * as React from "react";
 import { KeyRound } from "lucide-react";
-import {
-  Button,
-  CopyableCode,
-  Dialog,
-  DialogBody,
-  DialogFooter,
-  DialogHeader,
-} from "@kaname/ui";
+import { Button, CopyableCode, Dialog, DialogBody, DialogFooter, DialogHeader } from "@kaname/ui";
 
 /* ------------------------------------------------------------------ *
  * CredentialDialog — the one place a mailbox password is ever shown.

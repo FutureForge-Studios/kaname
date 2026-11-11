@@ -37,6 +37,7 @@ import {
   EmptyState,
   FileTree,
   IconButton,
+  MonoLabel,
   MonoText,
   PageHeader,
   PathBreadcrumb,
@@ -654,7 +655,9 @@ export default function FileManagerPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader
+        eyebrow="Files"
         title="File Manager"
+        lede="Browse, edit and move files on a host. Reads are live; every change runs as a job on its agent."
         subtitle={
           selection.server ? (
             <span className="flex min-w-0 items-center gap-2">
@@ -711,18 +714,20 @@ export default function FileManagerPage() {
         }}
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-5">
         <div className="flex flex-wrap items-center gap-3">
           <ServerPicker selection={selection} />
-          <div className="flex min-w-0 flex-1 items-center gap-1">
+          {/* The location bar: a recessed mono well, like an address field. */}
+          <div className="flex h-8 min-w-[16rem] flex-1 items-center gap-1 rounded-[var(--kn-r-md)] border border-[var(--kn-field-border)] bg-[var(--kn-field-bg)] pl-1 pr-1.5">
             <IconButton
               icon={ArrowUp}
               label="Parent directory"
-              size="sm"
+              size="xs"
               disabled={path === "/"}
               onClick={() => setPath(parentOf(path))}
             />
-            <PathBreadcrumb path={path} onNavigate={setPath} className="min-w-0" />
+            <span aria-hidden className="h-4 w-px shrink-0 bg-[var(--kn-border)]" />
+            <PathBreadcrumb path={path} onNavigate={setPath} className="min-w-0 flex-1" />
           </div>
         </div>
 
@@ -773,28 +778,34 @@ export default function FileManagerPage() {
               if (event.dataTransfer.files.length > 0) startUploads(event.dataTransfer.files);
             }}
             className={cn(
-              "grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[248px_minmax(0,1fr)]",
+              "grid min-h-[420px] flex-1 grid-cols-1 gap-5 lg:grid-cols-[240px_minmax(0,1fr)]",
               dragging &&
                 "rounded-[var(--kn-r-md)] outline-2 outline-dashed outline-[var(--kn-accent-500)]",
             )}
           >
-            <aside className="hidden min-h-0 lg:flex lg:flex-col">
-              <SectionCard title="Tree" padded={false} className="flex min-h-0 flex-1 flex-col">
-                <div className="min-h-0 flex-1 overflow-auto">
-                  <FileTree
-                    nodes={treeNodes}
-                    expandedPaths={expanded}
-                    onExpandedChange={setExpanded}
-                    selectedPath={path}
-                    onSelect={(node) => {
-                      if (node.kind === "directory") setPath(node.path);
-                    }}
-                    onLoadChildren={(node) => loadInto(node.path)}
-                    label="Directory tree"
-                    emptyLabel="Nothing readable here"
-                  />
-                </div>
-              </SectionCard>
+            {/* The tree is a rail, not a card: a hairline on its right edge
+                and a mono caption, so the listing stays the one framed object. */}
+            <aside
+              aria-label="Folders"
+              className="hidden min-h-0 border-r border-[var(--kn-border)] pr-3 lg:flex lg:flex-col"
+            >
+              <div className="flex h-10 shrink-0 items-center border-b border-[var(--kn-border)] pl-1">
+                <MonoLabel size="xs">Folders</MonoLabel>
+              </div>
+              <div className="-ml-1 min-h-0 flex-1 overflow-auto pt-1">
+                <FileTree
+                  nodes={treeNodes}
+                  expandedPaths={expanded}
+                  onExpandedChange={setExpanded}
+                  selectedPath={path}
+                  onSelect={(node) => {
+                    if (node.kind === "directory") setPath(node.path);
+                  }}
+                  onLoadChildren={(node) => loadInto(node.path)}
+                  label="Directory tree"
+                  emptyLabel="Nothing readable here"
+                />
+              </div>
             </aside>
 
             {open ? (
@@ -1013,12 +1024,18 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
   return (
     <section
       aria-label={`File ${open.path}`}
-      className="flex min-h-0 flex-col overflow-hidden rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)]"
+      className="flex min-h-0 flex-col overflow-hidden rounded-[var(--kn-r-lg)] border border-[var(--kn-border)] bg-[var(--kn-surface)]"
     >
-      <div className="flex h-10 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--kn-border)] px-2">
-        <MonoText truncate className="min-w-0 flex-1 text-[var(--kn-text)]" title={open.path}>
-          {baseName(open.path)}
-        </MonoText>
+      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-2 border-b border-[var(--kn-border)] py-1.5 pl-3 pr-2">
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          <MonoLabel size="xs" tone="muted" className="shrink-0">
+            {open.mode === "edit" ? "Edit" : "Preview"}
+          </MonoLabel>
+          <span aria-hidden className="h-3.5 w-px shrink-0 bg-[var(--kn-border)]" />
+          <MonoText truncate className="min-w-0 text-[var(--kn-text)]" title={open.path}>
+            {baseName(open.path)}
+          </MonoText>
+        </span>
 
         {content.data && (
           <>
@@ -1066,7 +1083,7 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
             label={wrap ? "Disable line wrapping" : "Wrap long lines"}
             size="xs"
             aria-pressed={wrap}
-            className={cn(wrap && "bg-[var(--kn-surface-3)] text-[var(--kn-text)]")}
+            className={cn(wrap && "bg-[var(--kn-accent-soft)] text-[var(--kn-accent-400)]")}
             onClick={() => setWrap((current) => !current)}
           />
         )}
@@ -1075,7 +1092,7 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
         </Button>
         <a
           href={downloadUrl(serverId, open.path)}
-          className="inline-flex h-6 items-center gap-1 rounded-[var(--kn-r-sm)] px-2 text-xs text-[var(--kn-text-2)] outline-none transition-colors duration-[var(--kn-dur-fast)] hover:bg-[var(--kn-surface-2)] hover:text-[var(--kn-text)]"
+          className="inline-flex h-6 items-center gap-1 rounded-[var(--kn-r-pill)] border border-transparent px-2.5 text-xs text-[var(--kn-text-2)] outline-none transition-colors duration-[var(--kn-dur-fast)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
         >
           <Download size={12} aria-hidden />
           Download
@@ -1146,7 +1163,7 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
           action={
             <a
               href={downloadUrl(serverId, open.path)}
-              className="inline-flex h-7 items-center gap-1.5 rounded-[var(--kn-r-sm)] border border-[var(--kn-accent-600)] bg-[var(--kn-accent-600)] px-2.5 text-sm font-medium text-[var(--kn-accent-fg)] outline-none"
+              className="inline-flex h-7 items-center gap-1.5 rounded-[var(--kn-r-pill)] border border-[var(--kn-accent-500)] bg-[var(--kn-accent-500)] px-3 text-sm font-medium text-[var(--kn-accent-fg)] outline-none hover:bg-[var(--kn-accent-600)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
             >
               <Download size={14} aria-hidden />
               Download

@@ -3,7 +3,6 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronRight } from "lucide-react";
 import { NAVIGATION, NAV_LEAVES } from "@kaname/contract";
 import { cn } from "@kaname/ui";
 import { humanize } from "@/lib/format";
@@ -85,21 +84,23 @@ export function Breadcrumbs({ trailing, className, ...props }: BreadcrumbsProps)
   return (
     <nav
       aria-label="Breadcrumb"
-      className={cn("flex min-w-0 items-center", className)}
+      className={cn("kn-label-sm flex min-w-0 items-center", className)}
       {...props}
     >
-      <ol className="flex min-w-0 items-center gap-1">
+      <ol className="m-0 flex min-w-0 list-none items-center gap-2 p-0">
         {crumbs.map((crumb, index) => {
           const last = index === crumbs.length - 1;
           return (
-            <li key={`${crumb.label}-${index}`} className="flex min-w-0 items-center gap-1">
+            <li key={`${crumb.label}-${index}`} className="flex min-w-0 items-center gap-2">
               {index > 0 && (
-                <ChevronRight size={12} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />
+                <span className="shrink-0 text-[var(--kn-text-3)] opacity-60" aria-hidden>
+                  /
+                </span>
               )}
               {crumb.href && !last ? (
                 <Link
                   href={crumb.href}
-                  className="truncate rounded-[var(--kn-r-xs)] text-[var(--kn-text-2)] transition-colors duration-[var(--kn-dur-fast)] hover:text-[var(--kn-text)]"
+                  className="truncate rounded-[var(--kn-r-xs)] text-[var(--kn-text-3)] transition-colors duration-[var(--kn-dur-fast)] hover:text-[var(--kn-text)]"
                 >
                   {crumb.label}
                 </Link>
@@ -108,7 +109,7 @@ export function Breadcrumbs({ trailing, className, ...props }: BreadcrumbsProps)
                   aria-current={last ? "page" : undefined}
                   className={cn(
                     "truncate",
-                    last ? "text-[var(--kn-text)]" : "text-[var(--kn-text-2)]",
+                    last ? "text-[var(--kn-text)]" : "text-[var(--kn-text-3)]",
                   )}
                 >
                   {crumb.label}

@@ -40,14 +40,16 @@ import {
   FormField,
   HealthBadge,
   Input,
-  MetricTile,
+  MonoLabel,
   MonoText,
+  NumberedSection,
   RelativeTime,
   SectionCard,
   Select,
   Skeleton,
   StatusBadge,
   Switch,
+  cn,
   type ComboboxOption,
   type DataTableColumn,
   type DataTableRowAction,
@@ -103,6 +105,10 @@ export interface EngineMeta {
   hostPatterns: boolean;
   ownerLabel: string;
   dumpExtension: string;
+  /** The engine's own command-line client, for the copyable CLI line. */
+  cli: "mysql" | "psql";
+  /** One sentence under the page title: what this list is for. */
+  lede: string;
 }
 
 const ENGINE_META: Record<DatabaseEngineGroup, EngineMeta> = {
@@ -118,6 +124,8 @@ const ENGINE_META: Record<DatabaseEngineGroup, EngineMeta> = {
     hostPatterns: true,
     ownerLabel: "Owner",
     dumpExtension: "sql",
+    cli: "mysql",
+    lede: "Every database and user on the instance. A database is born with its own user, never a shared superuser.",
   },
   postgres: {
     group: "postgres",
@@ -131,6 +139,8 @@ const ENGINE_META: Record<DatabaseEngineGroup, EngineMeta> = {
     hostPatterns: false,
     ownerLabel: "Owner role",
     dumpExtension: "sql",
+    cli: "psql",
+    lede: "Every database and role on the instance. A database is born with its own role, never a shared superuser.",
   },
 };
 
@@ -154,6 +164,19 @@ export function connectionTemplate(
   database: string,
 ): string {
   return `${meta.scheme}://{user}:{password}@${host}:${port}/${database || "{database}"}`;
+}
+
+/** The client invocation, with the same placeholders as the URI. */
+export function cliTemplate(
+  meta: EngineMeta,
+  host: string,
+  port: number,
+  database: string,
+): string {
+  const name = database || "{database}";
+  return meta.cli === "psql"
+    ? `psql -h ${host} -p ${port} -U {user} ${name}`
+    : `mysql -h ${host} -P ${port} -u {user} -p ${name}`;
 }
 
 const PRIVILEGE_OPTIONS: ComboboxOption[] = dbPrivilege.options.map((privilege) => ({
@@ -791,15 +814,16 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
           meta={meta}
           syncing={sync.isPending}
           onSync={() => sync.mutate(instance.id)}
+          showConnection={view === "databases"}
         />
       )}
-
-      {instance && view === "databases" && <ConnectionCard instance={instance} meta={meta} />}
     </>
   );
 
   const shared = {
     title: meta.title,
+    eyebrow: "Databases",
+    lede: meta.lede,
     subtitle: instance
       ? joinMeta(
           `${instance.engine} ${instance.version}`,
@@ -1057,17 +1081,7 @@ export function DatabaseSection({ engine }: DatabaseSectionProps) {
 /* --------------------------- instance header ------------------------ */
 
 function InstanceSkeleton() {
-  return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-      {Array.from({ length: 6 }, (_, index) => (
-        <Skeleton
-          key={index}
-          className="h-16 rounded-[var(--kn-r-md)]"
-          label={index === 0 ? "Loading instance" : undefined}
-        />
-      ))}
-    </div>
-  );
+  return <Skeleton className="h-36 rounded-[var(--kn-r-lg)]" label="Loading instance" />;
 }
 
 interface InstanceHeaderProps {
@@ -1076,9 +1090,24 @@ interface InstanceHeaderProps {
   meta: EngineMeta;
   syncing: boolean;
   onSync: () => void;
+  /** The connection template sits under the readings on the databases view. */
+  showConnection: boolean;
 }
 
-function InstanceHeader({ instance, server, meta, syncing, onSync }: InstanceHeaderProps) {
+/*
+ * The instance as one card: identity and the three separate status facts
+ * on the title row, the readings as a hairline strip, and — on the
+ * databases view — the connection template in a copyable well. One card
+ * rather than three keeps the table on the first screen.
+ */
+function InstanceHeader({
+  instance,
+  server,
+  meta,
+  syncing,
+  onSync,
+  showConnection,
+}: InstanceHeaderProps) {
   const load =
     instance.connections !== null && instance.max_connections
       ? Math.round((instance.connections / instance.max_connections) * 100)
@@ -1088,7 +1117,8 @@ function InstanceHeader({ instance, server, meta, syncing, onSync }: InstanceHea
     <SectionCard
       title={`${instance.engine} ${instance.version}`}
       icon={DatabaseIcon}
-      description={`${instance.host}:${instance.port}`}
+      description={<span className="kn-mono">{`${instance.host}:${instance.port}`}</span>}
+      padded={false}
       actions={
         <>
           {/* Both axes, never merged: whether Kaname can reach the host,
@@ -1110,48 +1140,126 @@ function InstanceHeader({ instance, server, meta, syncing, onSync }: InstanceHea
           <StatusBadge tone={INSTANCE_TONES[instance.status]} size="sm">
             {instance.status}
           </StatusBadge>
-          <span className="hidden items-center gap-1 text-xs text-[var(--kn-text-3)] md:inline-flex">
+          <span className="kn-label-sm hidden items-center gap-1 text-[var(--kn-text-3)] md:inline-flex">
             synced <RelativeTime value={instance.last_synced_at} />
           </span>
-          <Button variant="ghost" size="xs" icon={RefreshCw} loading={syncing} onClick={onSync}>
+          <Button variant="secondary" size="xs" icon={RefreshCw} loading={syncing} onClick={onSync}>
             Sync
           </Button>
         </>
       }
     >
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-        <MetricTile size="sm" label="Databases" value={formatCount(instance.database_count)} />
-        <MetricTile size="sm" label="Users" value={formatCount(instance.user_count)} />
-        <MetricTile
-          size="sm"
+      <dl className="m-0 grid grid-cols-2 gap-px bg-[var(--kn-border)] sm:grid-cols-3 xl:grid-cols-6">
+        <InstanceStat label="Databases" value={formatCount(instance.database_count)} />
+        <InstanceStat label="Users" value={formatCount(instance.user_count)} />
+        <InstanceStat
           label="Connections"
           value={instance.connections === null ? "—" : formatCount(instance.connections)}
           unit={
             instance.max_connections ? `of ${formatCount(instance.max_connections)}` : undefined
           }
-          tone={load === null ? "neutral" : load >= 90 ? "danger" : load >= 75 ? "warn" : "neutral"}
+          tone={load === null ? undefined : load >= 90 ? "danger" : load >= 75 ? "warn" : undefined}
         />
-        <MetricTile size="sm" label="Data size" value={<ByteSize bytes={instance.data_size} />} />
-        <MetricTile size="sm" label="Uptime" value={formatUptime(instance.uptime_seconds)} />
-        <MetricTile size="sm" label="Default encoding" value={meta.defaultEncoding} />
-      </div>
+        <InstanceStat label="Data size" value={<ByteSize bytes={instance.data_size} />} />
+        <InstanceStat label="Uptime" value={formatUptime(instance.uptime_seconds)} />
+        <InstanceStat label="Default encoding" value={meta.defaultEncoding} mono />
+      </dl>
+
+      {showConnection && (
+        <div className="flex flex-col gap-2 border-t border-[var(--kn-border)] p-4">
+          <ConnectionWells
+            meta={meta}
+            host={instance.host}
+            port={instance.port}
+            database=""
+            label={`${instance.engine} on ${instance.server_name}`}
+          />
+          <p className="text-sm text-[var(--kn-text-3)]">
+            Passwords are envelope-encrypted the moment they are stored and are never read back into
+            the panel — not here and not on a detail page. Rotate a user&apos;s password to be shown
+            a new one once.
+          </p>
+        </div>
+      )}
     </SectionCard>
   );
 }
 
-function ConnectionCard({ instance, meta }: { instance: DbInstance; meta: EngineMeta }) {
+function InstanceStat({
+  label,
+  value,
+  unit,
+  tone,
+  mono = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  unit?: string;
+  tone?: "warn" | "danger";
+  mono?: boolean;
+}) {
   return (
-    <SectionCard title="Connection" icon={KeyRound} headingLevel={3}>
+    <div className="flex min-w-0 flex-col gap-1.5 bg-[var(--kn-surface)] px-4 py-3">
+      <MonoLabel as="dt" size="xs">
+        {label}
+      </MonoLabel>
+      <dd
+        className={cn(
+          "m-0 flex min-w-0 items-baseline gap-1.5 truncate text-lg font-medium tracking-title",
+          mono ? "kn-mono" : "kn-num",
+          tone === "danger"
+            ? "text-[var(--kn-danger)]"
+            : tone === "warn"
+              ? "text-[var(--kn-warn)]"
+              : "text-[var(--kn-text)]",
+        )}
+      >
+        {value}
+        {unit && (
+          <span className="kn-mono text-xs font-normal text-[var(--kn-text-3)]">{unit}</span>
+        )}
+      </dd>
+    </div>
+  );
+}
+
+export interface ConnectionWellsProps {
+  meta: EngineMeta;
+  host: string;
+  port: number;
+  /** Empty for the instance-wide template. */
+  database: string;
+  label: string;
+  /** One well per row, for a narrow column. */
+  stacked?: boolean;
+}
+
+/**
+ * The two ways in, each in its own copyable well: the URI and the
+ * engine's own client. Placeholders only — a stored password is never
+ * read back into the panel.
+ */
+export function ConnectionWells({
+  meta,
+  host,
+  port,
+  database,
+  label,
+  stacked = false,
+}: ConnectionWellsProps) {
+  return (
+    <div className={cn("grid min-w-0 grid-cols-1 gap-2", !stacked && "xl:grid-cols-2")}>
       <CopyableCode
-        value={connectionTemplate(meta, instance.host, instance.port, "")}
-        label={`${instance.engine} on ${instance.server_name}`}
+        value={connectionTemplate(meta, host, port, database)}
+        label={`URI · ${label}`}
+        block
       />
-      <p className="mt-2 text-[var(--kn-text-2)]">
-        Passwords are envelope-encrypted the moment they are stored and are never read back into the
-        panel — not here and not on a detail page. Rotate a user&apos;s password to be shown a new
-        one once.
-      </p>
-    </SectionCard>
+      <CopyableCode
+        value={cliTemplate(meta, host, port, database)}
+        label={`${meta.cli} client`}
+        block
+      />
+    </div>
   );
 }
 
@@ -1259,117 +1367,131 @@ function CreateDatabaseDialog({
           description={`${instance.engine} ${instance.version} at ${instance.host}:${instance.port} · ${instance.server_name}`}
         />
         <DialogBody>
-          <div className="flex flex-col gap-4">
-            <FormField label="Name" error={nameError} required>
-              <Input
-                data-autofocus=""
-                mono
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="shop"
-                autoComplete="off"
-                spellCheck={false}
+          <div className="flex flex-col gap-6">
+            <NumberedSection
+              index={1}
+              title="Database"
+              caption="Its name and character set."
+              headingLevel={3}
+            >
+              <FormField label="Name" error={nameError} required>
+                <Input
+                  data-autofocus=""
+                  mono
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="shop"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </FormField>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <FormField label={meta.ownerLabel} description="Defaults to the new user.">
+                  <Input
+                    mono
+                    value={owner}
+                    onChange={(event) => setOwner(event.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </FormField>
+                <FormField label="Encoding" description={`Default ${meta.defaultEncoding}.`}>
+                  <Input
+                    mono
+                    value={encoding}
+                    onChange={(event) => setEncoding(event.target.value)}
+                    placeholder={meta.defaultEncoding}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </FormField>
+                <FormField label="Collation">
+                  <Input
+                    mono
+                    value={collation}
+                    onChange={(event) => setCollation(event.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </FormField>
+              </div>
+            </NumberedSection>
+
+            <NumberedSection
+              index={2}
+              title="Access"
+              caption="Who connects to it, and with what."
+              headingLevel={3}
+            >
+              <Switch
+                checked={withUser}
+                onChange={(event) => setWithUser(event.target.checked)}
+                label="Create a dedicated user"
+                description="A database born with its own credentials is never shared by accident."
               />
-            </FormField>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <FormField label={meta.ownerLabel} description="Defaults to the new user.">
-                <Input
-                  mono
-                  value={owner}
-                  onChange={(event) => setOwner(event.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </FormField>
-              <FormField label="Encoding" description={`Default ${meta.defaultEncoding}.`}>
-                <Input
-                  mono
-                  value={encoding}
-                  onChange={(event) => setEncoding(event.target.value)}
-                  placeholder={meta.defaultEncoding}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </FormField>
-              <FormField label="Collation">
-                <Input
-                  mono
-                  value={collation}
-                  onChange={(event) => setCollation(event.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </FormField>
-            </div>
-
-            <Switch
-              checked={withUser}
-              onChange={(event) => setWithUser(event.target.checked)}
-              label="Create a dedicated user"
-              description="A database born with its own credentials is never shared by accident."
-            />
-
-            {withUser && (
-              <div className="flex flex-col gap-4 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] p-3">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <FormField label="Username" error={usernameError} required>
-                    <Input
-                      mono
-                      value={username}
-                      onChange={(event) => setUsername(event.target.value)}
-                      placeholder={name ? `${name}_app` : "shop_app"}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                  </FormField>
-                  {meta.hostPatterns && (
-                    <FormField
-                      label="Host pattern"
-                      description="Part of the user's identity on MySQL."
-                    >
+              {withUser && (
+                <div className="flex flex-col gap-4 border-l border-[var(--kn-border)] pl-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <FormField label="Username" error={usernameError} required>
                       <Input
                         mono
-                        value={hostPattern}
-                        onChange={(event) => setHostPattern(event.target.value)}
+                        value={username}
+                        onChange={(event) => setUsername(event.target.value)}
+                        placeholder={name ? `${name}_app` : "shop_app"}
                         autoComplete="off"
                         spellCheck={false}
                       />
                     </FormField>
-                  )}
-                </div>
+                    {meta.hostPatterns && (
+                      <FormField
+                        label="Host pattern"
+                        description="Part of the user's identity on MySQL."
+                      >
+                        <Input
+                          mono
+                          value={hostPattern}
+                          onChange={(event) => setHostPattern(event.target.value)}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </FormField>
+                    )}
+                  </div>
 
-                <FormField label="Privileges" required>
-                  <Combobox
-                    multiple
-                    options={PRIVILEGE_OPTIONS}
-                    value={privileges}
-                    onValueChange={setPrivileges}
-                    placeholder="Select privileges"
-                    mono
-                  />
-                </FormField>
-
-                <Switch
-                  checked={generate}
-                  onChange={(event) => setGenerate(event.target.checked)}
-                  label="Generate a password"
-                  description="Shown once, then stored envelope-encrypted."
-                />
-
-                {!generate && (
-                  <FormField label="Password" error={passwordError} required>
-                    <Input
-                      type="password"
+                  <FormField label="Privileges" required>
+                    <Combobox
+                      multiple
+                      options={PRIVILEGE_OPTIONS}
+                      value={privileges}
+                      onValueChange={setPrivileges}
+                      placeholder="Select privileges"
                       mono
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      autoComplete="new-password"
                     />
                   </FormField>
-                )}
-              </div>
-            )}
+
+                  <Switch
+                    checked={generate}
+                    onChange={(event) => setGenerate(event.target.checked)}
+                    label="Generate a password"
+                    description="Shown once, then stored envelope-encrypted."
+                  />
+
+                  {!generate && (
+                    <FormField label="Password" error={passwordError} required>
+                      <Input
+                        type="password"
+                        mono
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                        autoComplete="new-password"
+                      />
+                    </FormField>
+                  )}
+                </div>
+              )}
+            </NumberedSection>
           </div>
         </DialogBody>
         <DialogFooter>
@@ -1469,55 +1591,74 @@ function CreateUserDialog({
           description={`${instance.engine} ${instance.version} · ${instance.server_name}`}
         />
         <DialogBody>
-          <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <FormField label="Username" error={usernameError} required>
-                <Input
-                  data-autofocus=""
-                  mono
-                  value={username}
-                  onChange={(event) => setUsername(event.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
-                />
-              </FormField>
-              {meta.hostPatterns && (
-                <FormField label="Host pattern" description="Part of the user's identity on MySQL.">
+          <div className="flex flex-col gap-6">
+            <NumberedSection
+              index={1}
+              title="Identity"
+              caption="How the engine knows this user."
+              headingLevel={3}
+            >
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <FormField label="Username" error={usernameError} required>
                   <Input
+                    data-autofocus=""
                     mono
-                    value={hostPattern}
-                    onChange={(event) => setHostPattern(event.target.value)}
+                    value={username}
+                    onChange={(event) => setUsername(event.target.value)}
                     autoComplete="off"
                     spellCheck={false}
                   />
                 </FormField>
-              )}
-            </div>
+                {meta.hostPatterns && (
+                  <FormField
+                    label="Host pattern"
+                    description="Part of the user's identity on MySQL."
+                  >
+                    <Input
+                      mono
+                      value={hostPattern}
+                      onChange={(event) => setHostPattern(event.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </FormField>
+                )}
+              </div>
 
-            <Switch
-              checked={canLogin}
-              onChange={(event) => setCanLogin(event.target.checked)}
-              label="Can log in"
-            />
-            <Switch
-              checked={generate}
-              onChange={(event) => setGenerate(event.target.checked)}
-              label="Generate a password"
-              description="Shown once, then stored envelope-encrypted."
-            />
-            {!generate && (
-              <FormField label="Password" error={passwordError} required>
-                <Input
-                  type="password"
-                  mono
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="new-password"
-                />
-              </FormField>
-            )}
+              <Switch
+                checked={canLogin}
+                onChange={(event) => setCanLogin(event.target.checked)}
+                label="Can log in"
+              />
+            </NumberedSection>
+
+            <NumberedSection
+              index={2}
+              title="Password"
+              caption="Shown once, never read back."
+              headingLevel={3}
+            >
+              <Switch
+                checked={generate}
+                onChange={(event) => setGenerate(event.target.checked)}
+                label="Generate a password"
+                description="Shown once, then stored envelope-encrypted."
+              />
+              {!generate && (
+                <FormField label="Password" error={passwordError} required>
+                  <Input
+                    type="password"
+                    mono
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete="new-password"
+                  />
+                </FormField>
+              )}
+            </NumberedSection>
 
             <GrantEditor
+              index={3}
               databases={databases}
               grants={grants}
               onChange={setGrants}
@@ -1557,17 +1698,22 @@ interface GrantEditorProps {
   grants: GrantDraft[];
   onChange: (grants: GrantDraft[]) => void;
   loading?: boolean;
+  /** Section number when the editor is one step of a longer form. */
+  index?: number;
 }
 
-function GrantEditor({ databases, grants, onChange, loading = false }: GrantEditorProps) {
+function GrantEditor({ databases, grants, onChange, loading = false, index }: GrantEditorProps) {
   const available = databases.filter(
     (database) => !grants.some((grant) => grant.databaseId === database.id),
   );
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-medium text-[var(--kn-text)]">Grants</span>
+    <NumberedSection
+      index={index}
+      title="Grants"
+      headingLevel={3}
+      className="gap-3"
+      actions={
         <Combobox
           options={available.map((database) => ({
             value: database.id,
@@ -1597,10 +1743,10 @@ function GrantEditor({ databases, grants, onChange, loading = false }: GrantEdit
           size="xs"
           className="w-56"
         />
-      </div>
-
+      }
+    >
       {grants.length === 0 ? (
-        <p className="rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] px-3 py-2 text-[var(--kn-text-2)]">
+        <p className="rounded-[var(--kn-r-md)] border border-dashed border-[var(--kn-border)] px-3 py-2 text-[var(--kn-text-2)]">
           No grants. The user will exist and be able to authenticate, but reach nothing.
         </p>
       ) : (
@@ -1608,7 +1754,7 @@ function GrantEditor({ databases, grants, onChange, loading = false }: GrantEdit
           {grants.map((grant) => (
             <li
               key={grant.databaseId}
-              className="flex flex-wrap items-center gap-2 rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] p-2"
+              className="flex flex-wrap items-center gap-2 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] p-2"
             >
               <MonoText className="w-32 shrink-0 truncate font-medium">
                 {grant.databaseName}
@@ -1657,7 +1803,7 @@ function GrantEditor({ databases, grants, onChange, loading = false }: GrantEdit
           ))}
         </ul>
       )}
-    </div>
+    </NumberedSection>
   );
 }
 

@@ -37,12 +37,14 @@ import {
 } from "@kaname/contract";
 import {
   Button,
+  CardInset,
   Checkbox,
   CopyableCode,
   FormField,
   Input,
   JobProgress,
   JobStatusPill,
+  MonoLabel,
   MonoText,
   Radio,
   RadioGroup,
@@ -155,12 +157,14 @@ function useDefaultServer(servers: Server[]) {
 /** "Already here" — shown when a step finds its work done on a resume. */
 function ExistingList({ title, rows }: { title: string; rows: { key: string; primary: string; secondary?: React.ReactNode }[] }) {
   return (
-    <div className="rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)]">
-      <p className="border-b border-[var(--kn-border)] px-4 py-2 text-sm text-[var(--kn-text-2)]">{title}</p>
-      <ul className="divide-y divide-[var(--kn-border)]">
+    <CardInset padding="none">
+      <MonoLabel as="p" size="xs" tone="muted" className="m-0 border-b border-[var(--kn-border)] px-4 py-2.5">
+        {title}
+      </MonoLabel>
+      <ul className="m-0 list-none divide-y divide-[var(--kn-border)] p-0">
         {rows.map((row) => (
           <li key={row.key} className="flex items-center gap-3 px-4 py-2.5">
-            <span className="h-2 w-2 shrink-0 rounded-full bg-[var(--kn-ok)]" aria-hidden />
+            <span className="h-1.5 w-1.5 shrink-0 rounded-[var(--kn-r-pill)] bg-[var(--kn-ok)]" aria-hidden />
             <MonoText className="min-w-0 truncate text-[var(--kn-text)]">{row.primary}</MonoText>
             {row.secondary && (
               <span className="ml-auto shrink-0 text-sm text-[var(--kn-text-3)]">{row.secondary}</span>
@@ -168,7 +172,7 @@ function ExistingList({ title, rows }: { title: string; rows: { key: string; pri
           </li>
         ))}
       </ul>
-    </div>
+    </CardInset>
   );
 }
 
@@ -177,7 +181,7 @@ function JobLine({ job: initial }: { job: Job }) {
   const query = useJob(initial.id);
   const job = query.data ?? initial;
   return (
-    <div className="flex flex-col gap-2 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)] px-4 py-3">
+    <CardInset className="flex flex-col gap-2 px-4 py-3">
       <div className="flex min-w-0 items-center gap-2">
         <JobStatusPill status={job.status} size="xs" blockedReason={job.blocked_reason} />
         <span className="min-w-0 truncate text-[var(--kn-text)]">{job.label}</span>
@@ -189,11 +193,11 @@ function JobLine({ job: initial }: { job: Job }) {
       </div>
       <JobProgress value={job.progress} status={job.status} label={job.label} />
       {job.error && (
-        <p className="text-sm text-[var(--kn-danger)]">
+        <p className="m-0 text-sm text-[var(--kn-danger)]">
           <MonoText>{job.error.code}</MonoText> — {job.error.message}
         </p>
       )}
-    </div>
+    </CardInset>
   );
 }
 
@@ -245,12 +249,17 @@ export function AddressStep({ state, onAdvance, onStale }: StepProps) {
   };
 
   return (
-    <StepForm onSubmit={() => void submit()}>
-      <StepHeading
-        icon={Globe}
-        title="Give the panel an address"
-        hint="A name of its own, served over HTTPS with a certificate Kaname renews. Without one the panel stays on this server's IP over plain HTTP, which works but sends your session unencrypted."
-      />
+    <StepForm
+      onSubmit={() => void submit()}
+      heading={
+        <StepHeading
+          icon={Globe}
+          title="Give the panel an address"
+          accent="an address"
+          hint="A name of its own, served over HTTPS with a certificate Kaname renews. Without one the panel stays on this server's IP over plain HTTP, which works but sends your session unencrypted."
+        />
+      }
+    >
 
       {panel === null && <Skeleton className="h-16 rounded-[var(--kn-r-md)]" label="Reading the panel's address" />}
 
@@ -424,12 +433,17 @@ export function WebsiteStep({ onAdvance, onStale }: StepProps) {
   const serverIp = server?.address ?? null;
 
   return (
-    <StepForm onSubmit={() => void submit()}>
-      <StepHeading
-        icon={LayoutTemplate}
-        title="Put your first website on it"
-        hint="Kaname writes the web server configuration, creates the folder and issues the certificate. You can add more, and change any of this, under Websites."
-      />
+    <StepForm
+      onSubmit={() => void submit()}
+      heading={
+        <StepHeading
+          icon={LayoutTemplate}
+          title="Put your first website on it"
+          accent="website on it"
+          hint="Kaname writes the web server configuration, creates the folder and issues the certificate. You can add more, and change any of this, under Websites."
+        />
+      }
+    >
 
       {(existing === null || loading) && <Skeleton className="h-24 rounded-[var(--kn-r-md)]" label="Looking for websites" />}
 
@@ -700,18 +714,23 @@ export function EmailStep({ state, onAdvance, onStale }: StepProps) {
     const failed = job && ["failed", "cancelled", "timed_out"].includes(job.status);
     const succeeded = job?.status === "succeeded";
     return (
-      <StepForm onSubmit={() => void submit()}>
-        <StepHeading
-          icon={Mail}
-          title={succeeded ? "Your mail server is ready" : failed ? "The mail server did not finish" : "Installing your mail server"}
-          hint={
-            succeeded
-              ? "Copy the two things below before you move on. Kaname shows them once and does not keep them."
-              : failed
-                ? "Nothing else in setup depends on it. The job log under Email has the step that failed, and you can deploy again from there."
-                : "Yunori Mail Server is being installed. This usually takes a few minutes; you can carry on and it finishes on its own."
-          }
-        />
+      <StepForm
+        onSubmit={() => void submit()}
+        heading={
+          <StepHeading
+            icon={Mail}
+            title={succeeded ? "Your mail server is ready" : failed ? "The mail server did not finish" : "Installing your mail server"}
+            accent={succeeded ? "is ready" : failed ? undefined : "your mail server"}
+            hint={
+              succeeded
+                ? "Copy the two things below before you move on. Kaname shows them once and does not keep them."
+                : failed
+                  ? "Nothing else in setup depends on it. The job log under Email has the step that failed, and you can deploy again from there."
+                  : "Yunori Mail Server is being installed. This usually takes a few minutes; you can carry on and it finishes on its own."
+            }
+          />
+        }
+      >
 
         {trackedJob.isLoading && <Skeleton className="h-24 rounded-[var(--kn-r-md)]" label="Loading the deploy" />}
         {trackedJob.error && <StepError error={toError(trackedJob.error)} />}
@@ -740,12 +759,17 @@ export function EmailStep({ state, onAdvance, onStale }: StepProps) {
   const ready = mailServers !== null && !loading;
 
   return (
-    <StepForm onSubmit={() => void submit()}>
-      <StepHeading
-        icon={Mail}
-        title="Give it email"
-        hint="Kaname can install Yunori Mail Server on your server: mailboxes for your domain, spam filtering, and the DNS records it needs checked for you. Optional, and easy to do later from Email."
-      />
+    <StepForm
+      onSubmit={() => void submit()}
+      heading={
+        <StepHeading
+          icon={Mail}
+          title="Give it email"
+          accent="email"
+          hint="Kaname can install Yunori Mail Server on your server: mailboxes for your domain, spam filtering, and the DNS records it needs checked for you. Optional, and easy to do later from Email."
+        />
+      }
+    >
 
       {!ready && <Skeleton className="h-24 rounded-[var(--kn-r-md)]" label="Looking for mail servers" />}
 
@@ -1136,12 +1160,17 @@ export function BackupsStep({ onAdvance, onStale }: StepProps) {
   };
 
   return (
-    <StepForm onSubmit={() => void submit()}>
-      <StepHeading
-        icon={DatabaseBackup}
-        title="Back it up every night"
-        hint="Encrypted, deduplicated snapshots of your websites and databases, kept for months. Restores happen from Backups, file by file or all at once."
-      />
+    <StepForm
+      onSubmit={() => void submit()}
+      heading={
+        <StepHeading
+          icon={DatabaseBackup}
+          title="Back it up every night"
+          accent="every night"
+          hint="Encrypted, deduplicated snapshots of your websites and databases, kept for months. Restores happen from Backups, file by file or all at once."
+        />
+      }
+    >
 
       {(existing === null || loading) && <Skeleton className="h-24 rounded-[var(--kn-r-md)]" label="Looking for backups" />}
 
@@ -1386,12 +1415,17 @@ export function NotificationsStep({ onAdvance, onStale }: StepProps) {
   };
 
   return (
-    <StepForm onSubmit={() => void submit()}>
-      <StepHeading
-        icon={Bell}
-        title="Hear about it when something breaks"
-        hint="Kaname tells you about failed jobs, a server going offline, a failed backup, a certificate about to expire and an update waiting — and stays quiet otherwise."
-      />
+    <StepForm
+      onSubmit={() => void submit()}
+      heading={
+        <StepHeading
+          icon={Bell}
+          title="Hear about it when something breaks"
+          accent="when something breaks"
+          hint="Kaname tells you about failed jobs, a server going offline, a failed backup, a certificate about to expire and an update waiting — and stays quiet otherwise."
+        />
+      }
+    >
 
       <FormField label="Send alerts to">
         <RadioGroup value={kind} onValueChange={(next) => setKind(next as AlertKind)} aria-label="Send alerts to" orientation="horizontal">
@@ -1415,8 +1449,8 @@ export function NotificationsStep({ onAdvance, onStale }: StepProps) {
             />
           </FormField>
 
-          <fieldset className="flex flex-col gap-4 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface-2)] p-4">
-            <legend className="px-1 text-sm font-medium text-[var(--kn-text)]">Outgoing mail server</legend>
+          <fieldset className="m-0 flex min-w-0 flex-col gap-4 rounded-[var(--kn-r-md)] border border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)] p-4">
+            <legend className="kn-label-sm px-1.5 text-[var(--kn-text-2)]">Outgoing mail server</legend>
             <p className="-mt-1 text-sm text-[var(--kn-text-2)]">
               Nothing is emailed until one is set.{" "}
               {mailHost ? (
@@ -1595,12 +1629,17 @@ export function TeamStep({ onAdvance, onStale }: StepProps) {
   const role = roles?.find((candidate) => candidate.id === roleId);
 
   return (
-    <StepForm onSubmit={() => void submit()}>
-      <StepHeading
-        icon={UserPlus}
-        title="Invite a teammate"
-        hint="They choose their own password from a link. Nobody, including you, ever knows another person's credential. Roles can be narrowed to particular servers later."
-      />
+    <StepForm
+      onSubmit={() => void submit()}
+      heading={
+        <StepHeading
+          icon={UserPlus}
+          title="Invite a teammate"
+          accent="a teammate"
+          hint="They choose their own password from a link. Nobody, including you, ever knows another person's credential. Roles can be narrowed to particular servers later."
+        />
+      }
+    >
 
       {roles === null && <Skeleton className="h-24 rounded-[var(--kn-r-md)]" label="Loading roles" />}
 

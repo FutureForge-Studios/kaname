@@ -1,5 +1,6 @@
 export * from "./common";
 export * from "./identity";
+export * from "./accounts";
 export * from "./fleet";
 export * from "./platform";
 export * from "./web";
@@ -9,3 +10,4 @@ export * from "./databases";
 export * from "./security";
 export * from "./backups";
 export * from "./lifecycle";
+export * from "./apps";

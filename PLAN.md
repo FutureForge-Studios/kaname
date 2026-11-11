@@ -16,7 +16,8 @@ email, databases, security, backups, monitoring, logs and a terminal.
 
 Non-goals (explicitly out of scope, so we do not drift):
 
-- Multi-tenant reseller hierarchies, billing, quotas-as-a-product.
+- Multi-tenant hierarchies and billing. (Scoped resellers and clients with quotas and branding
+  are in scope: KD-039.)
 - Windows server management. Managed nodes are Linux (systemd) only.
 - Being a PaaS. Kaname manages servers; Coolify-style app deploys are a thin `Deployments`
   module on top of git + a build command, not a Heroku clone.

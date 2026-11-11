@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
+import { GeistSans } from "geist/font/sans";
 import { GeistPixelSquare } from "geist/font/pixel/square";
 import { Providers } from "./providers";
 import "./globals.css";
@@ -13,9 +14,12 @@ import "./globals.css";
  * theme resolved in an effect would flash the wrong palette on every
  * navigation, which on a near-black panel is a white strobe.
  *
- * GeistPixelSquare (OFL, from the `geist` package) only defines
- * --font-geist-pixel-square on <html>; the token sheet decides where the
- * face is used (.kn-display, page titles).
+ * Faces (both OFL, from the `geist` package, self-hosted by next/font):
+ * GeistSans defines --font-geist-sans, the interface and headline face
+ * (standing in for the ffstudios site's Satoshi, which is not licensed
+ * for this repo); GeistPixelSquare defines --font-geist-pixel-square for
+ * small brand accents (.kn-pixel). The token sheet decides where each is
+ * used. Mono is JetBrains Mono from @fontsource (globals.css).
  * ------------------------------------------------------------------ */
 
 export const metadata: Metadata = {
@@ -48,7 +52,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html
       lang="en"
       data-theme="dark"
-      className={GeistPixelSquare.variable}
+      className={`${GeistSans.variable} ${GeistPixelSquare.variable}`}
       suppressHydrationWarning
     >
       <head>

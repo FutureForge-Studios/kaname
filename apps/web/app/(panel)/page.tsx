@@ -5,12 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Activity,
-  Archive,
   ArrowRight,
   Cpu,
+  Gauge,
   HardDrive,
   ListChecks,
   MemoryStick,
+  Plus,
   RefreshCw,
   Server as ServerIcon,
   ShieldAlert,
@@ -21,25 +22,32 @@ import type { Server } from "@kaname/contract";
 import {
   AgentConnectionIndicator,
   Badge,
+  Button,
   ByteSize,
+  Card,
   DataTable,
   EmptyState,
   HealthBadge,
   IconButton,
   JobStatusPill,
-  MetricTile,
+  LeaderLabel,
+  MonoLabel,
   MonoText,
-  PageHeader,
+  NumberedSection,
+  PageBody,
+  PageHero,
   RelativeTime,
-  SectionCard,
   Skeleton,
+  StatusLine,
   cn,
   type DataTableColumn,
   type Tone,
 } from "@kaname/ui";
 import { GettingStarted } from "@/components/GettingStarted";
+import { ModeHome } from "@/components/modes";
 import { PageError } from "@/components/PageError";
-import { ATTENTION_ICONS } from "@/lib/icons";
+import { YunoriSuggestion } from "@/components/YunoriMail";
+import { ATTENTION_ICONS, type IconComponent } from "@/lib/icons";
 import {
   formatBytes,
   formatCount,
@@ -51,19 +59,23 @@ import {
   humanize,
   percentOf,
 } from "@/lib/format";
-import { useDashboard, useServers, type DashboardSummary } from "@/lib/queries";
+import { useCan, useDashboard, useServers, type DashboardSummary } from "@/lib/queries";
 
 /* ------------------------------------------------------------------ *
  * Command Center.
  *
  * The question this page answers is "what needs me right now", and
- * everything is ordered by how directly it answers that: the fleet
- * rollup is one dense strip, then the attention list — the most
- * important surface in the product — then the fleet itself, then the
- * record of what has been happening.
+ * everything is ordered by how directly it answers that. The opener
+ * states the fleet's condition in one sentence beside its pulse (the
+ * rollup, as one hairline matrix); then the numbered sections: the
+ * attention list — the most important surface in the product — the
+ * fleet itself, and the record of what has been happening.
  *
  * No giant metric cards. An operator opens this page dozens of times a
  * day; it should read like an instrument panel, not a quarterly report.
+ *
+ * The default export takes no props and owns no layout outside its own
+ * root, so a mode switch can render it or something else in its place.
  * ------------------------------------------------------------------ */
 
 type Attention = DashboardSummary["attention"][number];
@@ -75,7 +87,18 @@ const SEVERITY_TONE: Record<Severity, Tone> = {
   info: "info",
 };
 
-export default function CommandCenterPage() {
+/*
+ * The home route. Clients, resellers and operators in Simplified each get
+ * their own home from ModeHome; an operator in Advanced gets the Command
+ * Center below.
+ */
+export default function HomePage() {
+  return <ModeHome fallback={<CommandCenterPage />} />;
+}
+
+function CommandCenterPage() {
+  const router = useRouter();
+  const can = useCan();
   const dashboard = useDashboard();
   const servers = useServers();
 
@@ -84,28 +107,51 @@ export default function CommandCenterPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader
-        title="Command Center"
-        subtitle={
-          summary
-            ? `${formatCount(summary.fleet.servers_connected)}/${formatCount(summary.fleet.servers_total)} agents connected`
-            : undefined
-        }
-        actions={
-          <IconButton
-            icon={RefreshCw}
-            label="Refresh"
-            size="sm"
-            disabled={busy}
-            onClick={() => {
-              void dashboard.refetch();
-              void servers.refetch();
-            }}
-          />
-        }
-      />
+      <header className="kn-crosshairs shrink-0 border-b border-[var(--kn-border)] px-6 py-8">
+        <PageHero
+          size="md"
+          eyebrow="Overview"
+          title="Command Center"
+          lede="What needs you right now, across every server Kaname manages."
+          actions={
+            <>
+              {can("infra.servers:write") && (
+                <Button
+                  variant="primary"
+                  size="md"
+                  icon={Plus}
+                  onClick={() => router.push("/infrastructure/servers?new=1")}
+                >
+                  Add server
+                </Button>
+              )}
+              <Button size="md" arrow onClick={() => router.push("/monitoring")}>
+                Open monitoring
+              </Button>
+              <IconButton
+                icon={RefreshCw}
+                label="Refresh"
+                size="md"
+                disabled={busy}
+                onClick={() => {
+                  void dashboard.refetch();
+                  void servers.refetch();
+                }}
+              />
+            </>
+          }
+          status={
+            summary ? (
+              <FleetStatus summary={summary} />
+            ) : dashboard.isLoading ? (
+              <Skeleton className="h-4 w-64" label="Loading fleet status" />
+            ) : undefined
+          }
+          aside={<FleetPulse summary={summary} loading={dashboard.isLoading} />}
+        />
+      </header>
 
-      <div className="flex min-w-0 flex-col gap-4 px-6 py-4">
+      <PageBody>
         {dashboard.isError && (
           <PageError
             error={dashboard.error}
@@ -115,43 +161,108 @@ export default function CommandCenterPage() {
         )}
 
         <GettingStarted />
-
-        {dashboard.isLoading && <RollupSkeleton />}
-        {summary && <FleetRollup summary={summary} />}
+        <YunoriSuggestion />
 
         <AttentionList
+          index={1}
           items={summary?.attention ?? []}
           loading={dashboard.isLoading}
           failed={dashboard.isError}
         />
 
-        <FleetTable query={servers} />
+        <FleetTable index={2} query={servers} />
 
-        <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
-          <RecentActivity summary={summary} loading={dashboard.isLoading} />
-          <div className="flex min-w-0 flex-col gap-4">
-            <ExpiringCertificates summary={summary} loading={dashboard.isLoading} />
-            <BackupHealth summary={summary} loading={dashboard.isLoading} />
+        {/* Siblings, not nested: each block is one <section> with one heading. */}
+        <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-3">
+          <RecentActivity index={3} summary={summary} loading={dashboard.isLoading} />
+          <div className="flex min-w-0 flex-col gap-6">
+            <ExpiringCertificates index={4} summary={summary} loading={dashboard.isLoading} />
+            <BackupHealth index={5} summary={summary} loading={dashboard.isLoading} />
           </div>
         </div>
-      </div>
+      </PageBody>
     </div>
   );
 }
 
-/* ---------------------------- fleet rollup -------------------------- */
+/* ----------------------------- fleet status ------------------------- */
 
-function RollupSkeleton() {
+/**
+ * The fleet's condition as one sentence. The dot is the worst thing
+ * true right now: something critical or unhealthy, then anything open.
+ */
+function FleetStatus({ summary }: { summary: DashboardSummary }) {
+  const { fleet, attention } = summary;
+  const offline = fleet.servers_total - fleet.servers_connected;
+  const critical = attention.filter((item) => item.severity === "critical").length;
+
+  const tone: Tone =
+    critical > 0 || fleet.servers_unhealthy > 0
+      ? "danger"
+      : offline > 0 || fleet.open_alerts > 0 || attention.length > 0
+        ? "warn"
+        : "ok";
+
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
-      {Array.from({ length: 8 }, (_, index) => (
-        <Skeleton
-          key={index}
-          className="h-16 rounded-[var(--kn-r-md)]"
-          label={index === 0 ? "Loading fleet summary" : undefined}
-        />
-      ))}
-    </div>
+    <StatusLine tone={tone} pulse={tone === "ok"}>
+      <span>
+        {formatCount(fleet.servers_connected)}/{formatCount(fleet.servers_total)} agents connected
+      </span>
+      {" · "}
+      {fleet.open_alerts === 0
+        ? "no open alerts"
+        : `${formatCount(fleet.open_alerts)} open alert${fleet.open_alerts === 1 ? "" : "s"}`}
+      {attention.length > 0 &&
+        ` · ${formatCount(attention.length)} item${attention.length === 1 ? "" : "s"} to look at`}
+    </StatusLine>
+  );
+}
+
+/* ----------------------------- fleet pulse -------------------------- */
+
+const VALUE_TONES: Record<Tone, string> = {
+  neutral: "text-[var(--kn-text)]",
+  ok: "text-[var(--kn-ok)]",
+  warn: "text-[var(--kn-warn)]",
+  danger: "text-[var(--kn-danger)]",
+  info: "text-[var(--kn-info)]",
+  accent: "text-[var(--kn-accent-400)]",
+};
+
+/**
+ * The fleet rollup as one hairline matrix: eight readouts, each a mono
+ * label, a numeral and one line of context. It sits in the opener's
+ * right column, where the site puts its art — here the art is the data.
+ */
+function FleetPulse({
+  summary,
+  loading,
+}: {
+  summary: DashboardSummary | undefined;
+  loading: boolean;
+}) {
+  if (!summary && !loading) return null;
+
+  return (
+    <Card radius="xl" padding="none" className="overflow-hidden">
+      <div className="flex items-center gap-3 border-b border-[var(--kn-border)] px-4 py-2.5">
+        <LeaderLabel className="flex-1">Fleet pulse</LeaderLabel>
+      </div>
+      {summary ? (
+        <FleetRollup summary={summary} />
+      ) : (
+        <div className="grid grid-cols-2 gap-px bg-[var(--kn-border)] sm:grid-cols-4">
+          {Array.from({ length: 8 }, (_, index) => (
+            <div key={index} className="bg-[var(--kn-surface)] px-4 py-3.5">
+              <Skeleton
+                className="h-[58px] rounded-[var(--kn-r-sm)]"
+                label={index === 0 ? "Loading fleet summary" : undefined}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -162,64 +273,100 @@ function FleetRollup({ summary }: { summary: DashboardSummary }) {
   const offline = fleet.servers_total - fleet.servers_connected;
 
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
-      <MetricTile
-        size="sm"
+    <dl className="m-0 grid grid-cols-2 gap-px bg-[var(--kn-border)] sm:grid-cols-4">
+      <Readout
         icon={ServerIcon}
-        label="Agents connected"
+        label="Agents"
         value={`${formatCount(fleet.servers_connected)}/${formatCount(fleet.servers_total)}`}
+        note={offline > 0 ? `${formatCount(offline)} offline` : "all reporting"}
         tone={offline > 0 ? "warn" : "ok"}
       />
-      <MetricTile
-        size="sm"
+      <Readout
         icon={Activity}
         label="Unhealthy"
         value={formatCount(fleet.servers_unhealthy)}
+        note={`of ${formatCount(fleet.servers_total)} servers`}
         tone={fleet.servers_unhealthy > 0 ? "danger" : "neutral"}
       />
-      <MetricTile
-        size="sm"
+      <Readout
         icon={Cpu}
-        label="CPU, fleet average"
+        label="CPU"
         value={formatPercent(fleet.cpu_percent_avg)}
+        note="fleet average"
         tone={toneForUsage(fleet.cpu_percent_avg)}
       />
-      <MetricTile
-        size="sm"
+      <Readout
         icon={MemoryStick}
         label="Memory"
         value={formatPercent(memoryPercent)}
-        unit={`of ${byteLabel(fleet.memory_total)}`}
+        note={`of ${byteLabel(fleet.memory_total)}`}
         tone={toneForUsage(memoryPercent)}
       />
-      <MetricTile
-        size="sm"
+      <Readout
         icon={HardDrive}
         label="Disk"
         value={formatPercent(diskPercent)}
-        unit={`of ${byteLabel(fleet.disk_total)}`}
+        note={`of ${byteLabel(fleet.disk_total)}`}
         tone={toneForUsage(diskPercent)}
       />
-      <MetricTile
-        size="sm"
-        icon={Activity}
+      <Readout
+        icon={Gauge}
         label="Network"
         value={formatRate(fleet.net_rx_rate + fleet.net_tx_rate)}
+        note="in + out"
       />
-      <MetricTile
-        size="sm"
+      <Readout
         icon={Siren}
-        label="Open alerts"
+        label="Alerts"
         value={formatCount(fleet.open_alerts)}
+        note="open now"
         tone={fleet.open_alerts > 0 ? "warn" : "neutral"}
       />
-      <MetricTile
-        size="sm"
+      <Readout
         icon={ShieldAlert}
-        label="Blocked, 24h"
+        label="Blocked"
         value={formatCount(threats.blocked)}
+        note="threats, 24h"
         tone={threats.blocked > 0 ? "info" : "neutral"}
       />
+    </dl>
+  );
+}
+
+function Readout({
+  icon: Icon,
+  label,
+  value,
+  note,
+  tone = "neutral",
+}: {
+  icon: IconComponent;
+  label: string;
+  value: string;
+  note: string;
+  tone?: Tone;
+}) {
+  return (
+    <div className="min-w-0 bg-[var(--kn-surface)] px-4 py-3.5">
+      <dt className="flex items-center gap-1.5 text-[var(--kn-text-3)]">
+        <Icon size={12} className="shrink-0" aria-hidden />
+        <MonoLabel size="xs" className="truncate">
+          {label}
+        </MonoLabel>
+      </dt>
+      <dd className="m-0 mt-2.5 min-w-0">
+        <span
+          className={cn(
+            "kn-num block truncate text-xl font-medium leading-none tracking-[var(--kn-tracking-display)]",
+            VALUE_TONES[tone],
+          )}
+        >
+          {value}
+        </span>
+        <span className="kn-mono mt-1.5 block truncate text-xs text-[var(--kn-text-3)]">
+          {note}
+        </span>
+      </dd>
     </div>
   );
 }
@@ -234,22 +381,58 @@ function byteLabel(total: number): string {
   return formatBytes(total, "binary", 0);
 }
 
+/* ------------------------------ shared ------------------------------ */
+
+const ROW_FOCUS =
+  "outline-none focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--kn-ring)]";
+
+/** "ALL SERVERS →": the quiet way out of a section, in its header row. */
+function SectionLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "kn-label-sm group/more inline-flex items-center gap-1.5 rounded-[var(--kn-r-xs)] text-[var(--kn-text-2)]",
+        "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)] hover:text-[var(--kn-text)]",
+        "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
+      )}
+    >
+      {children}
+      <ArrowRight
+        size={12}
+        className="shrink-0 transition-transform duration-[var(--kn-dur)] ease-[var(--kn-ease)] group-hover/more:translate-x-0.5 motion-reduce:transition-none"
+        aria-hidden
+      />
+    </Link>
+  );
+}
+
+/** The hairline card a section's rows sit in. */
+function RowCard({ className, children }: { className?: string; children: React.ReactNode }) {
+  return (
+    <Card padding="none" className={cn("overflow-hidden", className)}>
+      {children}
+    </Card>
+  );
+}
+
 /* --------------------------- attention list ------------------------- */
 
 interface AttentionListProps {
+  index: number;
   items: readonly Attention[];
   loading: boolean;
   failed: boolean;
 }
 
-function AttentionList({ items, loading, failed }: AttentionListProps) {
+function AttentionList({ index, items, loading, failed }: AttentionListProps) {
   const critical = items.filter((item) => item.severity === "critical").length;
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={index}
       title="Needs attention"
-      icon={ShieldAlert}
-      padded={false}
+      caption="Worst first. Each row opens the thing to fix."
       actions={
         items.length > 0 && (
           <Badge tone={critical > 0 ? "danger" : "warn"} size="xs">
@@ -260,38 +443,43 @@ function AttentionList({ items, loading, failed }: AttentionListProps) {
         )
       }
     >
-      {loading && (
-        <ul>
-          {[0, 1, 2].map((index) => (
-            <li
-              key={index}
-              className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2.5 last:border-b-0"
-            >
-              <Skeleton className="h-4 w-4 rounded-[var(--kn-r-xs)]" />
-              <Skeleton className="h-3 w-64" />
-              <Skeleton className="ml-auto h-3 w-16" />
-            </li>
-          ))}
-        </ul>
-      )}
+      <RowCard>
+        {loading && (
+          <ul>
+            {[0, 1, 2].map((index) => (
+              <li
+                key={index}
+                className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2.5 last:border-b-0"
+              >
+                <Skeleton className="h-4 w-4 rounded-[var(--kn-r-xs)]" />
+                <Skeleton className="h-3 w-64" />
+                <Skeleton className="ml-auto h-3 w-16" />
+              </li>
+            ))}
+          </ul>
+        )}
 
-      {!loading && !failed && items.length === 0 && (
-        <EmptyState
-          icon={ShieldCheck}
-          title="Nothing needs you"
-          description="Every agent is reporting, no threshold is breached and no job is failing."
-          size="sm"
-        />
-      )}
+        {!loading && !failed && items.length === 0 && (
+          <EmptyState
+            icon={ShieldCheck}
+            title="Nothing needs you"
+            description="Every agent is reporting, no threshold is breached and no job is failing."
+            size="sm"
+          />
+        )}
 
-      {!loading && items.length > 0 && (
-        <ul>
-          {items.map((item, index) => (
-            <AttentionRow key={`${item.kind}-${item.server_id ?? "fleet"}-${index}`} item={item} />
-          ))}
-        </ul>
-      )}
-    </SectionCard>
+        {!loading && items.length > 0 && (
+          <ul>
+            {items.map((item, position) => (
+              <AttentionRow
+                key={`${item.kind}-${item.server_id ?? "fleet"}-${position}`}
+                item={item}
+              />
+            ))}
+          </ul>
+        )}
+      </RowCard>
+    </NumberedSection>
   );
 }
 
@@ -304,8 +492,9 @@ function AttentionRow({ item }: { item: Attention }) {
       <Link
         href={item.href}
         className={cn(
-          "group/attention flex items-start gap-3 px-4 py-2.5 outline-none",
-          "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
+          "group/attention flex items-start gap-3 px-4 py-2.5",
+          ROW_FOCUS,
+          "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
           "hover:bg-[var(--kn-surface-2)]",
         )}
       >
@@ -331,10 +520,10 @@ function AttentionRow({ item }: { item: Attention }) {
               {item.server_name}
             </MonoText>
           )}
-          <RelativeTime value={item.since} className="text-xs text-[var(--kn-text-3)]" />
+          <RelativeTime value={item.since} className="kn-mono text-xs text-[var(--kn-text-3)]" />
           <ArrowRight
             size={12}
-            className="text-[var(--kn-text-3)] opacity-0 transition-opacity duration-[var(--kn-dur-fast)] group-hover/attention:opacity-100"
+            className="text-[var(--kn-text-3)] opacity-0 transition-opacity duration-[var(--kn-dur-fast)] group-hover/attention:opacity-100 group-focus-visible/attention:opacity-100"
             aria-hidden
           />
         </div>
@@ -345,7 +534,7 @@ function AttentionRow({ item }: { item: Attention }) {
 
 /* ----------------------------- fleet table -------------------------- */
 
-function FleetTable({ query }: { query: ReturnType<typeof useServers> }) {
+function FleetTable({ index, query }: { index: number; query: ReturnType<typeof useServers> }) {
   const router = useRouter();
   const rows = query.data?.data ?? [];
 
@@ -456,18 +645,11 @@ function FleetTable({ query }: { query: ReturnType<typeof useServers> }) {
   );
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={index}
       title="Fleet"
-      icon={ServerIcon}
-      padded={false}
-      actions={
-        <Link
-          href="/infrastructure/servers"
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-        >
-          All servers
-        </Link>
-      }
+      caption="Can we reach it, and is it well."
+      actions={<SectionLink href="/infrastructure/servers">All servers</SectionLink>}
     >
       <DataTable<Server>
         columns={columns}
@@ -492,9 +674,8 @@ function FleetTable({ query }: { query: ReturnType<typeof useServers> }) {
             size="sm"
           />
         }
-        className="rounded-none border-0"
       />
-    </SectionCard>
+    </NumberedSection>
   );
 }
 
@@ -527,9 +708,11 @@ type ActivityEntry =
   | { kind: "audit"; ts: string; id: string; audit: DashboardSummary["recent_audit"][number] };
 
 function RecentActivity({
+  index,
   summary,
   loading,
 }: {
+  index: number;
   summary: DashboardSummary | undefined;
   loading: boolean;
 }) {
@@ -553,214 +736,209 @@ function RecentActivity({
   }, [summary]);
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={index}
       title="Recent activity"
-      icon={ListChecks}
-      padded={false}
+      caption="Jobs and audit events, newest first."
       className="lg:col-span-2"
-      actions={
-        <Link
-          href="/security/audit"
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-        >
-          Audit trail
-        </Link>
-      }
+      actions={<SectionLink href="/security/audit">Audit trail</SectionLink>}
     >
-      {loading && (
+      <RowCard>
+        {loading && (
+          <ul>
+            {[0, 1, 2, 3, 4].map((index) => (
+              <li
+                key={index}
+                className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0"
+              >
+                <Skeleton className="h-4 w-16 rounded-[var(--kn-r-pill)]" />
+                <Skeleton className="h-3 flex-1" />
+                <Skeleton className="h-3 w-12" />
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {!loading && entries.length === 0 && (
+          <EmptyState
+            icon={ListChecks}
+            title="Nothing has happened yet"
+            description="Jobs and audit events land here as they run."
+            size="sm"
+          />
+        )}
+
         <ul>
-          {[0, 1, 2, 3, 4].map((index) => (
+          {entries.map((entry) => (
             <li
-              key={index}
+              key={entry.id}
               className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0"
             >
-              <Skeleton className="h-4 w-16 rounded-[var(--kn-r-pill)]" />
-              <Skeleton className="h-3 flex-1" />
-              <Skeleton className="h-3 w-12" />
+              {entry.kind === "job" ? (
+                <>
+                  <JobStatusPill status={entry.job.status} size="xs" showLabel={false} />
+                  <Link
+                    href={`/jobs/${entry.job.id}`}
+                    className="min-w-0 flex-1 truncate rounded-[var(--kn-r-xs)] text-[var(--kn-text)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+                  >
+                    {entry.job.label}
+                    {entry.job.target_label && (
+                      <MonoText muted className="ml-1.5 text-sm">
+                        {entry.job.target_label}
+                      </MonoText>
+                    )}
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <Badge tone="neutral" size="xs" mono>
+                    {entry.audit.actor_type}
+                  </Badge>
+                  <span className="min-w-0 flex-1 truncate text-[var(--kn-text-2)]">
+                    <span className="text-[var(--kn-text)]">{entry.audit.actor_name}</span>{" "}
+                    {humanize(entry.audit.action).toLowerCase()}
+                    {entry.audit.target_label && (
+                      <MonoText muted className="ml-1.5 text-sm">
+                        {entry.audit.target_label}
+                      </MonoText>
+                    )}
+                  </span>
+                </>
+              )}
+
+              <span className="kn-mono hidden shrink-0 text-xs text-[var(--kn-text-3)] sm:block">
+                {entry.kind === "job" ? entry.job.server_name : entry.audit.server_name}
+              </span>
+              <RelativeTime
+                value={entry.ts}
+                className="kn-mono w-16 shrink-0 text-right text-xs text-[var(--kn-text-3)]"
+              />
             </li>
           ))}
         </ul>
-      )}
-
-      {!loading && entries.length === 0 && (
-        <EmptyState
-          icon={ListChecks}
-          title="Nothing has happened yet"
-          description="Jobs and audit events land here as they run."
-          size="sm"
-        />
-      )}
-
-      <ul>
-        {entries.map((entry) => (
-          <li
-            key={entry.id}
-            className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0"
-          >
-            {entry.kind === "job" ? (
-              <>
-                <JobStatusPill status={entry.job.status} size="xs" showLabel={false} />
-                <Link
-                  href={`/jobs/${entry.job.id}`}
-                  className="min-w-0 flex-1 truncate text-[var(--kn-text)] outline-none hover:underline"
-                >
-                  {entry.job.label}
-                  {entry.job.target_label && (
-                    <MonoText muted className="ml-1.5 text-sm">
-                      {entry.job.target_label}
-                    </MonoText>
-                  )}
-                </Link>
-              </>
-            ) : (
-              <>
-                <Badge tone="neutral" size="xs" mono>
-                  {entry.audit.actor_type}
-                </Badge>
-                <span className="min-w-0 flex-1 truncate text-[var(--kn-text-2)]">
-                  <span className="text-[var(--kn-text)]">{entry.audit.actor_name}</span>{" "}
-                  {humanize(entry.audit.action).toLowerCase()}
-                  {entry.audit.target_label && (
-                    <MonoText muted className="ml-1.5 text-sm">
-                      {entry.audit.target_label}
-                    </MonoText>
-                  )}
-                </span>
-              </>
-            )}
-
-            <span className="hidden shrink-0 text-xs text-[var(--kn-text-3)] sm:block">
-              {entry.kind === "job" ? entry.job.server_name : entry.audit.server_name}
-            </span>
-            <RelativeTime value={entry.ts} className="shrink-0 text-xs text-[var(--kn-text-3)]" />
-          </li>
-        ))}
-      </ul>
-    </SectionCard>
+      </RowCard>
+    </NumberedSection>
   );
 }
 
 /* ------------------------- certificates / backups -------------------- */
 
 function ExpiringCertificates({
+  index,
   summary,
   loading,
 }: {
+  index: number;
   summary: DashboardSummary | undefined;
   loading: boolean;
 }) {
   const certificates = summary?.certificates_expiring ?? [];
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={index}
       title="Certificates expiring"
-      icon={ShieldCheck}
-      padded={false}
-      actions={
-        <Link
-          href="/websites/ssl"
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-        >
-          SSL / TLS
-        </Link>
-      }
+      actions={<SectionLink href="/websites/ssl">SSL / TLS</SectionLink>}
     >
-      {loading && <Skeleton className="m-4 h-3 w-40" label="Loading certificates" />}
+      <RowCard>
+        {loading && <Skeleton className="m-4 h-3 w-40" label="Loading certificates" />}
 
-      {!loading && certificates.length === 0 && (
-        <EmptyState
-          icon={ShieldCheck}
-          title="Nothing expiring"
-          description="No certificate is inside its renewal window."
-          size="sm"
-        />
-      )}
+        {!loading && certificates.length === 0 && (
+          <EmptyState
+            icon={ShieldCheck}
+            title="Nothing expiring"
+            description="No certificate is inside its renewal window."
+            size="sm"
+          />
+        )}
 
-      <ul>
-        {certificates.map((certificate) => (
-          <li
-            key={certificate.id}
-            className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0"
-          >
-            <MonoText truncate className="min-w-0 flex-1 text-[var(--kn-text)]">
-              {certificate.subject}
-            </MonoText>
-            <Badge
-              tone={
-                certificate.days_left <= 7
-                  ? "danger"
-                  : certificate.days_left <= 21
-                    ? "warn"
-                    : "neutral"
-              }
-              size="xs"
+        <ul>
+          {certificates.map((certificate) => (
+            <li
+              key={certificate.id}
+              className="flex items-center gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0"
             >
-              {certificate.days_left < 0 ? "expired" : formatDaysLeft(certificate.days_left)}
-            </Badge>
-          </li>
-        ))}
-      </ul>
-    </SectionCard>
+              <MonoText truncate className="min-w-0 flex-1 text-[var(--kn-text)]">
+                {certificate.subject}
+              </MonoText>
+              <Badge
+                tone={
+                  certificate.days_left <= 7
+                    ? "danger"
+                    : certificate.days_left <= 21
+                      ? "warn"
+                      : "neutral"
+                }
+                size="xs"
+              >
+                {certificate.days_left < 0 ? "expired" : formatDaysLeft(certificate.days_left)}
+              </Badge>
+            </li>
+          ))}
+        </ul>
+      </RowCard>
+    </NumberedSection>
   );
 }
 
 function BackupHealth({
+  index,
   summary,
   loading,
 }: {
+  index: number;
   summary: DashboardSummary | undefined;
   loading: boolean;
 }) {
   const backups = summary?.backups;
 
   return (
-    <SectionCard
+    <NumberedSection
+      index={index}
       title="Backup health"
-      icon={Archive}
-      actions={
-        <Link
-          href="/backups"
-          className="rounded-[var(--kn-r-xs)] text-xs text-[var(--kn-accent-400)] outline-none hover:underline"
-        >
-          Backups
-        </Link>
-      }
+      actions={<SectionLink href="/backups">Backups</SectionLink>}
     >
-      {loading && <Skeleton className="h-3 w-40" label="Loading backup health" />}
+      <RowCard>
+        {loading && <Skeleton className="m-4 h-3 w-40" label="Loading backup health" />}
 
-      {!loading && backups && (
-        <dl className="flex flex-col gap-2">
-          <Row label="Last successful run">
-            {backups.last_success_at ? (
-              <RelativeTime value={backups.last_success_at} />
-            ) : (
-              <span className="text-[var(--kn-warn)]">never</span>
-            )}
-          </Row>
-          <Row label="Failing schedules">
-            <span
-              className={cn(
-                "kn-num",
-                backups.failing_schedules > 0 ? "text-[var(--kn-danger)]" : "text-[var(--kn-text)]",
+        {!loading && backups && (
+          <dl className="m-0 flex flex-col">
+            <Row label="Last successful run">
+              {backups.last_success_at ? (
+                <RelativeTime value={backups.last_success_at} />
+              ) : (
+                <span className="text-[var(--kn-warn)]">never</span>
               )}
-            >
-              {formatCount(backups.failing_schedules)}
-            </span>
-          </Row>
-          <Row label="Protected data">
-            <ByteSize bytes={backups.protected_bytes} />
-          </Row>
-        </dl>
-      )}
-    </SectionCard>
+            </Row>
+            <Row label="Failing schedules">
+              <span
+                className={cn(
+                  "kn-num",
+                  backups.failing_schedules > 0
+                    ? "text-[var(--kn-danger)]"
+                    : "text-[var(--kn-text)]",
+                )}
+              >
+                {formatCount(backups.failing_schedules)}
+              </span>
+            </Row>
+            <Row label="Protected data">
+              <ByteSize bytes={backups.protected_bytes} />
+            </Row>
+          </dl>
+        )}
+      </RowCard>
+    </NumberedSection>
   );
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-[var(--kn-text-2)]">{label}</dt>
-      <dd className="min-w-0 truncate text-[var(--kn-text)]">{children}</dd>
+    <div className="flex items-center justify-between gap-3 border-b border-[var(--kn-border-subtle)] px-4 py-2 last:border-b-0">
+      <MonoLabel as="dt" size="xs">
+        {label}
+      </MonoLabel>
+      <dd className="m-0 min-w-0 truncate text-[var(--kn-text)]">{children}</dd>
     </div>
   );
 }
