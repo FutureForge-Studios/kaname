@@ -671,12 +671,14 @@ const TOPIC_FAMILIES: Record<EventTopic, readonly ResourceFamily[]> = {
   certificates: ["certificates", "domains"],
   backups: ["backups/runs", "backups/schedules", "backups/destinations", "backups/restore-points"],
   audit: ["audit"],
-  updates: ["updates", "update-runs"],
+  // Kaname's own releases, and each host's cached OS package list.
+  updates: ["updates", "update-runs", "os-updates"],
 };
 
 /** Job type prefix -> the lists that job changes when it succeeds. */
 const JOB_FAMILIES: readonly [string, readonly ResourceFamily[]][] = [
   ["system.", ["servers"]],
+  ["system.packages.", ["os-updates"]],
   ["service.", ["services", "servers"]],
   ["process.", ["processes"]],
   ["container.", ["containers"]],
@@ -712,6 +714,8 @@ const DASHBOARD_TOPICS = new Set<EventTopic>([
   "certificates",
   "backups",
   "audit",
+  // Pending OS security updates and reboots are on the attention list.
+  "updates",
 ]);
 
 export function familiesForEvent(message: StreamMessage): ResourceFamily[] {

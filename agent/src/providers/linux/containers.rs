@@ -1006,7 +1006,9 @@ impl Containers for ContainerOps {
         let remove = format!("/containers/{id}?force=true&v=true");
 
         let outcome: PResult<i64> = async {
-            client.post_empty(ctx, &format!("/containers/{id}/start"), None).await?;
+            client
+                .post_empty(ctx, &format!("/containers/{id}/start"), None)
+                .await?;
             let wait_path = format!("/containers/{id}/wait?condition=not-running");
             let wait = client.post::<Waited>(ctx, &wait_path, None);
             match tokio::time::timeout(Duration::from_secs(p.timeout_seconds as u64), wait).await {
@@ -1017,7 +1019,13 @@ impl Containers for ContainerOps {
         .await;
 
         let output = client
-            .call(ctx, Method::GET, &format!("/containers/{id}/logs?stdout=1&stderr=1&tail=64"), None, true)
+            .call(
+                ctx,
+                Method::GET,
+                &format!("/containers/{id}/logs?stdout=1&stderr=1&tail=64"),
+                None,
+                true,
+            )
             .await
             .map(|raw| demultiplex_bytes(&raw))
             .unwrap_or_default();
@@ -1243,7 +1251,13 @@ impl ContainerOps {
     /// the install's network must be Kaname's, a same-named container must
     /// be this install's (and is replaced only when asked), and every bind
     /// source and file is put in place under the managed root.
-    async fn prepare_managed(&self, ctx: &Ctx, client: &DockerClient, spec: &ManagedContainerSpec, replace: bool) -> PResult<String> {
+    async fn prepare_managed(
+        &self,
+        ctx: &Ctx,
+        client: &DockerClient,
+        spec: &ManagedContainerSpec,
+        replace: bool,
+    ) -> PResult<String> {
         let network = managed::network_name(&spec.install_id);
         match self.find_network(ctx, client, &network).await? {
             Some(n)

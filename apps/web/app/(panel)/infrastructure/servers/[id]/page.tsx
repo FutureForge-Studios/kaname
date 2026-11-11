@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
+  ArrowUpCircle,
   Box,
   CloudDownload,
   Cog,
@@ -39,6 +40,8 @@ import { ServerServicesTab } from "../../_components/ServerServicesTab";
 import { ServerContainersTab } from "../../_components/ServerContainersTab";
 import { ServerStorageTab } from "../../_components/ServerStorageTab";
 import { ServerLogsTab } from "../../_components/ServerLogsTab";
+import { ServerUpdatesTab } from "../../_components/ServerUpdatesTab";
+import { useServerOsUpdates } from "@/lib/system-updates";
 import { useServerCommands } from "../../_components/ServerCommands";
 import { DetailHeader, DetailHeaderSkeleton, HostStatusLine } from "../../_components/DetailHeader";
 import { hasContainerRuntime } from "../../_lib/infra";
@@ -56,9 +59,16 @@ import { hasContainerRuntime } from "../../_lib/infra";
  * web-01" keeps meaning that for whoever receives it.
  * ------------------------------------------------------------------ */
 
-type TabValue = "overview" | "services" | "containers" | "storage" | "logs";
+type TabValue = "overview" | "services" | "containers" | "storage" | "updates" | "logs";
 
-const TAB_VALUES: readonly TabValue[] = ["overview", "services", "containers", "storage", "logs"];
+const TAB_VALUES: readonly TabValue[] = [
+  "overview",
+  "services",
+  "containers",
+  "storage",
+  "updates",
+  "logs",
+];
 
 export default function ServerDetailPage() {
   const params = useParams<{ id: string }>();
@@ -70,6 +80,8 @@ export default function ServerDetailPage() {
 
   const query = useResource<Server>("servers", id);
   const server = query.data;
+  // The cached package list only — reading it never runs apt on the host.
+  const osUpdates = useServerOsUpdates(id, Boolean(server));
 
   const commands = useServerCommands({
     onRemoved: () => router.push("/infrastructure/servers"),
@@ -122,6 +134,7 @@ export default function ServerDetailPage() {
 
   const connected = server.connection === "connected";
   const failed = server.counts?.services_failed ?? 0;
+  const pendingOs = osUpdates.data;
 
   return (
     <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-1 flex-col">
@@ -238,6 +251,19 @@ export default function ServerDetailPage() {
             <Tab value="storage" icon={HardDrive}>
               Storage
             </Tab>
+            <Tab
+              value="updates"
+              icon={ArrowUpCircle}
+              badge={
+                pendingOs && pendingOs.security > 0
+                  ? `${formatCount(pendingOs.security)} security`
+                  : pendingOs && pendingOs.total > 0
+                    ? formatCount(pendingOs.total)
+                    : undefined
+              }
+            >
+              System updates
+            </Tab>
             <Tab value="logs" icon={ScrollText}>
               Logs
             </Tab>
@@ -257,6 +283,9 @@ export default function ServerDetailPage() {
         </TabPanel>
         <TabPanel value="storage">
           <ServerStorageTab server={server} />
+        </TabPanel>
+        <TabPanel value="updates">
+          <ServerUpdatesTab server={server} onReboot={() => commands.request("reboot", server)} />
         </TabPanel>
         <TabPanel value="logs">
           <ServerLogsTab server={server} />

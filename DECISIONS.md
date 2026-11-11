@@ -873,3 +873,53 @@ that with one table and one helper; a tenant column would have touched every que
 sizes plus mailbox allowances), so a site's files do not count. A resource has one owner; a
 reseller "sharing" a site with two clients is not modelled. PLAN.md §0's non-goal narrows to
 multi-tenant hierarchies and billing.
+
+## KD-040 — Container apps: a typed create with agent-side guards, companions on a private network, loopback-only ports
+
+**Decision.** The app installer provisions image recipes (Ghost, Nextcloud, Uptime Kuma, n8n,
+Gitea, Plausible CE) through six new agent verbs: `container.image.pull`,
+`container.network.create`, `container.create`, `container.task.run`, `container.app.status` and
+`container.app.remove`. There is no Docker API passthrough. `container.create` takes a closed
+`ManagedContainerSpec` — install id, role, image, env, bind mounts, published ports, optional
+memory/CPU, an optional `nofile` ulimit, entrypoint argument tokens and small read-only config
+files — and the agent (`agent/src/providers/managed.rs`) validates it and writes the create body
+itself. Those guards live in the agent, not only in the control plane:
+
+- privileged off, `CapAdd` empty, no devices, `no-new-privileges`, private IPC/cgroup namespace,
+  no host network/PID/UTS/user namespace, a PIDs limit, bounded json-file logs, restart
+  `unless-stopped`; the entrypoint is never replaced and argument tokens cannot hold a space;
+- every published port binds `127.0.0.1` (there is no host-IP field), host ports ≥ 1024;
+- bind sources and config files only under `/var/lib/kaname-apps/<install_id>/`, checked
+  lexically and again after resolving symlinks, so the runtime socket, `/etc` or the agent's key
+  cannot be mounted; config files are always mounted read-only and opened with `O_NOFOLLOW`;
+- images need an explicit tag or digest;
+- names (`kaname-<install>-<role>`, network `kaname-<install>`) and labels (`io.kaname.managed`,
+  `io.kaname.install`, `io.kaname.role`) are derived from the install id; `container.create`
+  only replaces, and `container.app.remove` only deletes, resources carrying this install's labels.
+
+Each install gets its own bridge network. Databases run as **companion containers** on it,
+reachable by role (`db`, `events`) and never published: MySQL 8 for Ghost (the only engine Ghost
+supports in production), PostgreSQL 16 for Nextcloud, n8n, Gitea and Plausible, plus ClickHouse
+for Plausible with the settings from Plausible's Community Edition compose file. Uptime Kuma keeps
+SQLite in its data directory. Generated passwords and keys are sealed in `secrets` under
+`app_install:<id>:*` and removed with the install. The app is published on `127.0.0.1:<port>`,
+allocated per server from 20000–29999 and recorded on `app_installs.app_port` (migration 0010,
+unique per server); the site is a `container` runtime vhost proxying to it (websocket upgrade
+headers included), and nginx now answers the ACME challenge from the webroot for proxied sites
+instead of passing it to the app. Gitea's SSH is disabled and its port 22 never published: clone
+over HTTPS.
+
+**Why.** PLAN.md §0: the web tier must never reach a root primitive. A reachable container socket
+is a root shell, and a "create container" verb that accepted a raw body would be one too
+(`Privileged: true`, a bind of `/`). A closed shape validated where the socket is makes that
+impossible to express rather than merely checked upstream. Per-install networks keep one app's
+database unreachable from another app; loopback-only ports mean nginx and its certificate are the
+only way in, so a container never bypasses the host firewall the way Docker's published ports do.
+
+**Cost accepted.** The managed root is outside the agent's state directory
+(`/var/lib/kaname-apps`, not `/var/lib/kaname/apps`), because that directory is denied to every
+file verb. Images are not removed on uninstall (they may be shared). Podman hosts advertise
+`podman`, not `docker`, and are not offered image recipes yet. A port someone else binds on the
+host after allocation surfaces as a failed container start and a rolled-back install, not as a
+reallocation. Upgrading an installed app's image is not covered.
+

@@ -22,8 +22,8 @@ use crate::providers::{
     ContainerMount, ContainerPort, ContainerPruneParams, ContainerPruneResult, ContainerRemoveParams,
     ContainerStopParams, Containers, Ctx, ImageInfo, ImagePullParams, ImagePullResult, LogRecord,
     ManagedAppRemoveParams, ManagedAppRemoveResult, ManagedAppStatus, ManagedContainerSpec,
-    ManagedContainerState, ManagedEndpoint, ManagedNetworkResult, ManagedTaskParams, ManagedTaskResult, PResult, ProviderError, StreamRef, managed,
-    say, topic,
+    ManagedContainerState, ManagedEndpoint, ManagedNetworkResult, ManagedTaskParams, ManagedTaskResult,
+    PResult, ProviderError, StreamRef, managed, say, topic,
 };
 
 pub struct Container {
@@ -764,13 +764,20 @@ impl Containers for SimContainers {
         managed::validate_task(&mut p.spec, p.timeout_seconds.max(1), managed::MANAGED_APPS_ROOT)?;
         let network = managed::network_name(&p.spec.install_id);
         let w = self.0.world.lock();
-        if !w.networks.iter().any(|(n, _, l)| *n == network && managed::is_managed_by(l, &p.spec.install_id)) {
+        if !w
+            .networks
+            .iter()
+            .any(|(n, _, l)| *n == network && managed::is_managed_by(l, &p.spec.install_id))
+        {
             return Err(ProviderError::PreconditionFailed(format!(
                 "the install's network {network} does not exist; create it first"
             )));
         }
         if !w.images.iter().any(|i| i.tags.contains(&p.spec.image)) {
-            return Err(ProviderError::not_found(format!("No such image: {}", p.spec.image)));
+            return Err(ProviderError::not_found(format!(
+                "No such image: {}",
+                p.spec.image
+            )));
         }
         Ok(ManagedTaskResult {
             exit_code: 0,

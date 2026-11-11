@@ -101,6 +101,7 @@ export function useUpgradesInFlight(): ReadonlySet<string> {
           .filter(
             (entry) =>
               entry.job.type === "system.packages.upgrade" &&
+              !entry.settled &&
               !TERMINAL.has(entry.job.status) &&
               entry.job.server_id,
           )

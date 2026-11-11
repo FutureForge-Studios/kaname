@@ -6,7 +6,8 @@ use crate::providers::managed::{self, MANAGED_APPS_ROOT};
 use crate::providers::{
     ContainerExecParams, ContainerIdParams, ContainerListParams, ContainerListResult, ContainerLogsParams,
     ContainerPruneParams, ContainerRemoveParams, ContainerStopParams, ImageListResult, ImagePullParams,
-    LogRecordsResult, ManagedAppRemoveParams, ManagedContainerSpec, ManagedInstallParams, ManagedTaskParams, OK,
+    LogRecordsResult, ManagedAppRemoveParams, ManagedContainerSpec, ManagedInstallParams, ManagedTaskParams,
+    OK,
 };
 use crate::registry::{Registry, Request, StreamMode};
 use crate::wire::WireError;

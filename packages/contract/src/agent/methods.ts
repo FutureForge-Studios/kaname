@@ -93,6 +93,20 @@ export const containerImageRef = z
     "must be an image reference with a tag or digest",
   );
 
+/** The engines `app.db_dump` / `app.db_restore` know a fixed argv for. */
+export const appDbEngine = z.enum(["postgres", "mysql", "mariadb"]);
+
+export const appDbParams = z
+  .object({
+    install_id: managedInstallId,
+    /** The companion's role ("db"); its container is kaname-<install_id>-<role>. */
+    role: z.string().regex(/^[a-z][a-z0-9]{0,15}$/),
+    engine: appDbEngine,
+    /** Which dump file: the backup itself, or the safety copy taken before a restore. */
+    slot: z.enum(["backup", "pre_restore"]).default("backup"),
+  })
+  .strict();
+
 const envName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/);
 
 /**
@@ -1637,6 +1651,36 @@ export const AGENT_METHODS = {
     requires: [],
     readOnly: false,
     summary: "Apply a retention policy.",
+  }),
+
+  /*
+   * App backups. One fixed argv per engine, run by the engine's own dump
+   * or restore tool inside an install's Kaname-labelled companion
+   * container; the file lives at a path the agent derives under
+   * MANAGED_APPS_ROOT/<install_id>/kaname-backup/, never one the caller
+   * names. Database name, user and password are read from the container's
+   * own environment, so no credential crosses the socket.
+   */
+  "app.db_dump": m({
+    params: appDbParams,
+    result: z.object({
+      path: z.string(),
+      size_bytes: z.number().int(),
+      engine: appDbEngine,
+      database: z.string(),
+    }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Dump an app install's companion database with the engine's own tool.",
+  }),
+  "app.db_restore": m({
+    params: appDbParams,
+    result: z.object({ ok: z.literal(true), database: z.string() }),
+    stream: "none",
+    requires: ["docker"],
+    readOnly: false,
+    summary: "Re-import an app install's companion database from its dump.",
   }),
 
   /* --------------------------------- logs ------------------------------ */

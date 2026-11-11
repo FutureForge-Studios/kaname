@@ -376,7 +376,9 @@ pub trait Containers: Send + Sync {
     }
     /// Runs a one-shot container (a migration) to completion and removes it.
     async fn run_task(&self, _ctx: &Ctx, _p: ManagedTaskParams) -> PResult<ManagedTaskResult> {
-        Err(ProviderError::unsupported_because("this host cannot run container tasks"))
+        Err(ProviderError::unsupported_because(
+            "this host cannot run container tasks",
+        ))
     }
     async fn app_status(&self, _ctx: &Ctx, _install_id: &str) -> PResult<ManagedAppStatus> {
         Err(ProviderError::unsupported_because(
