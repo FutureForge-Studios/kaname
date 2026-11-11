@@ -144,7 +144,7 @@ export const backupDestinationTarget = destinationTargetUnion.superRefine((targe
   if (!preset.derived_endpoint && !target.endpoint) {
     ctx.addIssue({ code: "custom", path: ["endpoint"], message: "an endpoint is required for this provider" });
   }
-  if (preset.regions.length > 0 && !target.endpoint && !preset.regions.some((r) => r.value === target.region)) {
+  if (preset.closed_regions && !target.endpoint && !preset.regions.some((r) => r.value === target.region)) {
     ctx.addIssue({
       code: "custom",
       path: ["region"],

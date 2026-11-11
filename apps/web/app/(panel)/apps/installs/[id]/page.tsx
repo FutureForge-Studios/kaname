@@ -20,6 +20,7 @@ import {
   useToast,
 } from "@kaname/ui";
 import { AppHealth } from "@/components/installer/AppHealth";
+import { AppBackups } from "@/components/installer/AppBackups";
 import { AppMark, versionLabel } from "@/components/installer/AppMark";
 import { InstallProgress, InstallSummary } from "@/components/installer/InstallProgress";
 import { UninstallDialog } from "@/components/installer/InstalledList";
@@ -211,6 +212,7 @@ export default function AppInstallPage({ params }: { params: Promise<{ id: strin
         </NumberedSection>
 
         {install.status === "active" && <AppHealth installId={install.id} index={4} />}
+        {install.status === "active" && <AppBackups installId={install.id} serverId={install.server_id} index={6} />}
       </PageBody>
 
       {confirming && (

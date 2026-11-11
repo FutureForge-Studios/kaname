@@ -29,7 +29,7 @@ import { buildManifest, pathsFor, planEntry } from "./services/app-backup-plan.j
 import { classifyS3Failure, objectUrl, probeS3, signS3Request } from "./services/s3-probe.js";
 
 /* ------------------------------------------------------------------ *
- * App backup & restore (KD-041) and first-class S3 destinations.
+ * App backup & restore (KD-043) and first-class S3 destinations.
  *
  *   - presets map each provider to the endpoint and signing region its
  *     own documentation gives, and the target schema enforces the rules
@@ -429,7 +429,7 @@ describe("/backups/apps routes", () => {
 
     const ran = await call(owner, "POST", `/backups/apps/${install.id}/run`, { destination_id: destinationId });
     expect(ran.statusCode).toBe(202);
-    const job = data(ran);
+    const job = data(ran).job;
     const [row] = await handle.db.select().from(jobs).where(eq(jobs.id, job.id));
     expect(row!.type).toBe("backup.run");
     const params = row!.params as { paths: string[]; exclude: string[]; apps: { install_id: string }[] };
@@ -587,7 +587,14 @@ function jobContext(hub: FakeHub, claimed: Awaited<ReturnType<AppContext["queue"
   };
 }
 
+/** Leaves only the job about to be enqueued claimable. */
+async function drainQueue() {
+  const { inArray } = await import("@kaname/db");
+  await handle.db.update(jobs).set({ status: "cancelled" }).where(inArray(jobs.status, ["queued", "running"]));
+}
+
 async function runRestore(hub: FakeHub, install: typeof appInstalls.$inferSelect, pointId: string) {
+  await drainQueue();
   const queued = await ctx.queue.enqueue({
     type: "app.restore",
     serverId,
@@ -678,6 +685,7 @@ describe("app.restore", () => {
     const install = await newInstall("uptime-kuma", null);
     const hub = new FakeHub();
     hub.connected.add(serverId);
+    await drainQueue();
     const queued = await ctx.queue.enqueue({ type: "backup.run", serverId, params: {} });
     const claimed = await ctx.queue.claim("test", 60, [serverId]);
     expect(claimed?.id).toBe(queued.id);

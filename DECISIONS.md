@@ -969,3 +969,52 @@ every app as down — the probe can be paused per app. A simulated host answers 
 container state (KD-010). The certificate-expiring app rule only marks the app; the certificate
 sweep keeps sending the one notification. App rules notify the operator's alert channels — there
 is no per-user channel, so a client sees its apps' alerts in the panel, not in its inbox.
+
+## KD-043 — App backups: a typed in-container dump, the managed root, restore through staging
+
+**Decision.** A backup scope kind `app` selects app installs by id. For an image recipe the
+snapshot is the install's directory under the managed apps root (KD-040) minus each SQL
+companion's live data directory; the consistent copy of that database is a dump taken by a new
+agent verb, `app.db_dump` (and its inverse `app.db_restore`). The verb takes an install id, a
+companion role, an engine from a closed enum (`postgres`, `mysql`, `mariadb`) and one of two
+fixed slots — no path, no command, no credential. The agent inspects `kaname-<install>-<role>`,
+refuses anything without Kaname's labels for exactly that install and role, reads the database
+name, user and root password from the container's own environment, runs one fixed argv per
+engine (`pg_dump`/`pg_restore`, `mysqldump`/`mysql`, `mariadb-dump`/`mariadb`) through the
+runtime's exec API, and moves the file through the companion's own data mount to a path it
+derives under `<root>/<install>/kaname-backup/`. Git recipes (WordPress, DokuWiki) reuse the
+files and databases machinery: the site root plus a `db.dump` written beside (never inside) the
+served tree. Each run writes a manifest — recipe, version, images, settings and secret *refs*;
+values stay envelope-encrypted in the control plane — stored on `restore_points.manifest`.
+Recipes that keep live state in files are briefly stopped for the snapshot (a map on the
+backup side, not a recipe field).
+
+A restore is one `app.restore` job: restic restores into a staging directory beside the live
+data, today's database is dumped to the `pre_restore` slot, the app stops, the live directory is
+moved aside and the staged one moved in (renames on one filesystem), each companion re-imports,
+the app starts and must answer on its loopback port. Any failure after the swap moves the
+original back and re-imports the safety dump. "Restore as new" (image recipes only) seals the
+source's secrets under a fresh install id, runs the ordinary installer for the new domain and
+server, then restores into it. A point whose app version is newer than today's recipe is
+refused. Scoped accounts reach all of this only through `/backups/apps/*`, the one backup route
+that opts in to ownership (KD-039).
+
+S3 destinations carry a provider preset (AWS, R2, B2's S3 API, Wasabi, Spaces, Hetzner,
+MinIO/custom) that derives the endpoint and signing region from each provider's documentation,
+plus path-style addressing. "Test connection" writes, reads back and deletes a probe object,
+SigV4-signed from the control plane (where the credentials already are), and names the failure:
+credentials, missing bucket, wrong region, clock skew, permission or network. No server-side
+encryption option: restic does not offer one, and its repositories are encrypted client-side.
+
+**Why.** A raw copy of a running database's files is not a backup, and the agent must not grow a
+general exec to get a better one. Fixing the argv and deriving every path keeps the verb as
+narrow as the managed-container verbs it sits beside. Staging plus rename means the slow part
+(download) happens while the app is still up, and the swap that touches live data is two
+renames that can be undone.
+
+**Cost accepted.** ClickHouse (Plausible's events) is taken as files with the app stopped, not
+dumped. A copy restored onto a new domain keeps whatever address the app stores in its own data
+(Nextcloud's trusted domains). The repository password and object-store credentials still have
+to be present on the host under the agent's `backup-secrets` directory, as before; the S3
+path-style choice reaches restic as `KANAME_S3_BUCKET_LOOKUP` in that file. Migration 0012 adds
+the nullable `restore_points.manifest`.

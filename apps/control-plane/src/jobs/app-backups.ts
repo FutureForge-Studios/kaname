@@ -13,7 +13,7 @@ import {
 import type { JobContext, JobHandler } from "./worker.js";
 
 /* ------------------------------------------------------------------ *
- * App backup & restore — the job side (KD-041).
+ * App backup & restore — the job side (KD-043).
  *
  * Backup: `backup.run` calls `prepareAppBackups` before the snapshot and
  * `finishAppBackups` after it, whatever happened. Prepare stops the app

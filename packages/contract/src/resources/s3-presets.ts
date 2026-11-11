@@ -29,6 +29,8 @@ export interface S3ProviderPreset {
   label: string;
   /** Region choices the provider documents. Empty means free text. */
   regions: readonly { value: string; label: string }[];
+  /** The list is the provider's complete one, so any other region is refused (else a suggestion). */
+  closed_regions: boolean;
   default_region: string;
   /** The endpoint is derived from the region (and account id); the operator does not type it. */
   derived_endpoint: boolean;
@@ -89,6 +91,7 @@ const asOptions = (values: readonly string[]) => values.map((value) => ({ value,
 export const S3_PROVIDER_PRESETS: Record<S3Provider, S3ProviderPreset> = {
   aws: {
     id: "aws",
+    closed_regions: false,
     label: "Amazon S3",
     regions: asOptions(AWS_REGIONS),
     default_region: "us-east-1",
@@ -100,6 +103,7 @@ export const S3_PROVIDER_PRESETS: Record<S3Provider, S3ProviderPreset> = {
   },
   r2: {
     id: "r2",
+    closed_regions: true,
     label: "Cloudflare R2",
     regions: [{ value: "auto", label: "auto" }],
     default_region: "auto",
@@ -111,6 +115,7 @@ export const S3_PROVIDER_PRESETS: Record<S3Provider, S3ProviderPreset> = {
   },
   b2: {
     id: "b2",
+    closed_regions: false,
     label: "Backblaze B2 (S3 API)",
     regions: [],
     default_region: "us-west-004",
@@ -122,6 +127,7 @@ export const S3_PROVIDER_PRESETS: Record<S3Provider, S3ProviderPreset> = {
   },
   wasabi: {
     id: "wasabi",
+    closed_regions: true,
     label: "Wasabi",
     regions: asOptions(WASABI_REGIONS),
     default_region: "us-east-1",
@@ -134,6 +140,7 @@ export const S3_PROVIDER_PRESETS: Record<S3Provider, S3ProviderPreset> = {
   },
   spaces: {
     id: "spaces",
+    closed_regions: false,
     label: "DigitalOcean Spaces",
     regions: asOptions(["nyc3", "sfo2", "sfo3", "ams3", "fra1", "sgp1", "syd1", "blr1", "tor1", "lon1", "atl1"]),
     default_region: "nyc3",
@@ -145,6 +152,7 @@ export const S3_PROVIDER_PRESETS: Record<S3Provider, S3ProviderPreset> = {
   },
   hetzner: {
     id: "hetzner",
+    closed_regions: true,
     label: "Hetzner Object Storage",
     regions: asOptions(["fsn1", "nbg1", "hel1"]),
     default_region: "fsn1",
@@ -156,6 +164,7 @@ export const S3_PROVIDER_PRESETS: Record<S3Provider, S3ProviderPreset> = {
   },
   minio: {
     id: "minio",
+    closed_regions: false,
     label: "MinIO / other",
     regions: [],
     default_region: "us-east-1",

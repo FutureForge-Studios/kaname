@@ -308,7 +308,7 @@ export const SCOPED_ACCOUNT_PERMISSIONS = [
   "apps.installs:delete",
   // Only /backups/apps/* opts in to ownership: a scoped account backs up
   // and restores the app installs it owns, and no other backup route
-  // ever sees these grants (KD-041).
+  // ever sees these grants (KD-043).
   "backups.schedules:read",
   "backups.schedules:write",
   "backups.restore:exec",

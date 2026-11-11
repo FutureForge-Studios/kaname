@@ -1078,8 +1078,11 @@ export function BackupsStep({ onAdvance, onStale }: StepProps) {
         secret_access_key: draft.secret,
       };
     }
+    // A typed endpoint is a custom S3-compatible service; none is Amazon.
+    // The full provider presets live in the Backups destination form.
     return {
       kind: "s3",
+      provider: draft.endpoint.trim() ? "minio" : "aws",
       ...(draft.endpoint.trim() ? { endpoint: draft.endpoint.trim() } : {}),
       region: draft.region.trim(),
       bucket: draft.bucket.trim(),
@@ -1101,6 +1104,8 @@ export function BackupsStep({ onAdvance, onStale }: StepProps) {
       setTest({
         ok: false,
         writable: false,
+        failure: null,
+        checks: [],
         latency_ms: null,
         used_bytes: null,
         error: toError(error).message,
