@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, RotateCcw, X } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import type { AppInstall, AppInstallStatus, AppInstallStep, AppInstallStepStatus } from "@kaname/contract";
 import {
   CheckItem,
@@ -26,8 +26,8 @@ const STEP_STATE: Record<AppInstallStepStatus, CheckItemState> = {
   pending: "todo",
   running: "current",
   done: "done",
-  warn: "done",
-  failed: "current",
+  warn: "warning",
+  failed: "failed",
   rolled_back: "todo",
 };
 
@@ -49,9 +49,8 @@ const STEP_LABEL: Record<AppInstallStepStatus, string> = {
   rolled_back: "Undone",
 };
 
-const STEP_ICON: Partial<Record<AppInstallStepStatus, typeof X>> = {
-  warn: AlertTriangle,
-  failed: X,
+// The kit draws the warning triangle and the failure cross itself.
+const STEP_ICON: Partial<Record<AppInstallStepStatus, typeof RotateCcw>> = {
   rolled_back: RotateCcw,
 };
 

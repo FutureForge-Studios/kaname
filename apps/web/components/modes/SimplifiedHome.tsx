@@ -104,12 +104,12 @@ export function SimplifiedHome() {
           {summary ? (
             <CheckList divided="between">
               <CheckItem
-                state={summary.fleet.servers_connected === summary.fleet.servers_total ? "done" : "current"}
+                state={summary.fleet.servers_connected === summary.fleet.servers_total ? "done" : "warning"}
                 title="Servers"
                 description={`${formatCount(summary.fleet.servers_connected)} of ${formatCount(summary.fleet.servers_total)} connected${summary.fleet.servers_unhealthy > 0 ? ` · ${summary.fleet.servers_unhealthy} unhealthy` : ""}`}
               />
               <CheckItem
-                state={summary.certificates_expiring.length === 0 ? "done" : "current"}
+                state={summary.certificates_expiring.length === 0 ? "done" : "warning"}
                 title="Certificates"
                 description={
                   summary.certificates_expiring.length === 0
@@ -118,7 +118,7 @@ export function SimplifiedHome() {
                 }
               />
               <CheckItem
-                state={summary.backups.failing_schedules === 0 ? "done" : "current"}
+                state={summary.backups.failing_schedules === 0 ? "done" : "warning"}
                 title="Backups"
                 description={
                   summary.backups.failing_schedules === 0
@@ -129,7 +129,7 @@ export function SimplifiedHome() {
                 }
               />
               <CheckItem
-                state={summary.fleet.open_alerts === 0 ? "done" : "current"}
+                state={summary.fleet.open_alerts === 0 ? "done" : "warning"}
                 title="Alerts"
                 description={
                   summary.fleet.open_alerts === 0

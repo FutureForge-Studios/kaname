@@ -421,7 +421,7 @@ function VersionPath({ overview }: { overview: UpdateOverview }) {
         />
         {cp.update_available && cp.latest_version ? (
           <CheckItem
-            state="current"
+            state={cp.blocked_reason && !running ? "warning" : "current"}
             title={<MonoText>{cp.latest_version}</MonoText>}
             description={
               running

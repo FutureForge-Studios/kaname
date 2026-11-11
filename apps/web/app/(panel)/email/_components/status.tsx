@@ -243,14 +243,14 @@ export function ChecksList({
 }
 
 /**
- * A check reads as a CheckItem: resolved (pass), needs you (fail, warn),
- * or noted (info, unknown). The circle says where the operator is; the
- * verdict badge beside it carries the status colour.
+ * A check reads as a CheckItem: resolved (pass), failed or warning in
+ * their status colours, or noted (info, unknown). The verdict badge
+ * beside it repeats the word, so colour is never the only signal.
  */
 const CHECK_STATE: Record<MailCheckStatus, CheckItemState> = {
   pass: "done",
-  fail: "current",
-  warn: "current",
+  fail: "failed",
+  warn: "warning",
   info: "todo",
   unknown: "todo",
 };
@@ -260,7 +260,6 @@ export function CheckRow({ check }: { check: MailCheck }) {
     <CheckItem
       id={`check-${check.id}`}
       state={CHECK_STATE[check.status]}
-      icon={check.status === "fail" ? X : check.status === "warn" ? TriangleAlert : undefined}
       className="py-2.5"
       title={check.label}
       description={check.detail}
@@ -340,7 +339,7 @@ export function InstallSteps({ steps, className }: InstallStepsProps) {
           <CheckItem
             key={`${index}-${step.title}`}
             state={STEP_STATE[step.status]}
-            icon={failed ? X : waiting ? Clock : step.status === "skipped" ? Minus : undefined}
+            icon={waiting ? Clock : step.status === "skipped" ? Minus : undefined}
             className="py-2"
             title={
               <span className="inline-flex min-w-0 items-baseline gap-2.5">
@@ -397,8 +396,8 @@ const STEP_STATE: Record<MailInstallStepStatus, CheckItemState> = {
   done: "done",
   skipped: "done",
   running: "current",
-  waiting: "current",
-  failed: "current",
+  waiting: "warning",
+  failed: "failed",
   pending: "todo",
 };
 

@@ -25,6 +25,8 @@ import {
   Button,
   ByteSize,
   Card,
+  CheckItem,
+  CheckList,
   HealthBadge,
   LineChart,
   MetricTile,
@@ -368,21 +370,15 @@ export function ServerOverview({ server, commands }: ServerOverviewProps) {
           }
         >
           {server.health_reasons.length > 0 ? (
-            <ul className="flex flex-col">
+            <CheckList divided="between" className="-my-3.5">
               {server.health_reasons.map((reason) => (
-                <li
+                <CheckItem
                   key={reason}
-                  className="flex items-start gap-2.5 py-1.5 first:pt-0 last:pb-0 [&+li]:border-t [&+li]:border-[var(--kn-border-subtle)]"
-                >
-                  <TriangleAlert
-                    size={13}
-                    className="mt-0.5 shrink-0 text-[var(--kn-warn)]"
-                    aria-hidden
-                  />
-                  <span className="text-[var(--kn-text)]">{reason}</span>
-                </li>
+                  state={server.health === "critical" ? "failed" : "warning"}
+                  title={reason}
+                />
               ))}
-            </ul>
+            </CheckList>
           ) : server.health === "unknown" ? (
             <p className="text-[var(--kn-text-2)]">
               No recent metrics from this host, so health cannot be evaluated. That is a statement

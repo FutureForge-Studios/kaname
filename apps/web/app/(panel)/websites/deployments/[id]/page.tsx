@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Ban, Globe, MoreHorizontal, RotateCcw, Rocket, ScrollText, X } from "lucide-react";
+import { Ban, Globe, MoreHorizontal, RotateCcw, Rocket, ScrollText } from "lucide-react";
 import type { Deployment, DeploymentStatus } from "@kaname/contract";
 import {
   Badge,
@@ -419,7 +419,7 @@ function DeploymentStatusLine({
 
 /* ------------------------------ phases ------------------------------ */
 
-type PhaseState = CheckItemState | "failed";
+type PhaseState = CheckItemState;
 
 const PHASE_ORDER: Record<DeploymentStatus, number> = {
   queued: 0,
@@ -479,7 +479,7 @@ function DeploymentPhases({
             status === "failed"
               ? "The run stopped before going live. The build log has the failing step."
               : "Stopped on request. The previous release kept serving.",
-          state: "failed",
+          state: status === "failed" ? "failed" : "warning",
         }
       : {
           title: status === "rolled_back" ? "Rolled back" : "Live",
@@ -498,13 +498,8 @@ function DeploymentPhases({
           key={row.title}
           title={row.title}
           description={row.description}
-          state={row.state === "failed" ? "current" : row.state}
-          icon={row.state === "failed" ? X : undefined}
-          className={
-            row.state === "failed"
-              ? "py-2.5 [&>span:first-child]:border-[var(--kn-danger)] [&>span:first-child]:text-[var(--kn-danger)]"
-              : "py-2.5"
-          }
+          state={row.state}
+          className="py-2.5"
         />
       ))}
     </CheckList>

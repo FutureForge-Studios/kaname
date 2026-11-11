@@ -41,7 +41,9 @@ import { useCan, useDashboard, useResourceMutation, useSession } from "@/lib/que
  *
  * Drawn as the ffstudios check list: a soft purple circle per finished
  * step, an outlined one on the step to do next, a hairline circle on
- * the rest, grouped by the area of the panel each belongs to.
+ * the rest, a warning mark on a step that has slipped (agents gone
+ * offline after pairing), grouped by the area of the panel each
+ * belongs to.
  *
  * Collapsed once complete. Hidden for good when the account says so —
  * stored on the account, so it stays hidden on the next machine too.
@@ -396,17 +398,39 @@ function AreaGroup({
       </div>
       <CheckList divided={false} aria-labelledby={headingId} className="pb-2">
         {items.map((item) => (
-          <StepRow key={item.id} step={item} next={item.id === nextId} />
+          <StepRow
+            key={item.id}
+            step={item}
+            next={item.id === nextId}
+            degraded={isDegraded(item, items)}
+          />
         ))}
       </CheckList>
     </div>
   );
 }
 
-function StepRow({ step, next }: { step: VisibleStep; next: boolean }) {
+/**
+ * A step that was reachable and is not true any more is a fault, not a
+ * to-do: agents that were paired and have since gone offline.
+ */
+function isDegraded(step: VisibleStep, siblings: readonly VisibleStep[]): boolean {
+  if (step.done || step.id !== "agents_connected") return false;
+  return siblings.some((sibling) => sibling.id === "server_paired" && sibling.done);
+}
+
+function StepRow({
+  step,
+  next,
+  degraded,
+}: {
+  step: VisibleStep;
+  next: boolean;
+  degraded: boolean;
+}) {
   return (
     <CheckItem
-      state={step.done ? "done" : next ? "current" : "todo"}
+      state={step.done ? "done" : degraded ? "warning" : next ? "current" : "todo"}
       className={cn(
         "group/step relative gap-3 px-4",
         step.done ? "py-1.5" : "py-2",
