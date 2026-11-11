@@ -1,0 +1,193 @@
+# ==================================================================
+# Releasing Kaname Desktop (apps/desktop).
+#
+#   # bump "version" in apps/desktop/src-tauri/tauri.conf.json first
+#   git tag -a desktop-v0.2.0 -m "What changed"
+#   git push origin desktop-v0.2.0
+#
+# Desktop releases have their own `desktop-v*` tags, kept apart from
+# the panel's `v*` tags (release.yml), because the client and the panel
+# ship on separate schedules. Each tag builds installers for Linux,
+# Windows and macOS (Apple silicon and Intel) and attaches them to a
+# *draft* GitHub release. A maintainer reviews the draft and publishes
+# it by hand.
+#
+# Code signing is optional. If these repository secrets are set,
+# tauri-action signs the builds with them; if not, the builds come out
+# unsigned and the OS will warn on first launch:
+#   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
+#            APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+#   Windows: WINDOWS_CERTIFICATE (base64 of a .pfx code-signing
+#            certificate) and WINDOWS_CERTIFICATE_PASSWORD. The
+#            certificate is imported into the runner's user store and
+#            its thumbprint handed to `tauri build --config`, so nothing
+#            signing-specific lives in tauri.conf.json.
+#            Note: OV/EV certificates issued since mid-2023 live on a
+#            hardware token or cloud HSM and cannot be exported as a
+#            .pfx. For those, use bundle.windows.signCommand (e.g. Azure
+#            Trusted Signing) instead of this step.
+# ==================================================================
+name: Release desktop
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The installers are named after tauri.conf.json's version, not the
+      # tag. A tag that disagrees would publish files whose names
+      # contradict the release they sit in, so the run stops here.
+      - name: Tag must match tauri.conf.json
+        id: derive
+        run: |
+          version="${GITHUB_REF_NAME#desktop-v}"
+          configured="$(jq -r .version apps/desktop/src-tauri/tauri.conf.json)"
+          if [ "$version" != "$configured" ]; then
+            echo "Tag says $version but tauri.conf.json says $configured."
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    permissions:
+      contents: write
+    strategy:
+      # One platform failing should not cancel the others.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ""
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+            rust_targets: aarch64-apple-darwin
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+            rust_targets: x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Tauri system libraries
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev \
+            librsvg2-dev libayatana-appindicator3-dev patchelf
+
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          if [ -n "${{ matrix.rust_targets }}" ]; then
+            rustup target add ${{ matrix.rust_targets }}
+          fi
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: cargo-desktop-release-${{ matrix.platform }}-${{ matrix.rust_targets }}-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+
+      - run: pnpm install --frozen-lockfile
+
+      # Tauri treats a present-but-empty APPLE_CERTIFICATE as a
+      # certificate to import, so the signing variables are exported only
+      # when the secrets actually exist.
+      - name: macOS signing (if configured)
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No APPLE_CERTIFICATE secret: building unsigned."
+            exit 0
+          fi
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+            APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            value="${!name}"
+            [ -n "$value" ] || continue
+            echo "::add-mask::$value"
+            delim="EOF_$RANDOM$RANDOM"
+            printf '%s<<%s\n%s\n%s\n' "$name" "$delim" "$value" "$delim" >>"$GITHUB_ENV"
+          done
+
+      - name: Windows signing (if configured)
+        if: startsWith(matrix.platform, 'windows')
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) {
+            Write-Host "No WINDOWS_CERTIFICATE secret: building unsigned."
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP "kaname-signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          if (-not $cert) { throw "The certificate in WINDOWS_CERTIFICATE could not be imported." }
+
+          # Merged over tauri.conf.json for this build only.
+          $config = @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = $cert.Thumbprint
+                digestAlgorithm = "sha256"
+                timestampUrl = "http://timestamp.digicert.com"
+              }
+            }
+          } | ConvertTo-Json -Depth 5
+          $path = Join-Path $env:RUNNER_TEMP "tauri.signing.json"
+          Set-Content -Path $path -Value $config -Encoding utf8NoBOM
+          "SIGNING_ARGS=--config $path" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Signing with certificate $($cert.Subject) ($($cert.Thumbprint))."
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }} ${{ env.SIGNING_ARGS }}
+          tagName: ${{ github.ref_name }}
+          releaseName: Kaname Desktop ${{ needs.version.outputs.version }}
+          releaseBody: |
+            Kaname Desktop ${{ needs.version.outputs.version }}.
+
+            Installers for Linux (.deb, .rpm, .AppImage), Windows (.msi, .exe) and
+            macOS (.dmg; Apple silicon and Intel) are attached below.
+          releaseDraft: true
+          prerelease: ${{ contains(needs.version.outputs.version, '-') }}
