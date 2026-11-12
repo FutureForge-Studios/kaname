@@ -34,8 +34,8 @@ use super::databases::{DatabaseOps, piped_command, spawn_error};
 use super::exec::{self, ExecOptions};
 pub use crate::providers::backup_secret::check_secret_ref;
 use crate::providers::backup_secret::{
-    BACKUP_SECRETS_DIR, BUCKET_LOOKUP_KEY, BUCKET_LOOKUP_VALUES, ENV_SUFFIX, check_secret_put, parse_env,
-    render_env,
+    BACKUP_SECRETS_DIR, BUCKET_LOOKUP_KEY, BUCKET_LOOKUP_VALUES, ENV_SUFFIX, MAX_SECRET_VALUE,
+    check_secret_put, parse_env, password_change_refused, password_matches, render_env,
 };
 use crate::providers::*;
 
@@ -583,7 +583,7 @@ impl BackupOps {
     fn environment(&self, repository: &str, password_ref: &str) -> PResult<Environment> {
         self.0.require(cap::RESTIC)?;
         check_repository_uri(repository)?;
-        check_secret_ref(password_ref)?;
+        check_secret_ref("password_ref", password_ref)?;
         resolve_secret(&self.0.opts.state_dir, repository, password_ref)
     }
 }
@@ -737,10 +737,7 @@ fn replace_at(dir: &File, dir_path: &Path, name: &str, content: &[u8]) -> PResul
         file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         file.sync_all()?;
         renameat(Some(dirfd), temp.as_str(), Some(dirfd), name)?;
-        match dir.sync_all() {
-            Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
-            other => other,
-        }
+        sync_dir(dir)
     })();
     if result.is_err() {
         let _ = unlinkat(Some(dirfd), temp.as_str(), UnlinkatFlags::NoRemoveDir);
@@ -748,15 +745,62 @@ fn replace_at(dir: &File, dir_path: &Path, name: &str, content: &[u8]) -> PResul
     result.map_err(|e| wrap_fs_error(&target, e))
 }
 
-/// Removes `name` from `dir`; true when something was there.
+/// Makes a rename or an unlink in `dir` durable. A filesystem that cannot
+/// sync a directory answers EINVAL, which is not a failure here.
+fn sync_dir(dir: &File) -> std::io::Result<()> {
+    match dir.sync_all() {
+        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+        other => other,
+    }
+}
+
+/// Removes `name` from `dir`; true when something was there. The removal
+/// is synced, so a crash cannot bring a deleted secret back.
 fn remove_at(dir: &File, dir_path: &Path, name: &str) -> PResult<bool> {
     use std::os::fd::AsRawFd;
 
     use nix::unistd::{UnlinkatFlags, unlinkat};
 
+    let shown = || dir_path.join(name).display().to_string();
     match unlinkat(Some(dir.as_raw_fd()), name, UnlinkatFlags::NoRemoveDir) {
-        Ok(()) => Ok(true),
+        Ok(()) => {
+            sync_dir(dir).map_err(|e| wrap_fs_error(&shown(), e))?;
+            Ok(true)
+        }
         Err(nix::errno::Errno::ENOENT) => Ok(false),
+        Err(e) => Err(wrap_fs_error(&shown(), e.into())),
+    }
+}
+
+/// What is at `name` in `dir`, without following a symbolic link.
+enum Entry {
+    Missing,
+    /// A regular file (its content is read separately when it matters).
+    File,
+    /// A symbolic link: never followed, and replaced by the next write.
+    Symlink,
+    /// A directory, a FIFO, a socket or a device: nothing Kaname wrote.
+    Other,
+}
+
+fn entry_at(dir: &File, dir_path: &Path, name: &str) -> PResult<Entry> {
+    use std::os::fd::AsRawFd;
+
+    use nix::fcntl::AtFlags;
+    use nix::sys::stat::{SFlag, fstatat};
+
+    match fstatat(Some(dir.as_raw_fd()), name, AtFlags::AT_SYMLINK_NOFOLLOW) {
+        Ok(st) => {
+            let kind = SFlag::from_bits_truncate(st.st_mode) & SFlag::S_IFMT;
+            Ok(if kind == SFlag::S_IFREG {
+                Entry::File
+            } else if kind == SFlag::S_IFLNK {
+                Entry::Symlink
+            } else {
+                Entry::Other
+            })
+        }
+        Err(nix::errno::Errno::ENOENT) => Ok(Entry::Missing),
         Err(e) => Err(wrap_fs_error(
             &dir_path.join(name).display().to_string(),
             e.into(),
@@ -764,12 +808,136 @@ fn remove_at(dir: &File, dir_path: &Path, name: &str) -> PResult<bool> {
     }
 }
 
+/// Refuses up front when `<ref>` or `<ref>.env` is something a rename or an
+/// unlink cannot replace (a directory, say), so neither verb leaves half
+/// its work done and then fails on it every time after.
+fn check_replaceable(dir: &File, dir_path: &Path, reference: &str) -> PResult<()> {
+    for (name, what) in [
+        (reference.to_string(), "backup secret"),
+        (
+            format!("{reference}{ENV_SUFFIX}"),
+            "the credentials for backup secret",
+        ),
+    ] {
+        if let Entry::Other = entry_at(dir, dir_path, &name)? {
+            return Err(precondition(format!(
+                "{what} {reference:?} is not a regular file; remove {} by hand",
+                dir_path.join(&name).display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The password `<ref>` holds now, when it is a regular file. A symbolic
+/// link is never opened (it holds no password Kaname wrote).
+fn current_password(dir: &File, dir_path: &Path, reference: &str) -> PResult<Option<Vec<u8>>> {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+
+    use nix::fcntl::{OFlag, openat};
+    use nix::sys::stat::Mode;
+
+    let shown = || dir_path.join(reference).display().to_string();
+    let fd = match openat(
+        Some(dir.as_raw_fd()),
+        reference,
+        OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(nix::errno::Errno::ENOENT) | Err(nix::errno::Errno::ELOOP) => return Ok(None),
+        Err(e) => return Err(wrap_fs_error(&shown(), e.into())),
+    };
+    // SAFETY: openat has just returned this descriptor and nothing else
+    // holds it, so the File becomes its only owner.
+    let file = unsafe { File::from_raw_fd(fd) };
+    if !file.metadata().map_err(|e| wrap_fs_error(&shown(), e))?.is_file() {
+        return Ok(None);
+    }
+    let mut content = Vec::new();
+    // A password is at most MAX_SECRET_VALUE bytes plus a line break; read
+    // a little past that, so a longer file never compares equal.
+    file.take(MAX_SECRET_VALUE as u64 + 4)
+        .read_to_end(&mut content)
+        .map_err(|e| wrap_fs_error(&shown(), e))?;
+    Ok(Some(content))
+}
+
+/// Whether `name` is a temporary `replace_at` left behind for `reference`
+/// (`.<ref>.<uuid>` or `.<ref>.env.<uuid>`, the uuid as 32 lowercase hex
+/// digits). References never start with a dot, so no live file matches.
+fn is_leftover_temp(name: &str, reference: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix('.')
+        .and_then(|n| n.strip_prefix(reference))
+        .and_then(|n| n.strip_prefix('.'))
+    else {
+        return false;
+    };
+    let rest = rest.strip_prefix("env.").unwrap_or(rest);
+    rest.len() == 32 && rest.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// Removes the temporaries an interrupted write left for `reference`,
+/// listing and unlinking through the directory descriptor. Best effort: a
+/// leftover is harmless (0600, never read), so a failure here is not one
+/// of the verb's.
+fn remove_leftover_temps(dir: &File, reference: &str) {
+    use std::os::fd::AsRawFd;
+
+    use nix::dir::Dir;
+    use nix::fcntl::OFlag;
+    use nix::sys::stat::Mode;
+    use nix::unistd::{UnlinkatFlags, unlinkat};
+
+    let Ok(mut listing) = Dir::openat(
+        Some(dir.as_raw_fd()),
+        ".",
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    ) else {
+        return;
+    };
+    let leftovers: Vec<String> = listing
+        .iter()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().to_str().ok().map(str::to_string))
+        .filter(|name| is_leftover_temp(name, reference))
+        .collect();
+    let mut removed = false;
+    for name in leftovers {
+        removed |= unlinkat(Some(dir.as_raw_fd()), name.as_str(), UnlinkatFlags::NoRemoveDir).is_ok();
+    }
+    if removed {
+        let _ = sync_dir(dir);
+    }
+}
+
+/// One writer or remover at a time in this process: the leftover sweep
+/// must never take a temporary another call is about to rename, and the
+/// password comparison must not race a concurrent write.
+static SECRETS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Writes `<ref>` (the password and a newline) and `<ref>.env` (the
 /// credentials, or nothing: an empty set removes a stale file).
+///
+/// A repository password is never changed: when `<ref>` already holds a
+/// different one the call is refused and nothing is written, because the
+/// repository that password opens would be lost. The same password is
+/// written again (a no-op) and the credentials beside it can still rotate.
 fn write_secret(state_dir: &Path, p: &BackupSecretPutParams) -> PResult<()> {
     let entries = check_secret_put(p)?;
+    let _guard = SECRETS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir_path = state_dir.join(BACKUP_SECRETS_DIR);
     let dir = open_secrets_dir(state_dir, true)?.expect("created");
+    remove_leftover_temps(&dir, &p.reference);
+    check_replaceable(&dir, &dir_path, &p.reference)?;
+    if let Some(current) = current_password(&dir, &dir_path, &p.reference)? {
+        if !password_matches(&current, &p.password) {
+            return Err(password_change_refused(&p.reference));
+        }
+    }
 
     let mut password = Vec::with_capacity(p.password.len() + 1);
     password.extend_from_slice(p.password.as_bytes());
@@ -786,11 +954,14 @@ fn write_secret(state_dir: &Path, p: &BackupSecretPutParams) -> PResult<()> {
 }
 
 fn delete_secret(state_dir: &Path, reference: &str) -> PResult<bool> {
-    check_secret_ref(reference)?;
+    check_secret_ref("ref", reference)?;
+    let _guard = SECRETS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir_path = state_dir.join(BACKUP_SECRETS_DIR);
     let Some(dir) = open_secrets_dir(state_dir, false)? else {
         return Ok(false);
     };
+    remove_leftover_temps(&dir, reference);
+    check_replaceable(&dir, &dir_path, reference)?;
     let password = remove_at(&dir, &dir_path, reference)?;
     let env = remove_at(&dir, &dir_path, &format!("{reference}{ENV_SUFFIX}"))?;
     Ok(password || env)
@@ -937,8 +1108,8 @@ mod tests {
 
     #[test]
     fn a_password_ref_is_a_bare_name() {
-        assert!(check_secret_ref("nightly").is_ok());
-        assert!(check_secret_ref("site-a.v2_key").is_ok());
+        assert!(check_secret_ref("password_ref", "nightly").is_ok());
+        assert!(check_secret_ref("password_ref", "site-a.v2_key").is_ok());
         for hostile in [
             "",
             "../shadow",
@@ -949,7 +1120,10 @@ mod tests {
             "ref\0",
             "$(x)",
         ] {
-            assert!(check_secret_ref(hostile).is_err(), "{hostile:?} was accepted");
+            assert!(
+                check_secret_ref("password_ref", hostile).is_err(),
+                "{hostile:?} was accepted"
+            );
         }
     }
 
@@ -1088,17 +1262,111 @@ repository contains 3 packs
     }
 
     #[test]
-    fn secret_put_rotates_and_an_empty_env_removes_the_credentials() {
+    fn secret_put_rotates_credentials_and_an_empty_env_removes_them() {
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path();
         let dir = state.join(BACKUP_SECRETS_DIR);
         write_secret(state, &put(REF, PASSWORD, s3_env())).unwrap();
-        write_secret(state, &put(REF, "rotated", BackupSecretEnv::default())).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join(REF)).unwrap(), "rotated\n");
+        let rotated = BackupSecretEnv {
+            aws_secret_access_key: Some("rotated-key".into()),
+            ..s3_env()
+        };
+        write_secret(state, &put(REF, PASSWORD, rotated)).unwrap();
+        assert!(
+            std::fs::read_to_string(dir.join(format!("{REF}.env")))
+                .unwrap()
+                .contains("rotated-key")
+        );
+        write_secret(state, &put(REF, PASSWORD, BackupSecretEnv::default())).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join(REF)).unwrap(),
+            format!("{PASSWORD}\n")
+        );
         assert!(!dir.join(format!("{REF}.env")).exists());
         // And again with nothing to remove.
-        write_secret(state, &put(REF, "rotated", BackupSecretEnv::default())).unwrap();
+        write_secret(state, &put(REF, PASSWORD, BackupSecretEnv::default())).unwrap();
         assert_eq!(mode(&dir.join(REF)), 0o600);
+    }
+
+    #[test]
+    fn secret_put_never_changes_a_repository_password() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let dir = state.join(BACKUP_SECRETS_DIR);
+        write_secret(state, &put(REF, PASSWORD, BackupSecretEnv::default())).unwrap();
+        let err = write_secret(state, &put(REF, "a-different-password", s3_env())).unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err}");
+        let shown = err.to_string();
+        assert!(
+            !shown.contains(PASSWORD) && !shown.contains("a-different-password"),
+            "{shown}"
+        );
+        // Nothing was written: neither the password nor the credentials.
+        assert_eq!(
+            std::fs::read_to_string(dir.join(REF)).unwrap(),
+            format!("{PASSWORD}\n")
+        );
+        assert!(!dir.join(format!("{REF}.env")).exists());
+
+        // A password installed by hand, without the line break, is the same one.
+        std::fs::write(dir.join("by-hand"), "hand-made").unwrap();
+        write_secret(state, &put("by-hand", "hand-made", s3_env())).unwrap();
+        assert!(write_secret(state, &put("by-hand", "hand-made-2", s3_env())).is_err());
+    }
+
+    #[test]
+    fn leftover_temporaries_are_swept_for_that_reference_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let dir = state.join(BACKUP_SECRETS_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        let uuid = "0123456789abcdef0123456789abcdef";
+        let ours = [format!(".{REF}.{uuid}"), format!(".{REF}.env.{uuid}")];
+        let theirs = [
+            format!(".nightly.{uuid}"),
+            format!(".{REF}.j0123456789ab.{uuid}"),
+            format!(".{REF}.{}", &uuid[..31]),
+            format!(".{REF}.{}", uuid.to_uppercase()),
+        ];
+        for name in ours.iter().chain(theirs.iter()) {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        write_secret(state, &put(REF, PASSWORD, Default::default())).unwrap();
+        for name in &ours {
+            assert!(!dir.join(name).exists(), "{name} was left");
+        }
+        for name in &theirs {
+            assert!(dir.join(name).exists(), "{name} was taken");
+        }
+
+        for name in &ours {
+            std::fs::write(dir.join(name), "x").unwrap();
+        }
+        assert!(delete_secret(state, REF).unwrap());
+        for name in &ours {
+            assert!(!dir.join(name).exists(), "{name} was left by delete");
+        }
+        assert!(is_leftover_temp(&format!(".{REF}.{uuid}"), REF));
+        assert!(!is_leftover_temp(&format!("{REF}.{uuid}"), REF));
+    }
+
+    #[test]
+    fn a_credentials_path_that_is_not_a_file_is_refused_up_front() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let dir = state.join(BACKUP_SECRETS_DIR);
+        std::fs::create_dir_all(dir.join(format!("{REF}.env"))).unwrap();
+
+        let err = write_secret(state, &put(REF, PASSWORD, s3_env())).unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err}");
+        assert!(!dir.join(REF).exists(), "nothing was written before the refusal");
+
+        // A password written before the directory appeared stays put: the
+        // delete refuses instead of removing half the secret.
+        std::fs::write(dir.join(REF), format!("{PASSWORD}\n")).unwrap();
+        let err = delete_secret(state, REF).unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err}");
+        assert!(dir.join(REF).exists());
     }
 
     #[test]

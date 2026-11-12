@@ -995,18 +995,12 @@ export async function seedDemo(db: Database): Promise<void> {
       })
       .returning({ id: s.backupSchedules.id });
 
-    // Encrypted, so it names its repository password the way a schedule
-    // created through the API does. Without a ref the agent refuses every
-    // verify and restore of these points ("password_ref is required"),
-    // matching snapshot ids or not. No password is stored behind the ref:
-    // the seed cannot seal one without the control plane's master key, so
-    // the control plane generates and stores it the first time a job is
-    // queued for the schedule, and hands it to the host before restic runs
-    // (services/backup-secrets.ts).
-    await db
-      .update(s.backupSchedules)
-      .set({ passwordRef: `backup_schedule:${schedule!.id}` })
-      .where(sql`${s.backupSchedules.id} = ${schedule!.id}`);
+    // No password ref: the seed cannot seal a password without the control
+    // plane's master key, and a ref with no stored secret behind it is a
+    // lost password the control plane refuses to replace. With none, the
+    // control plane generates and stores one the first time a job is
+    // queued for the schedule, sets the ref, and hands the password to the
+    // host before restic runs (services/backup-secrets.ts).
 
     for (let i = 0; i < 7; i += 1) {
       const started = now - (i * 24 + 9) * 3600_000;

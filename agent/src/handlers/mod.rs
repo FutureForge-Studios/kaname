@@ -1230,6 +1230,11 @@ mod tests {
                 ErrorCode::InvalidParams,
             ),
             (
+                "backup.secret_delete",
+                json!({"ref": "nightly", "path": "/etc/shadow"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
                 "backup.secret_put",
                 json!({"ref": "nightly", "password": "pw"}),
                 ErrorCode::Unsupported,
@@ -1279,6 +1284,9 @@ mod tests {
             json!({"ref": "nightly", "password": ["ok", secret]}),
             json!({"ref": "x.env", "password": secret}),
             json!({"ref": "nightly", "password": secret, "env": {"LD_PRELOAD": secret}}),
+            // A credential sent as a key rather than a value.
+            json!({"ref": "nightly", "password": "ok", "env": {secret: "x"}}),
+            json!({"ref": "nightly", "password": "ok", secret: "x"}),
         ] {
             let err = match call(&r, "backup.secret_put", Some(params.clone())).await {
                 Ok(v) => panic!("{params} was accepted: {v}"),

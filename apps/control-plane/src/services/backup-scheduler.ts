@@ -155,8 +155,18 @@ export class BackupScheduler {
     }
 
     // restic always needs a repository password, whatever the schedule's
-    // encryption flag says; a schedule without one gets it here, once.
-    const passwordRef = await ensureSchedulePassword(ctx.db, ctx.config.masterKey, schedule);
+    // encryption flag says; a schedule without one gets it here, once. One
+    // whose password has gone missing is a failed run the operator sees,
+    // never a new password (that would orphan every snapshot).
+    let passwordRef = "";
+    if (plan) {
+      try {
+        passwordRef = await ensureSchedulePassword(ctx.db, ctx.config.masterKey, schedule);
+      } catch (err) {
+        plan = null;
+        planError = err instanceof Error ? err.message : String(err);
+      }
+    }
 
     const connected = ctx.hub.isConnected(schedule.serverId);
     const outcome = await ctx.db.transaction(async (tx) => {

@@ -1040,14 +1040,20 @@ app backup and restore): it opens the schedule's password and the destination's 
 `secrets` (envelope-encrypted, PLAN.md §secrets), calls `backup.secret_put`, then uses that ref for
 every restic verb in the job. Job params, job logs, audit entries and events carry only the ref.
 A restore onto a host other than the schedule's own deletes the secret there afterwards.
-Schedule create, a change of destination or name, and a destination credential rotation also
-queue a `backup.provision` job, so a host holds its key before the first run; deleting a
-schedule queues `backup.unprovision`.
+Schedule create, a change of destination or encryption, and a destination credential rotation
+also queue a `backup.provision` job, so a host holds its key before the first run; deleting a
+schedule queues `backup.unprovision`. A restore onto another host uses a job-unique ref there,
+so concurrent jobs never remove each other's secret, and a cleanup that fails queues
+`backup.unprovision` for that host.
 
 The stored ref stays `backup_schedule:<id>`; the worker maps it to `backup_schedule.<id>` at the
 agent boundary, so no data migration is needed and existing schedules and queued jobs keep
 working. A schedule with no password (`encryption: false`, which restic cannot honour) gets one
-generated and sealed the first time it is used.
+generated and sealed the first time it is used, so the `encryption` flag no longer means an
+unencrypted repository. A schedule whose ref is set but whose sealed password is missing is
+refused, never given a new one, and the agent refuses to replace an existing password file with
+a different value: a repository password is never changed, because that would orphan every
+snapshot already taken.
 
 **Alternatives.** Passing the password and credentials in each `backup.*` request and handing
 them to restic through its environment, never touching disk. Rejected: it changes five verbs
@@ -1068,3 +1074,8 @@ read them, as they could read the data being backed up. The secret crosses the s
 job. SFTP destinations are refused with a clear error, because restic's SFTP needs an SSH key or
 password on the host and Kaname does not provision those yet. An agent older than this release
 does not know `backup.secret_put`, and backups on it fail with an "upgrade the agent" message.
+Revoking or deleting a server does not reach the host, so its secret files stay there; rotate
+the destination's keys when a host is lost. Deleting a schedule removes both copies of its
+repository password, as deleting it removed Kaname's only copy before. The secret writes are
+guarded by the bare-name ref rule and the fixed directory rather than the general path guard,
+which governs operator-chosen paths.

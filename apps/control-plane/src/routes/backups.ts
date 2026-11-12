@@ -57,7 +57,7 @@ import {
   secretRef,
   storeSecret as storeSecretRow,
 } from "../services/backup-secrets.js";
-import { probeS3 } from "../services/s3-probe.js";
+import { pathStyle, probeS3 } from "../services/s3-probe.js";
 import { appBackupRoutes } from "./app-backups.js";
 import {
   combine,
@@ -570,10 +570,11 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
       after: { cron, timezone, enabled, next_run_at: row!.nextRunAt?.toISOString() ?? null },
     });
     req.ctx.events.publish("backups", "schedule.updated", { schedule_id: id }, server.id);
+    // What the host's secret holds: the destination's credentials. A name
+    // change moves the repository path, which every job carries itself.
     const credentialsMoved =
       (body.destination_id !== undefined && body.destination_id !== schedule.destinationId) ||
-      (body.encryption !== undefined && body.encryption !== schedule.encryption) ||
-      (body.name !== undefined && body.name !== schedule.name);
+      (body.encryption !== undefined && body.encryption !== schedule.encryption);
     if (credentialsMoved) {
       await queueBackupSecretJob(req, { type: "backup.provision", schedule: row!, serverName: server.name });
     }
@@ -1087,7 +1088,8 @@ function publicConfig(target: BackupDestinationTarget): Record<string, string> {
         region: target.region,
         bucket: target.bucket,
         prefix: target.prefix,
-        path_style: String(target.path_style ?? (target.provider === "minio" || target.provider === "r2")),
+        // The addressing "Test connection" and restic both use.
+        path_style: String(pathStyle(target)),
         access_key_hint: hint(target.access_key_id),
       };
     }

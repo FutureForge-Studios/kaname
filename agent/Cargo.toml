@@ -44,7 +44,7 @@ rand = "0.8"
 
 # host
 libc = "0.2"
-nix = { version = "0.29", features = ["fs", "process", "signal", "term", "user", "net", "hostname"] }
+nix = { version = "0.29", features = ["dir", "fs", "process", "signal", "term", "user", "net", "hostname"] }
 sysinfo = { version = "0.33", default-features = false, features = ["system", "disk", "network"] }
 procfs = { version = "0.17", default-features = false }
 hickory-resolver = "0.24"

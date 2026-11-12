@@ -141,7 +141,7 @@ export function objectUrl(target: S3Target, key: string): string | null {
 
 /** Path-style when asked, when the preset prefers it, or when a dotted bucket would break TLS. */
 export function pathStyle(target: S3Target): boolean {
-  if (target.path_style !== undefined) return target.path_style;
+  if (typeof target.path_style === "boolean") return target.path_style;
   if (target.provider === "minio" || target.provider === "r2") return true;
   return target.bucket.includes(".");
 }

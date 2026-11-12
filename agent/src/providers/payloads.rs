@@ -1943,7 +1943,7 @@ pub struct BackupSecretPutResult {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct BackupSecretDeleteParams {
     #[serde(rename = "ref")]
     pub reference: String,

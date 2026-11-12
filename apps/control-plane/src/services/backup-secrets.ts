@@ -5,6 +5,7 @@ import { AgentRpcError, type AgentHub } from "../agent/hub.js";
 import { ApiException } from "../lib/errors.js";
 import { generateToken, open, seal } from "../lib/crypto.js";
 import type { JobContext } from "../jobs/worker.js";
+import { pathStyle } from "./s3-probe.js";
 
 /* ------------------------------------------------------------------ *
  * Backup secrets on the host.
@@ -101,7 +102,14 @@ export async function readDestinationTarget(
 ): Promise<BackupDestinationTarget | null> {
   if (!destination.secretRef) return null;
   const plaintext = await readSecret(db, masterKey, destination.secretRef);
-  return plaintext === null ? null : (JSON.parse(plaintext) as BackupDestinationTarget);
+  if (plaintext === null) return null;
+  try {
+    return JSON.parse(plaintext) as BackupDestinationTarget;
+  } catch {
+    // Not the SyntaxError: its message quotes the text it choked on, and
+    // that text holds the destination's credentials.
+    throw new Error("A backup destination's stored target could not be read; send its target again.");
+  }
 }
 
 /* --------------------------- restic env ----------------------------- */
@@ -120,14 +128,15 @@ export interface ResticEnv {
 export function resticEnvFor(target: BackupDestinationTarget): ResticEnv {
   switch (target.kind) {
     case "s3": {
-      // Resolved exactly as the destination's public config shows it.
-      const pathStyle = target.path_style ?? (target.provider === "minio" || target.provider === "r2");
+      // The rule "Test connection" and the destination's public config
+      // use: asked for, the preset's preference, or a dotted bucket name
+      // (which breaks TLS on a virtual-hosted name).
       return {
         AWS_ACCESS_KEY_ID: target.access_key_id,
         AWS_SECRET_ACCESS_KEY: target.secret_access_key,
         // The region requests are signed for, as "Test connection" signs.
         AWS_DEFAULT_REGION: s3SigningRegion(target.provider, target.region),
-        KANAME_S3_BUCKET_LOOKUP: pathStyle ? "path" : "dns",
+        KANAME_S3_BUCKET_LOOKUP: pathStyle(target) ? "path" : "dns",
       };
     }
     case "b2":
@@ -154,46 +163,54 @@ function sftpUnsupported(): ApiException {
 
 /* ---------------------------- passwords ----------------------------- */
 
-/**
- * Makes sure a repository password is stored under `ref`, generating one
- * when there is none. An existing password is never replaced: that would
- * lock everyone out of the repository it opens.
- */
-async function ensurePasswordRow(
-  db: Database,
-  masterKey: Buffer,
-  ref: string,
-  scheduleId: string,
-): Promise<void> {
-  const [existing] = await db.select({ id: secrets.id }).from(secrets).where(eq(secrets.ref, ref)).limit(1);
-  if (existing) return;
-  await storeSecret(db, masterKey, {
-    ref,
-    ownerType: "backup_schedule",
-    ownerId: scheduleId,
-    plaintext: generateToken(),
-    overwrite: false,
-  });
+/** The refusal when a schedule names a password Kaname no longer holds. */
+export function passwordMissing(scheduleName?: string): ApiException {
+  return new ApiException(
+    "precondition_failed",
+    `${scheduleName ? `The repository password of "${scheduleName}"` : "This schedule's repository password"} is missing from Kaname's secret store; it cannot be regenerated without losing access to existing snapshots.`,
+    {
+      remediation: {
+        summary:
+          "Restore the secret from a backup of Kaname's database, or create a new schedule (a new repository) for this data.",
+        actions: [{ label: "Backup schedules", href: "/backups/schedules" }],
+      },
+    },
+  );
+}
+
+async function hasSecret(db: Database, ref: string): Promise<boolean> {
+  const [row] = await db.select({ id: secrets.id }).from(secrets).where(eq(secrets.ref, ref)).limit(1);
+  return Boolean(row);
 }
 
 /**
  * The schedule's repository password ref, with a password stored behind
  * it. restic always needs one, so a schedule saved with
- * `encryption: false` (no ref) could never run, and a schedule that names
- * a ref with no stored secret (the demo seed's, which cannot seal without
- * the control plane's master key) could never be provisioned; both get a
- * generated password the first time anything is queued for them. Safe to
- * call twice, or from two passes at once: an existing password is never
- * replaced, and only a schedule with no ref is given one.
+ * `encryption: false` (no ref) could never run; it gets a generated
+ * password the first time anything is queued for it. Only a schedule with
+ * no ref is ever given one: no Kaname repository exists for it yet. A
+ * schedule that names a ref whose secret is gone is refused, because a new
+ * password would lock everyone out of the snapshots already taken. Safe
+ * to call twice, or from two passes at once: an existing password is
+ * never replaced.
  */
 export async function ensureSchedulePassword(
   db: Database,
   masterKey: Buffer,
-  schedule: { id: string; passwordRef: string | null },
+  schedule: { id: string; name?: string; passwordRef: string | null },
 ): Promise<string> {
-  const ref = schedule.passwordRef ?? secretRef(schedule.id, "schedule");
-  await ensurePasswordRow(db, masterKey, ref, schedule.id);
-  if (schedule.passwordRef) return schedule.passwordRef;
+  if (schedule.passwordRef) {
+    if (!(await hasSecret(db, schedule.passwordRef))) throw passwordMissing(schedule.name);
+    return schedule.passwordRef;
+  }
+  const ref = secretRef(schedule.id, "schedule");
+  await storeSecret(db, masterKey, {
+    ref,
+    ownerType: "backup_schedule",
+    ownerId: schedule.id,
+    plaintext: generateToken(),
+    overwrite: false,
+  });
   await db
     .update(backupSchedules)
     .set({ passwordRef: ref })
@@ -228,22 +245,28 @@ export interface ProvisionOutcome {
 export const AGENT_TOO_OLD =
   "This host's agent is too old to receive backup credentials; upgrade the agent (kanamed) and retry.";
 
+/** Everything a `backup.secret_put` needs, opened from the secrets table. */
+interface PreparedSecret {
+  /** The stored ref in the agent's form: the schedule's home ref. */
+  ref: string;
+  password: string;
+  env: ResticEnv;
+  scheduleId: string;
+  scheduleName: string;
+  scheduleServerId: string;
+  warning?: string;
+}
+
 /**
- * Hands a schedule's repository password and its destination's
- * credentials to a host, under the agent-safe form of `storedRef`.
- *
- * A ref with no stored password gets a generated one (see
- * ensureSchedulePassword). A remote destination with no stored
- * credentials is provisioned with the password alone, and the outcome
- * says so: restic will then report the authentication failure itself.
+ * Opens a schedule's repository password and its destination's
+ * credentials. A schedule with no password ref at all gets a generated
+ * password (see ensureSchedulePassword); one whose ref has no stored
+ * secret is refused. A remote destination with no stored credentials
+ * yields the password alone, and says so: restic will then report the
+ * authentication failure itself.
  */
-export async function provisionBackupSecret(
-  deps: BackupSecretDeps,
-  serverId: string,
-  storedRef: string,
-): Promise<ProvisionOutcome> {
+async function prepareBackupSecret(deps: BackupSecretDeps, storedRef: string): Promise<PreparedSecret> {
   const scheduleId = scheduleIdFromRef(storedRef);
-  const ref = agentSecretRef(storedRef);
 
   const [schedule] = await deps.db
     .select()
@@ -272,27 +295,60 @@ export async function provisionBackupSecret(
   // Refused before anything is opened: an SFTP key is not ours to place.
   if (destination.kind === "sftp" || target?.kind === "sftp") throw sftpUnsupported();
 
-  await ensurePasswordRow(deps.db, deps.masterKey, storedRef, schedule.id);
+  // Generated only for a schedule that never had a password.
+  if (!schedule.passwordRef) await ensureSchedulePassword(deps.db, deps.masterKey, schedule);
   const password = await readSecret(deps.db, deps.masterKey, storedRef);
-  if (password === null) {
-    throw new ApiException("precondition_failed", `No repository password is stored for "${schedule.name}".`);
-  }
+  if (password === null) throw passwordMissing(schedule.name);
   const warning =
     !target && destination.kind !== "local"
       ? `"${destination.name}" has no stored credentials; send its target again to store them.`
       : undefined;
+  return {
+    ref: agentSecretRef(storedRef),
+    password,
+    env: target ? resticEnvFor(target) : {},
+    scheduleId: schedule.id,
+    scheduleName: schedule.name,
+    scheduleServerId: schedule.serverId,
+    ...(warning ? { warning } : {}),
+  };
+}
 
+async function putBackupSecret(
+  deps: BackupSecretDeps,
+  serverId: string,
+  ref: string,
+  prepared: PreparedSecret,
+): Promise<void> {
   try {
     await deps.hub.call(
       serverId,
       "backup.secret_put",
-      { ref, password, env: target ? resticEnvFor(target) : {} },
+      { ref, password: prepared.password, env: prepared.env },
       { signal: deps.signal },
     );
   } catch (err) {
     throw agentSecretError(err);
   }
-  return { ref, scheduleServerId: schedule.serverId, ...(warning ? { warning } : {}) };
+}
+
+/**
+ * Hands a schedule's repository password and its destination's
+ * credentials to a host, under the agent-safe form of `storedRef` (the
+ * schedule's home ref).
+ */
+export async function provisionBackupSecret(
+  deps: BackupSecretDeps,
+  serverId: string,
+  storedRef: string,
+): Promise<ProvisionOutcome> {
+  const prepared = await prepareBackupSecret(deps, storedRef);
+  await putBackupSecret(deps, serverId, prepared.ref, prepared);
+  return {
+    ref: prepared.ref,
+    scheduleServerId: prepared.scheduleServerId,
+    ...(prepared.warning ? { warning: prepared.warning } : {}),
+  };
 }
 
 /** Removes a backup secret from a host. */
@@ -361,13 +417,26 @@ export async function storedRefForJob(
 }
 
 /**
- * Provisions once for a job, on the job's own server. The returned
- * `cleanup` removes the secret again when that server is not the
- * schedule's own (a restore onto another host): best effort, and its
- * failure is logged without any value in it.
+ * The agent ref a job on a host that is not the schedule's own uses: the
+ * home ref plus the job's id, so two restores onto the same host at once
+ * never remove each other's secret. Fits the agent's ref rules (66 of
+ * `[A-Za-z0-9._-]`, starts with a letter, does not end in `.env`).
+ */
+export function foreignAgentRef(homeRef: string, jobId: string): string {
+  return `${homeRef}.j${jobId.replaceAll("-", "").slice(0, 12).toLowerCase()}`;
+}
+
+/**
+ * Provisions once for a job, on the job's own server. On the schedule's
+ * own server the secret is put under its home ref and stays there for the
+ * next job. On any other host (a restore elsewhere) it goes under a ref
+ * unique to this job, and `cleanup` removes it again; that removal is
+ * also tried when the put itself failed or timed out, and when it cannot
+ * be done now a `backup.unprovision` job is queued for that host and ref
+ * (its params hold the ref only).
  */
 export async function provisionForJob(
-  ctx: Pick<JobContext, "db" | "hub" | "config" | "job" | "signal" | "log_">,
+  ctx: Pick<JobContext, "db" | "hub" | "config" | "job" | "signal" | "log_" | "queue" | "events">,
   serverId: string,
   storedRef: string,
 ): Promise<{ ref: string; cleanup: () => Promise<void> }> {
@@ -377,28 +446,67 @@ export async function provisionForJob(
     masterKey: ctx.config.masterKey,
     signal: ctx.signal,
   };
-  const outcome = await provisionBackupSecret(deps, serverId, storedRef);
-  await ctx.log_("info", "backup credentials handed to the host");
-  if (outcome.warning) await ctx.log_("warn", outcome.warning);
+  const prepared = await prepareBackupSecret(deps, storedRef);
+  const foreign = prepared.scheduleServerId !== serverId;
+  const ref = foreign ? foreignAgentRef(prepared.ref, ctx.job.id) : prepared.ref;
 
-  const foreign = outcome.scheduleServerId !== serverId;
-  return {
-    ref: outcome.ref,
-    cleanup: async () => {
-      if (!foreign) return;
-      try {
-        // Not the job's signal: a cancelled restore still cleans up.
-        await removeBackupSecret({ ...deps, signal: undefined }, serverId, storedRef);
-        await ctx.log_("info", "backup credentials removed from this host again");
-      } catch (err) {
-        const reason =
-          err instanceof AgentRpcError
-            ? err.agentError.code
-            : err instanceof Error
-              ? err.message
-              : "unknown error";
-        await ctx.log_("warn", `could not remove the backup credentials from this host (${reason})`);
-      }
-    },
+  const cleanup = async () => {
+    if (!foreign) return;
+    try {
+      // Not the job's signal: a cancelled restore still cleans up.
+      await removeBackupSecret({ ...deps, signal: undefined }, serverId, ref);
+      await ctx.log_("info", "backup credentials removed from this host again");
+    } catch (err) {
+      const reason =
+        err instanceof AgentRpcError
+          ? err.agentError.code
+          : err instanceof Error
+            ? err.message
+            : "unknown error";
+      await ctx.log_("warn", `could not remove the backup credentials from this host (${reason})`);
+      await queueForeignUnprovision(ctx, serverId, ref, prepared);
+    }
   };
+
+  try {
+    await putBackupSecret(deps, serverId, ref, prepared);
+  } catch (err) {
+    // A put that failed or timed out may still have landed. An agent too
+    // old for the secret verbs has nothing to remove.
+    const tooOld = err instanceof ApiException && err.message === AGENT_TOO_OLD;
+    if (!tooOld) await cleanup();
+    throw err;
+  }
+  await ctx.log_("info", "backup credentials handed to the host");
+  if (prepared.warning) await ctx.log_("warn", prepared.warning);
+  return { ref, cleanup };
+}
+
+/** Leaves the removal of a foreign host's secret to a job of its own. */
+async function queueForeignUnprovision(
+  ctx: Pick<JobContext, "hub" | "job" | "log_" | "queue" | "events">,
+  serverId: string,
+  ref: string,
+  prepared: PreparedSecret,
+): Promise<void> {
+  try {
+    const job = await ctx.queue.enqueue({
+      type: "backup.unprovision",
+      serverId,
+      targetType: "backup_schedule",
+      targetId: prepared.scheduleId,
+      targetLabel: prepared.scheduleName,
+      params: { ref },
+      parentId: ctx.job.id,
+      createdByName: "backup credential cleanup",
+      blockedReason: ctx.hub.isConnected(serverId) ? null : "agent_offline",
+    });
+    ctx.events.publish("jobs", "job.queued", job, serverId);
+    await ctx.log_("info", `queued job ${job.id} to remove them later`);
+  } catch (err) {
+    await ctx.log_(
+      "error",
+      `could not queue their removal either (${err instanceof Error ? err.message : "unknown error"})`,
+    );
+  }
 }

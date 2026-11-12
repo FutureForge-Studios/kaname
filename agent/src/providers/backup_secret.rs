@@ -44,27 +44,45 @@ fn invalid(message: impl Into<String>) -> ProviderError {
 /// agent's own secrets directory: 1..=128 of `[A-Za-z0-9._-]`, starting
 /// with a letter or digit (no dotfiles, no `-flag`), never `..`, and never
 /// ending in `.env`, which would collide with another reference's
-/// credentials file.
-pub fn check_secret_ref(reference: &str) -> PResult<()> {
+/// credentials file. `field` is the parameter's wire name (`password_ref`
+/// for the restic verbs, `ref` for the secret verbs), used in messages.
+pub fn check_secret_ref(field: &str, reference: &str) -> PResult<()> {
     if reference.is_empty() || reference.len() > MAX_SECRET_REF {
-        return Err(invalid("password_ref must be between 1 and 128 characters"));
+        return Err(invalid(format!("{field} must be between 1 and 128 characters")));
     }
     if reference.contains(['/', '\\']) || reference.contains("..") || reference.contains('\0') {
-        return Err(invalid("password_ref must be a bare name, not a path"));
+        return Err(invalid(format!("{field} must be a bare name, not a path")));
     }
     if !reference
         .bytes()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'_'))
     {
-        return Err(invalid("password_ref contains an illegal character"));
+        return Err(invalid(format!("{field} contains an illegal character")));
     }
     if !reference.as_bytes()[0].is_ascii_alphanumeric() {
-        return Err(invalid("password_ref must start with a letter or a digit"));
+        return Err(invalid(format!("{field} must start with a letter or a digit")));
     }
     if reference.ends_with(ENV_SUFFIX) {
-        return Err(invalid("password_ref may not end in .env"));
+        return Err(invalid(format!("{field} may not end in .env")));
     }
     Ok(())
+}
+
+/// The refusal when `backup.secret_put` would change the password a
+/// reference already holds. Names the reference, never either password.
+pub fn password_change_refused(reference: &str) -> ProviderError {
+    ProviderError::PreconditionFailed(format!(
+        "backup secret {reference:?} already holds a different repository password; Kaname never \
+         changes a repository password, because the repository it opens would be lost"
+    ))
+}
+
+/// Whether a password file's content is `password`, allowing the one
+/// trailing line break the writer adds (or a hand-installed `\r\n`).
+pub fn password_matches(content: &[u8], password: &str) -> bool {
+    let content = content.strip_suffix(b"\n").unwrap_or(content);
+    let content = content.strip_suffix(b"\r").unwrap_or(content);
+    content == password.as_bytes()
 }
 
 /// One line in a file restic reads: bounded, and no line break or NUL
@@ -100,7 +118,7 @@ pub fn check_secret_env(env: &BackupSecretEnv) -> PResult<Vec<(&'static str, Str
 
 /// Everything `backup.secret_put` accepts, checked in one place.
 pub fn check_secret_put(p: &BackupSecretPutParams) -> PResult<Vec<(&'static str, String)>> {
-    check_secret_ref(&p.reference)?;
+    check_secret_ref("ref", &p.reference)?;
     check_secret_password(&p.password)?;
     check_secret_env(&p.env)
 }
@@ -151,10 +169,12 @@ mod tests {
             "nightly",
             "site-a.v2_key",
             "backup_schedule.0d6c3a52-8a9b-4c5e-9f00-1234567890ab",
+            // A restore onto a host that is not the schedule's own.
+            "backup_schedule.0d6c3a52-8a9b-4c5e-9f00-1234567890ab.j0123456789ab",
             "0abc",
             &"a".repeat(128),
         ] {
-            assert!(check_secret_ref(good).is_ok(), "{good:?} was refused");
+            assert!(check_secret_ref("ref", good).is_ok(), "{good:?} was refused");
         }
         for bad in [
             "",
@@ -174,8 +194,27 @@ mod tests {
             "$(x)",
             "é",
         ] {
-            assert!(check_secret_ref(bad).is_err(), "{bad:?} was accepted");
+            assert!(check_secret_ref("ref", bad).is_err(), "{bad:?} was accepted");
         }
+    }
+
+    #[test]
+    fn reference_errors_name_the_callers_field() {
+        let err = check_secret_ref("ref", "../x").unwrap_err().to_string();
+        assert!(err.contains("ref must") && !err.contains("password_ref"), "{err}");
+        let err = check_secret_ref("password_ref", "").unwrap_err().to_string();
+        assert!(err.contains("password_ref must"), "{err}");
+    }
+
+    #[test]
+    fn password_files_compare_without_their_line_break() {
+        assert!(password_matches(b"pw\n", "pw"));
+        assert!(password_matches(b"pw\r\n", "pw"));
+        assert!(password_matches(b"pw", "pw"));
+        assert!(!password_matches(b"pw2\n", "pw"));
+        assert!(!password_matches(b"pw\n\n", "pw"));
+        let err = password_change_refused("nightly").to_string();
+        assert!(err.contains("nightly") && err.contains("never"), "{err}");
     }
 
     #[test]

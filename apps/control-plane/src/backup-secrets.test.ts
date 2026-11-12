@@ -20,9 +20,11 @@ import { createContext, type AppContext } from "./context.js";
 import { registerJobHandlers } from "./jobs/handlers.js";
 import { JobWorker } from "./jobs/worker.js";
 import { buildServer } from "./server.js";
+import { pathStyle } from "./services/s3-probe.js";
 import {
   AGENT_TOO_OLD,
   agentSecretRef,
+  foreignAgentRef,
   readSecret,
   resticEnvFor,
   scheduleIdFromRef,
@@ -285,6 +287,16 @@ describe("restic environment", () => {
     );
   });
 
+  it("uses path-style for a dotted bucket, as Test connection and the public config do", () => {
+    const dotted = { ...s3, bucket: "kaname.backups" } as BackupDestinationTarget;
+    expect(resticEnvFor(dotted).KANAME_S3_BUCKET_LOOKUP).toBe("path");
+    expect(pathStyle(dotted as Extract<BackupDestinationTarget, { kind: "s3" }>)).toBe(true);
+    // An explicit choice still wins.
+    expect(resticEnvFor({ ...dotted, path_style: false } as BackupDestinationTarget).KANAME_S3_BUCKET_LOOKUP).toBe(
+      "dns",
+    );
+  });
+
   it("names B2's own variables, needs nothing for a local directory, and refuses SFTP", () => {
     expect(
       resticEnvFor({ kind: "b2", bucket: "b", prefix: "", access_key_id: "k1", secret_access_key: "k2" }),
@@ -429,8 +441,113 @@ describe("restic jobs", () => {
       "backup.restore@edge",
       "backup.secret_delete@edge",
     ]);
-    const agentRef = `backup_schedule.${schedule.id}`;
+    // A ref of this job's own on a host that is not the schedule's.
+    const agentRef = foreignAgentRef(`backup_schedule.${schedule.id}`, data(res).job.id);
+    expect(agentRef).toMatch(new RegExp(`^backup_schedule\\.${schedule.id}\\.j[0-9a-f]{12}$`));
     expect(hub.calls.map((c) => c.params.ref ?? c.params.password_ref)).toEqual([agentRef, agentRef, agentRef]);
+  });
+
+  it("gives two overlapping restores onto the same other host refs of their own", async () => {
+    const schedule = await createSchedule("overlapping restores");
+    const point = await pointFor(schedule.id);
+    const restore = async (target: string) =>
+      data(
+        await call("POST", "/backups/restore", {
+          restore_point_id: point.id,
+          target_server_id: edge,
+          target_path: target,
+          confirm_label: point.label,
+        }),
+      ).job.id as string;
+    const first = await restore("/srv/one");
+    const second = await restore("/srv/two");
+
+    // The host as the agent keeps it: put adds a ref, delete removes it.
+    const onHost = new Set<string>();
+    let secondStarted!: () => void;
+    let firstDeleted!: () => void;
+    const secondStarting = new Promise<void>((r) => (secondStarted = r));
+    const firstDeleting = new Promise<void>((r) => (firstDeleted = r));
+    let restores = 0;
+    const hub = new FakeHub();
+    hub.connected.add(edge);
+    hub.answers.set("backup.secret_put", (p) => {
+      onHost.add(String(p.ref));
+      return { ref: p.ref };
+    });
+    hub.answers.set("backup.secret_delete", (p) => {
+      const removed = onHost.delete(String(p.ref));
+      firstDeleted();
+      return { ref: p.ref, removed };
+    });
+    // The first restore finishes (and cleans up) while the second runs.
+    hub.answers.set("backup.restore", async (p) => {
+      restores += 1;
+      if (restores === 1) {
+        await secondStarting;
+      } else {
+        secondStarted();
+        await firstDeleting;
+      }
+      if (!onHost.has(String(p.password_ref))) {
+        throw new AgentRpcError({ code: "precondition_failed", message: "no backup secret" });
+      }
+      return { restored_files: 1, bytes: 1 };
+    });
+
+    const [a, b] = await Promise.all([execute(hub, first), execute(hub, second)]);
+    expect(a.status).toBe("succeeded");
+    expect(b.status).toBe("succeeded");
+    const puts = hub.calls.filter((c) => c.method === "backup.secret_put").map((c) => c.params.ref);
+    expect(new Set(puts).size).toBe(2);
+    expect(onHost.size).toBe(0);
+  });
+
+  it("tries to remove the secret when the put itself fails, and queues the removal when it cannot", async () => {
+    const schedule = await createSchedule("cleanup fails elsewhere");
+    const point = await pointFor(schedule.id);
+    const restore = async () =>
+      data(
+        await call("POST", "/backups/restore", {
+          restore_point_id: point.id,
+          target_server_id: edge,
+          target_path: "/srv/restore",
+          confirm_label: point.label,
+        }),
+      ).job.id as string;
+
+    // A put that failed may still have landed: the delete is tried anyway.
+    const putFails = new FakeHub();
+    putFails.connected.add(edge);
+    putFails.answers.set("backup.secret_put", () => {
+      throw new AgentRpcError({ code: "internal", message: "disk on fire" });
+    });
+    const failedPut = await restore();
+    expect((await execute(putFails, failedPut)).status).toBe("failed");
+    expect(putFails.methods()).toEqual(["backup.secret_put", "backup.secret_delete"]);
+    expect(putFails.calls[1]!.params.ref).toBe(putFails.calls[0]!.params.ref);
+    expect(await jobsFor(schedule.id, "backup.unprovision")).toHaveLength(0);
+
+    // A removal that fails is left to a job of its own on that host.
+    const deleteFails = new FakeHub();
+    deleteFails.connected.add(edge);
+    deleteFails.answers.set("backup.secret_delete", () => {
+      throw new AgentRpcError({ code: "timeout", message: "the agent did not answer" });
+    });
+    const jobId = await restore();
+    expect((await execute(deleteFails, jobId)).status).toBe("succeeded");
+    const ref = foreignAgentRef(`backup_schedule.${schedule.id}`, jobId);
+    const queued = await jobsFor(schedule.id, "backup.unprovision");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ serverId: edge, status: "queued", parentId: jobId, params: { ref } });
+    const password = (await readSecret(handle.db, ctx.config.masterKey, `backup_schedule:${schedule.id}`))!;
+    expect(JSON.stringify(queued[0])).not.toContain(password);
+
+    // And that job removes exactly that ref, from that host.
+    const later = new FakeHub();
+    later.connected.add(edge);
+    expect((await execute(later, queued[0]!.id)).status).toBe("succeeded");
+    expect(later.calls).toEqual([{ serverId: edge, method: "backup.secret_delete", params: { ref } }]);
   });
 
   it("removes the secret from the other host even when the restore fails, and keeps it at home", async () => {
@@ -487,13 +604,39 @@ describe("restic jobs", () => {
     expect(hub.methods()).not.toContain("backup.run");
   });
 
-  it("generates a password for a ref with no stored secret, and provisions a destination missing credentials", async () => {
-    // As the demo seed leaves its schedules: a ref, no secret row, and a
-    // destination whose credentials were never stored.
-    const schedule = await createSchedule("seeded style");
-    const { backupDestinations, secrets } = await import("@kaname/db/schema");
+  it("never regenerates a password that went missing behind a schedule's ref", async () => {
+    // A ref, and no secret row behind it: the repository's password is lost
+    // to Kaname, and a new one would orphan every snapshot taken with it.
+    const schedule = await createSchedule("password lost");
     const ref = `backup_schedule:${schedule.id}`;
+    const ran = await call("POST", `/backups/schedules/${schedule.id}/run`);
+    expect(ran.statusCode).toBe(202);
+    const { secrets } = await import("@kaname/db/schema");
     await handle.db.delete(secrets).where(eq(secrets.ref, ref));
+
+    // At enqueue time.
+    const refused = await call("POST", `/backups/schedules/${schedule.id}/run`);
+    expect(refused.statusCode).toBe(412);
+    expect(refused.body).toMatch(/missing from Kaname's secret store; it cannot be regenerated/);
+
+    // And in a job queued before the secret went missing.
+    const hub = new FakeHub();
+    hub.connected.add(forge);
+    const done = await execute(hub, data(ran).job.id);
+    expect(done.status).toBe("failed");
+    expect(done.error).toMatchObject({ code: "precondition_failed" });
+    expect(done.error?.message).toMatch(/cannot be regenerated without losing access to existing snapshots/);
+    const provision = (await jobsFor(schedule.id, "backup.provision"))[0]!;
+    await handle.db.update(jobs).set({ status: "queued" }).where(eq(jobs.id, provision.id));
+    expect((await execute(hub, provision.id)).status).toBe("failed");
+    expect(hub.calls).toEqual([]);
+    expect(await readSecret(handle.db, ctx.config.masterKey, ref)).toBeNull();
+  });
+
+  it("provisions a destination missing credentials with the password alone, and keeps the password", async () => {
+    const schedule = await createSchedule("no credentials");
+    const { backupDestinations } = await import("@kaname/db/schema");
+    const ref = `backup_schedule:${schedule.id}`;
     const [bare] = await handle.db
       .insert(backupDestinations)
       .values({ name: "b2 without credentials", kind: "b2", config: { bucket: "b", prefix: "p" } })
@@ -539,18 +682,40 @@ describe("provisioning outside runs", () => {
     expect(done.result).toEqual({ ref: `backup_schedule.${schedule.id}`, provisioned: true });
   });
 
-  it("queues a provision when a schedule's destination, encryption or name changes — not its cron", async () => {
+  it("queues a provision when a schedule's encryption changes — not its cron or its name", async () => {
     const schedule = await createSchedule("patched");
     await handle.db.update(jobs).set({ status: "cancelled" }).where(eq(jobs.targetId, schedule.id));
 
     expect((await call("PATCH", `/backups/schedules/${schedule.id}`, { cron: "0 4 * * *" })).statusCode).toBe(200);
     expect(await jobsFor(schedule.id, "backup.provision")).toHaveLength(0);
+    // The host's secret holds no name: a rename hands it nothing new.
+    expect((await call("PATCH", `/backups/schedules/${schedule.id}`, { name: "patched renamed" })).statusCode).toBe(
+      200,
+    );
+    expect(await jobsFor(schedule.id, "backup.provision")).toHaveLength(0);
 
     expect((await call("PATCH", `/backups/schedules/${schedule.id}`, { encryption: false })).statusCode).toBe(200);
     expect(await jobsFor(schedule.id, "backup.provision")).toHaveLength(1);
     // One waiting provision covers the next change: it reads the secrets when it runs.
-    expect((await call("PATCH", `/backups/schedules/${schedule.id}`, { name: "patched again" })).statusCode).toBe(200);
+    expect((await call("PATCH", `/backups/schedules/${schedule.id}`, { encryption: true })).statusCode).toBe(200);
     expect(await jobsFor(schedule.id, "backup.provision")).toHaveLength(1);
+  });
+
+  it("queues a provision when a schedule moves to another destination", async () => {
+    const schedule = await createSchedule("moved");
+    await handle.db.update(jobs).set({ status: "cancelled" }).where(eq(jobs.targetId, schedule.id));
+
+    const moved = await call("PATCH", `/backups/schedules/${schedule.id}`, { destination_id: localDestination });
+    expect(moved.statusCode).toBe(200);
+    const queued = await jobsFor(schedule.id, "backup.provision");
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ serverId: forge, params: { schedule_id: schedule.id } });
+
+    const hub = new FakeHub();
+    hub.connected.add(forge);
+    expect((await execute(hub, queued[0]!.id)).status).toBe("succeeded");
+    // The local destination needs no credentials: the old S3 keys are dropped.
+    expect(hub.calls[0]!.params.env).toEqual({});
   });
 
   it("queues one provision per schedule when a destination's credentials rotate", async () => {

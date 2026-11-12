@@ -10,7 +10,8 @@
 //! The restic verbs refuse a `password_ref` that `backup.secret_put` has
 //! not provisioned, as the real agent does when the file is missing, so a
 //! control plane that forgets to provision fails in development rather
-//! than first on a real host. Only the reference is remembered.
+//! than first on a real host. Only the reference and a hash of its password
+//! are remembered: enough to refuse a password change as the real agent does.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +22,7 @@ use chrono::Utc;
 use super::databases::find_database;
 use super::files::{MemFs, Node, clean_path, count_nodes, path_base, path_dir, path_join, tree_size};
 use super::state::{GIB, MIB, Sim, World, hash_string, mix, progress, stamp};
-use crate::providers::backup_secret::{check_secret_put, check_secret_ref};
+use crate::providers::backup_secret::{check_secret_put, check_secret_ref, password_change_refused};
 use crate::providers::{
     BackupListParams, BackupPruneParams, BackupPruneResult, BackupRestoreParams, BackupRestoreResult,
     BackupRunParams, BackupSecretDeleteParams, BackupSecretDeleteResult, BackupSecretPutParams,
@@ -174,8 +175,8 @@ impl SimBackups {
     /// The simulator's `environment()`: the same reference rules, and the
     /// same refusal when nothing was provisioned under that name.
     fn require_secret(&self, password_ref: &str) -> PResult<()> {
-        check_secret_ref(password_ref)?;
-        if self.0.world.lock().backup_secrets.contains(password_ref) {
+        check_secret_ref("password_ref", password_ref)?;
+        if self.0.world.lock().backup_secrets.contains_key(password_ref) {
             return Ok(());
         }
         Err(ProviderError::PreconditionFailed(format!(
@@ -528,8 +529,18 @@ impl Backups for SimBackups {
     }
 
     async fn secret_put(&self, _ctx: &Ctx, p: BackupSecretPutParams) -> PResult<BackupSecretPutResult> {
+        use sha2::{Digest, Sha256};
+
         check_secret_put(&p)?;
-        self.0.world.lock().backup_secrets.insert(p.reference.clone());
+        let digest: [u8; 32] = Sha256::digest(p.password.as_bytes()).into();
+        let mut world = self.0.world.lock();
+        // As on a real host: a reference's password never changes.
+        match world.backup_secrets.get(&p.reference) {
+            Some(held) if *held != digest => return Err(password_change_refused(&p.reference)),
+            _ => {}
+        }
+        world.backup_secrets.insert(p.reference.clone(), digest);
+        drop(world);
         Ok(BackupSecretPutResult {
             reference: p.reference,
         })
@@ -540,8 +551,8 @@ impl Backups for SimBackups {
         _ctx: &Ctx,
         p: BackupSecretDeleteParams,
     ) -> PResult<BackupSecretDeleteResult> {
-        check_secret_ref(&p.reference)?;
-        let removed = self.0.world.lock().backup_secrets.remove(&p.reference);
+        check_secret_ref("ref", &p.reference)?;
+        let removed = self.0.world.lock().backup_secrets.remove(&p.reference).is_some();
         Ok(BackupSecretDeleteResult {
             reference: p.reference,
             removed,
@@ -753,6 +764,26 @@ mod tests {
 
         provision(&backups, reference).await;
         assert!(!backups.list(&ctx, list()).await.expect("provisioned").is_empty());
+
+        // The same password again is fine; a different one is refused, as
+        // on a real host, and the message carries neither.
+        provision(&backups, reference).await;
+        let changed = backups
+            .secret_put(
+                &ctx,
+                BackupSecretPutParams {
+                    reference: reference.into(),
+                    password: "another-password".into(),
+                    env: Default::default(),
+                },
+            )
+            .await
+            .expect_err("a changed password");
+        assert!(
+            matches!(changed, ProviderError::PreconditionFailed(_)),
+            "{changed}"
+        );
+        assert!(!changed.to_string().contains("another-password"), "{changed}");
 
         let removed = backups
             .secret_delete(
