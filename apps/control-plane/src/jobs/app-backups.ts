@@ -10,6 +10,7 @@ import {
   siteRoot,
   type AppBackupPlanEntry,
 } from "../services/app-backup-plan.js";
+import { provisionForJob, storedRefForJob } from "../services/backup-secrets.js";
 import type { JobContext, JobHandler } from "./worker.js";
 
 /* ------------------------------------------------------------------ *
@@ -210,9 +211,31 @@ export type RestoreStep = (typeof RESTORE_STEPS)[number];
 
 export const RESTORE_TIMING = { installPollMs: 3000, installWaitMs: 45 * 60 * 1000, checkAttempts: 20, checkIntervalMs: 3000 };
 
+/**
+ * The restic secret goes onto the job's host before anything else, and
+ * comes off it again when that host is not the schedule's own (a restore
+ * as new onto another server).
+ */
 const appRestore: JobHandler = async (ctx) => {
   const serverId = requireServer(ctx);
   const p = ctx.job.params as unknown as AppRestoreParams;
+  const [source] = p.password_ref
+    ? []
+    : await ctx.db
+        .select({ scheduleId: restorePoints.scheduleId })
+        .from(restorePoints)
+        .where(eq(restorePoints.id, p.restore_point_id))
+        .limit(1);
+  const storedRef = await storedRefForJob(ctx, p.password_ref, source?.scheduleId);
+  const secret = await provisionForJob(ctx, serverId, storedRef);
+  try {
+    return await restoreApp(ctx, serverId, { ...p, password_ref: secret.ref });
+  } finally {
+    await secret.cleanup();
+  }
+};
+
+async function restoreApp(ctx: JobContext, serverId: string, p: AppRestoreParams) {
   const call: JobContext["hub"]["call"] = (s, method, params, opts) =>
     ctx.hub.call(s, method, params, { signal: ctx.signal, ...opts });
 
@@ -484,7 +507,7 @@ const appRestore: JobHandler = async (ctx) => {
     .where(eq(appInstalls.id, row.id));
   ctx.events.publish("backups", "app_restore.succeeded", { install_id: row.id, restore_point_id: p.restore_point_id }, serverId);
   return { install_id: row.id, restored_from: point!.label, app_version: manifest.app_version, mode: p.mode };
-};
+}
 
 export function appBackupJobHandlers(): Partial<Record<JobType, JobHandler>> {
   return { "app.restore": appRestore };

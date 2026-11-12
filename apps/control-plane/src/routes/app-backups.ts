@@ -27,6 +27,7 @@ import { ApiException, conflict, notFound } from "../lib/errors.js";
 import { generateToken, open, seal } from "../lib/crypto.js";
 import { computeNextRun } from "../lib/cron.js";
 import { STOP_DURING_BACKUP, unsupportedReason } from "../services/app-backup-plan.js";
+import { ensureSchedulePassword } from "../services/backup-secrets.js";
 import { containerSecretNames, containerSecretRef } from "../services/app-installer.js";
 import type { AppRestoreParams } from "../jobs/app-backups.js";
 import { enqueueServerJob, loadServer, type ServerRow } from "./_shared.js";
@@ -34,6 +35,7 @@ import { isOwnedBy, ownership } from "./_ownership.js";
 import {
   assertDestinationReachableFrom,
   destinationRow,
+  queueBackupSecretJob,
   repositoryFor,
   secretRef,
   startScheduleRun,
@@ -122,7 +124,7 @@ export async function appBackupRoutes(app: FastifyInstance): Promise<void> {
       targetType: "app_install",
       targetId: row.id,
       targetLabel: `${row.appName} on ${row.domain} ← ${point.label}`,
-      params: restoreParams(row.id, row.id, point, schedule, "in_place"),
+      params: await restoreParams(req, row.id, row.id, point, schedule, "in_place"),
     });
     req.ctx.events.publish("backups", "app_restore.queued", { install_id: row.id, job_id: job.id }, server.id);
     return reply.status(202).send({
@@ -188,7 +190,7 @@ export async function appBackupRoutes(app: FastifyInstance): Promise<void> {
       targetType: "app_install",
       targetId: newId,
       targetLabel: `${source.appName} on ${body.domain} ← ${point.label}`,
-      params: restoreParams(newId, source.id, point, schedule, "as_new"),
+      params: await restoreParams(req, newId, source.id, point, schedule, "as_new"),
     });
     const install = (created.json() as { data: { install: unknown; job: Job } }).data;
     return reply.status(202).send({
@@ -319,19 +321,20 @@ async function assertNoRestoreInFlight(req: FastifyRequest, installId: string): 
   }
 }
 
-function restoreParams(
+async function restoreParams(
+  req: FastifyRequest,
   installId: string,
   sourceId: string,
   point: typeof restorePoints.$inferSelect,
   schedule: ScheduleRow,
   mode: AppRestoreParams["mode"],
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const params: AppRestoreParams = {
     install_id: installId,
     source_install_id: sourceId,
     restore_point_id: point.id,
     repository: schedule.repositoryPath,
-    password_ref: schedule.passwordRef ?? "",
+    password_ref: await ensureSchedulePassword(req.ctx.db, req.ctx.config.masterKey, schedule),
     snapshot_id: point.snapshotId,
     mode,
   };
@@ -429,6 +432,7 @@ async function createAppSchedule(
     after: { name, cron: APP_SCHEDULE_CRON, destination: destination.name, app_install: row.id },
   });
   req.ctx.events.publish("backups", "schedule.created", { schedule_id: created!.id }, server.id);
+  await queueBackupSecretJob(req, { type: "backup.provision", schedule: schedule!, serverName: server.name });
   return schedule!;
 }
 

@@ -6,6 +6,7 @@ import { computeNextRun } from "../lib/cron.js";
 import { ApiException, badRequest } from "../lib/errors.js";
 import { JobQueue } from "../jobs/queue.js";
 import { planAppScope, type AppBackupPlanEntry } from "./app-backup-plan.js";
+import { ensureSchedulePassword } from "./backup-secrets.js";
 
 /* ------------------------------------------------------------------ *
  * Backup scheduler.
@@ -153,6 +154,10 @@ export class BackupScheduler {
       planError = err instanceof Error ? err.message : String(err);
     }
 
+    // restic always needs a repository password, whatever the schedule's
+    // encryption flag says; a schedule without one gets it here, once.
+    const passwordRef = await ensureSchedulePassword(ctx.db, ctx.config.masterKey, schedule);
+
     const connected = ctx.hub.isConnected(schedule.serverId);
     const outcome = await ctx.db.transaction(async (tx) => {
       // Compare-and-set on the value this pass read: whoever moves it
@@ -219,7 +224,7 @@ export class BackupScheduler {
       const params = {
         run_id: run!.id,
         repository: schedule.repositoryPath,
-        password_ref: schedule.passwordRef ?? "",
+        password_ref: passwordRef,
         paths: plan.paths,
         exclude: plan.exclude,
         tags: [`schedule:${schedule.id}`, "trigger:scheduled"],

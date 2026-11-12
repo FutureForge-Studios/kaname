@@ -6,6 +6,7 @@ import { AgentOfflineError, AgentRpcError, type AgentHub } from "../agent/hub.js
 import type { EventBus } from "../services/events.js";
 import type { AuditService } from "../services/audit.js";
 import type { MailReleaseService } from "../services/mail-release.js";
+import { ApiException } from "../lib/errors.js";
 import { releaseAbandoned } from "./threats.js";
 import type { MailSecretStore } from "../services/mail-secrets.js";
 import { JobQueue, type ClaimedJob } from "./queue.js";
@@ -268,7 +269,11 @@ export class JobWorker {
             message: err.agentError.message,
             detail: err.agentError.output ?? err.agentError.detail,
           }
-        : { code: "internal_error", message: err instanceof Error ? err.message : String(err) };
+        : err instanceof ApiException
+          ? // A precondition a handler checked itself (backup credentials,
+            // an agent too old for a verb): its own code, not "internal".
+            { code: err.code, message: err.message }
+          : { code: "internal_error", message: err instanceof Error ? err.message : String(err) };
 
     const transient = error.code === "timeout" || error.code === "cancelled";
     const canRetry = spec.idempotent && job.attempt < job.maxAttempts && transient;

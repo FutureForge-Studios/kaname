@@ -204,6 +204,23 @@ const ftpPassword = z
   .max(256)
   .regex(/^[^\r\n\0]*$/, "may not contain a line break or NUL");
 
+/**
+ * The destination credentials `backup.secret_put` may write beside a
+ * repository password. A closed set (`.strict()`): the agent decodes it
+ * with `deny_unknown_fields`, so nothing else can reach restic's
+ * environment.
+ */
+export const backupSecretEnv = z
+  .object({
+    AWS_ACCESS_KEY_ID: z.string().min(1).max(1024).optional(),
+    AWS_SECRET_ACCESS_KEY: z.string().min(1).max(1024).optional(),
+    AWS_DEFAULT_REGION: z.string().min(1).max(1024).optional(),
+    B2_ACCOUNT_ID: z.string().min(1).max(1024).optional(),
+    B2_ACCOUNT_KEY: z.string().min(1).max(1024).optional(),
+    KANAME_S3_BUCKET_LOOKUP: z.enum(["auto", "dns", "path"]).optional(),
+  })
+  .strict();
+
 const ftpAccountParams = z.object({
   username: identifier,
   home_dir: absolutePath,
@@ -1651,6 +1668,27 @@ export const AGENT_METHODS = {
     requires: [],
     readOnly: false,
     summary: "Apply a retention policy.",
+  }),
+  "backup.secret_put": m({
+    params: z.object({
+      ref: z.string().min(1).max(128),
+      password: z.string().min(1).max(1024),
+      env: backupSecretEnv.default({}),
+    }),
+    result: z.object({ ref: z.string() }),
+    stream: "none",
+    requires: [],
+    readOnly: false,
+    summary:
+      "Write or replace a backup repository's password and destination credentials on the host (write-only).",
+  }),
+  "backup.secret_delete": m({
+    params: z.object({ ref: z.string().min(1).max(128) }),
+    result: z.object({ ref: z.string(), removed: z.boolean() }),
+    stream: "none",
+    requires: [],
+    readOnly: false,
+    summary: "Remove a backup repository's password and destination credentials from the host.",
   }),
 
   /*

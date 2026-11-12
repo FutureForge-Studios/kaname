@@ -802,6 +802,20 @@ mod tests {
         ) -> PResult<p::BackupPruneResult> {
             unsupported()
         }
+        async fn secret_put(
+            &self,
+            _: &Ctx,
+            _: p::BackupSecretPutParams,
+        ) -> PResult<p::BackupSecretPutResult> {
+            unsupported()
+        }
+        async fn secret_delete(
+            &self,
+            _: &Ctx,
+            _: p::BackupSecretDeleteParams,
+        ) -> PResult<p::BackupSecretDeleteResult> {
+            unsupported()
+        }
     }
 
     #[async_trait]
@@ -1195,6 +1209,31 @@ mod tests {
                 json!({"repository": "r", "password_ref": "p", "keep_last": -1}),
                 ErrorCode::InvalidParams,
             ),
+            (
+                "backup.secret_put",
+                json!({"ref": "../x", "password": "pw"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "backup.secret_put",
+                json!({"ref": "nightly", "password": "pw", "env": {"LD_PRELOAD": "/tmp/x.so"}}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "backup.secret_put",
+                json!({"ref": "nightly", "password": "pw", "env": {"KANAME_S3_BUCKET_LOOKUP": "bogus"}}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "backup.secret_delete",
+                json!({"ref": ".hidden"}),
+                ErrorCode::InvalidParams,
+            ),
+            (
+                "backup.secret_put",
+                json!({"ref": "nightly", "password": "pw"}),
+                ErrorCode::Unsupported,
+            ),
             ("log.tail", json!({}), ErrorCode::InvalidParams),
             (
                 "pty.open",
@@ -1222,6 +1261,32 @@ mod tests {
                 Err(e) => e,
             };
             assert_eq!(err.code, want, "{method} {params}: {}", err.message);
+        }
+    }
+
+    /// A refused `backup.secret_put` names the field at most; the password
+    /// and credential values never come back in the error, whether serde
+    /// or the validator refused them.
+    #[tokio::test]
+    async fn secret_put_errors_never_echo_the_secret() {
+        let r = registry_under_test();
+        let secret = "hunter2-SECRET-VALUE";
+        for params in [
+            json!({"ref": "nightly", "password": format!("{secret}\n")}),
+            json!({"ref": "nightly", "password": "ok", "env": {"AWS_SECRET_ACCESS_KEY": format!("{secret}\r")}}),
+            json!({"ref": "nightly", "password": "ok", "env": {"KANAME_S3_BUCKET_LOOKUP": secret}}),
+            json!({"ref": "nightly", "password": "ok", "env": secret}),
+            json!({"ref": "nightly", "password": ["ok", secret]}),
+            json!({"ref": "x.env", "password": secret}),
+            json!({"ref": "nightly", "password": secret, "env": {"LD_PRELOAD": secret}}),
+        ] {
+            let err = match call(&r, "backup.secret_put", Some(params.clone())).await {
+                Ok(v) => panic!("{params} was accepted: {v}"),
+                Err(e) => e,
+            };
+            assert_eq!(err.code, ErrorCode::InvalidParams, "{params}: {}", err.message);
+            let shown = serde_json::to_string(&err).unwrap();
+            assert!(!shown.contains(secret), "{params} leaked into {shown}");
         }
     }
 

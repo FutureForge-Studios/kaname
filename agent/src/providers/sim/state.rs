@@ -103,6 +103,9 @@ pub struct World {
     /// here so it can honour `overwrite` against real file contents; the
     /// seeded history has none and falls back to the live tree.
     pub snapshot_trees: HashMap<String, Vec<(String, super::files::Node)>>,
+    /// References `backup.secret_put` has provisioned. Only the names: the
+    /// simulator never needs the password, so it never keeps it.
+    pub backup_secrets: HashSet<String>,
     pub packages: Vec<PackageInfo>,
 
     pub ptys: HashMap<String, Arc<PtySession>>,
@@ -182,6 +185,7 @@ impl Sim {
             ssh_sessions: Vec::new(),
             snapshots: HashMap::new(),
             snapshot_trees: HashMap::new(),
+            backup_secrets: HashSet::new(),
             packages: Vec::new(),
             ptys: HashMap::new(),
             announced: HashSet::new(),

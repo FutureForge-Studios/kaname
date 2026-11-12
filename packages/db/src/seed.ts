@@ -998,8 +998,11 @@ export async function seedDemo(db: Database): Promise<void> {
     // Encrypted, so it names its repository password the way a schedule
     // created through the API does. Without a ref the agent refuses every
     // verify and restore of these points ("password_ref is required"),
-    // matching snapshot ids or not. The password itself lives on the host
-    // (the agent's backup secrets directory), never here.
+    // matching snapshot ids or not. No password is stored behind the ref:
+    // the seed cannot seal one without the control plane's master key, so
+    // the control plane generates and stores it the first time a job is
+    // queued for the schedule, and hands it to the host before restic runs
+    // (services/backup-secrets.ts).
     await db
       .update(s.backupSchedules)
       .set({ passwordRef: `backup_schedule:${schedule!.id}` })

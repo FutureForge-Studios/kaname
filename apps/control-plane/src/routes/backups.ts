@@ -5,6 +5,7 @@ import {
   backupDestinations,
   backupRuns,
   backupSchedules,
+  jobs,
   restorePoints,
   secrets,
   servers,
@@ -30,6 +31,7 @@ import {
   type BackupRun,
   type BackupSchedule,
   type BackupScope,
+  type Job,
   type RestorePoint,
   s3BaseUrl,
 } from "@kaname/contract";
@@ -46,9 +48,15 @@ import {
   parseQuery,
 } from "../http/plugin.js";
 import { ApiException, badRequest, conflict, notFound } from "../lib/errors.js";
-import { generateToken, open, seal } from "../lib/crypto.js";
+import { generateToken } from "../lib/crypto.js";
 import { computeNextRun } from "../lib/cron.js";
 import { planScope } from "../services/backup-scheduler.js";
+import {
+  ensureSchedulePassword,
+  readDestinationTarget,
+  secretRef,
+  storeSecret as storeSecretRow,
+} from "../services/backup-secrets.js";
 import { probeS3 } from "../services/s3-probe.js";
 import { appBackupRoutes } from "./app-backups.js";
 import {
@@ -240,6 +248,14 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
     // old ciphertext is replaced, never kept alongside.
     if (body.target) {
       await storeSecret(req, secretRef(id), "backup_destination", id, JSON.stringify(body.target));
+      // Every host writing to this destination gets the new credentials.
+      const using = await req.ctx.db
+        .select()
+        .from(backupSchedules)
+        .where(eq(backupSchedules.destinationId, id));
+      for (const schedule of using) {
+        await queueBackupSecretJob(req, { type: "backup.provision", schedule });
+      }
     }
 
     await req.ctx.audit.record({
@@ -489,6 +505,9 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
       },
     });
     req.ctx.events.publish("backups", "schedule.created", { schedule_id: row!.id }, server.id);
+    // The host gets the password and the destination's credentials now,
+    // not at 03:00 when the first run would find them missing.
+    await queueBackupSecretJob(req, { type: "backup.provision", schedule: row!, serverName: server.name });
 
     return item(
       reply,
@@ -551,6 +570,13 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
       after: { cron, timezone, enabled, next_run_at: row!.nextRunAt?.toISOString() ?? null },
     });
     req.ctx.events.publish("backups", "schedule.updated", { schedule_id: id }, server.id);
+    const credentialsMoved =
+      (body.destination_id !== undefined && body.destination_id !== schedule.destinationId) ||
+      (body.encryption !== undefined && body.encryption !== schedule.encryption) ||
+      (body.name !== undefined && body.name !== schedule.name);
+    if (credentialsMoved) {
+      await queueBackupSecretJob(req, { type: "backup.provision", schedule: row!, serverName: server.name });
+    }
 
     const lastRuns = await lastRunIds(req, [id]);
     return item(reply, toSchedule(row!, server.name, destination.name, lastRuns.get(id) ?? null));
@@ -561,6 +587,16 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
     const { schedule, server } = await loadSchedule(req, id, "backups.schedules:delete");
     const h = helpers(req);
 
+    // Queued first, while the row still names its ref and its server: the
+    // host's copy of the password goes with the schedule.
+    if (schedule.passwordRef) {
+      await queueBackupSecretJob(req, {
+        type: "backup.unprovision",
+        schedule,
+        serverName: server.name,
+        ref: schedule.passwordRef,
+      });
+    }
     await req.ctx.db.delete(backupSchedules).where(eq(backupSchedules.id, id));
     await req.ctx.db.delete(secrets).where(eq(secrets.ref, secretRef(id, "schedule")));
 
@@ -714,7 +750,7 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
       targetLabel: point.label,
       params: {
         repository: schedule.repositoryPath,
-        password_ref: schedule.passwordRef ?? "",
+        password_ref: await ensureSchedulePassword(req.ctx.db, req.ctx.config.masterKey, schedule),
         snapshot_id: point.snapshotId,
       },
     });
@@ -747,7 +783,7 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
       targetLabel: `${point.label} → ${target.name}:${body.target_path}`,
       params: {
         repository: schedule.repositoryPath,
-        password_ref: schedule.passwordRef ?? "",
+        password_ref: await ensureSchedulePassword(req.ctx.db, req.ctx.config.masterKey, schedule),
         snapshot_id: point.snapshotId,
         target: body.target_path,
         include: body.include,
@@ -794,6 +830,8 @@ export async function startScheduleRun(
   const principal = h.requirePrincipal();
 
   const plan = await planScope(req.ctx.db, schedule);
+  // restic always needs a password, encryption flag or not.
+  const passwordRef = await ensureSchedulePassword(req.ctx.db, req.ctx.config.masterKey, schedule);
 
   const [run] = await req.ctx.db
     .insert(backupRuns)
@@ -815,7 +853,7 @@ export async function startScheduleRun(
     params: {
       run_id: run!.id,
       repository: schedule.repositoryPath,
-      password_ref: schedule.passwordRef ?? "",
+      password_ref: passwordRef,
       paths: plan.paths,
       exclude: plan.exclude,
       tags: [`schedule:${schedule.id}`, "trigger:manual"],
@@ -838,6 +876,80 @@ export async function startScheduleRun(
   );
 
   return job;
+}
+
+/**
+ * Queues a `backup.provision` (hand the schedule's host its password and
+ * destination credentials) or `backup.unprovision` (take them away). The
+ * params name the schedule or the ref only; the worker opens the values.
+ *
+ * Not enqueueServerJob: the change that calls for this was authorised
+ * already, and a credential rotation on a destination has to reach every
+ * host using it, including ones outside the rotating user's own scope.
+ * A provision already waiting for the same schedule covers a second one
+ * (it reads the secrets when it runs), and a revoked host gets nothing.
+ */
+export async function queueBackupSecretJob(
+  req: FastifyRequest,
+  opts: {
+    type: "backup.provision" | "backup.unprovision";
+    schedule: { id: string; name: string; serverId: string };
+    serverName?: string;
+    /** The stored ref to remove (unprovision only). */
+    ref?: string;
+  },
+): Promise<Job | null> {
+  const { schedule } = opts;
+  const [server] = await req.ctx.db
+    .select({ name: servers.name, revokedAt: servers.revokedAt })
+    .from(servers)
+    .where(eq(servers.id, schedule.serverId))
+    .limit(1);
+  if (!server || server.revokedAt) return null;
+
+  if (opts.type === "backup.provision") {
+    const waiting = await req.ctx.db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.type, "backup.provision"),
+          eq(jobs.targetId, schedule.id),
+          eq(jobs.status, "queued"),
+        ),
+      )
+      .limit(1);
+    if (waiting[0]) return null;
+  }
+
+  const h = helpers(req);
+  const principal = h.requirePrincipal();
+  const params =
+    opts.type === "backup.provision" ? { schedule_id: schedule.id } : { ref: opts.ref ?? "" };
+  const job = await req.ctx.queue.enqueue({
+    type: opts.type,
+    serverId: schedule.serverId,
+    targetType: "backup_schedule",
+    targetId: schedule.id,
+    targetLabel: schedule.name,
+    params,
+    createdBy: principal.kind === "user" ? principal.id : null,
+    createdByName: principal.name,
+    blockedReason: req.ctx.hub.isConnected(schedule.serverId) ? null : "agent_offline",
+  });
+  await req.ctx.audit.record({
+    actor: h.actor(),
+    action: `${opts.type}.requested`,
+    targetType: "backup_schedule",
+    targetId: schedule.id,
+    targetLabel: schedule.name,
+    serverId: schedule.serverId,
+    jobId: job.id,
+    metadata: { params },
+  });
+  const named = { ...job, server_name: opts.serverName ?? server.name };
+  req.ctx.events.publish("jobs", "job.queued", named, schedule.serverId);
+  return named;
 }
 
 /* ------------------------------------------------------------------ *
@@ -956,9 +1068,7 @@ export function assertDestinationReachableFrom(destination: DestinationRow, serv
  * Destinations: config, secrets and reachability
  * ------------------------------------------------------------------ */
 
-export function secretRef(id: string, kind: "destination" | "schedule" = "destination"): string {
-  return kind === "schedule" ? `backup_schedule:${id}` : `backup_destination:${id}`;
-}
+export { secretRef };
 
 /** Everything about a target except how it authenticates. */
 function publicConfig(target: BackupDestinationTarget): Record<string, string> {
@@ -1012,53 +1122,14 @@ export async function storeSecret(
   ownerId: string,
   plaintext: string,
 ): Promise<void> {
-  const sealed = seal(plaintext, req.ctx.config.masterKey);
-  await req.ctx.db
-    .insert(secrets)
-    .values({
-      ref,
-      ownerType,
-      ownerId,
-      wrappedKey: sealed.wrappedKey,
-      nonce: sealed.nonce,
-      ciphertext: sealed.ciphertext,
-      keyVersion: sealed.keyVersion,
-    })
-    .onConflictDoUpdate({
-      target: secrets.ref,
-      set: {
-        wrappedKey: sealed.wrappedKey,
-        nonce: sealed.nonce,
-        ciphertext: sealed.ciphertext,
-        keyVersion: sealed.keyVersion,
-        updatedAt: new Date(),
-      },
-    });
+  await storeSecretRow(req.ctx.db, req.ctx.config.masterKey, { ref, ownerType, ownerId, plaintext });
 }
 
-async function readTarget(
+function readTarget(
   req: FastifyRequest,
   destination: DestinationRow,
 ): Promise<BackupDestinationTarget | null> {
-  if (!destination.secretRef) return null;
-  const rows = await req.ctx.db
-    .select()
-    .from(secrets)
-    .where(eq(secrets.ref, destination.secretRef))
-    .limit(1);
-  const row = rows[0];
-  if (!row) return null;
-
-  const plaintext = open(
-    {
-      wrappedKey: row.wrappedKey,
-      nonce: row.nonce,
-      ciphertext: row.ciphertext,
-      keyVersion: row.keyVersion,
-    },
-    req.ctx.config.masterKey,
-  );
-  return JSON.parse(plaintext) as BackupDestinationTarget;
+  return readDestinationTarget(req.ctx.db, req.ctx.config.masterKey, destination);
 }
 
 const PROBE_TIMEOUT_MS = 8000;

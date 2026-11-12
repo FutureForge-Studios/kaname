@@ -1868,6 +1868,94 @@ pub struct BackupPruneResult {
     pub reclaimed_bytes: i64,
 }
 
+/// The destination credentials `backup.secret_put` may write beside a
+/// repository password: a closed set, so the control plane cannot smuggle
+/// `LD_PRELOAD` or `RESTIC_PASSWORD_COMMAND` into restic's environment.
+/// `deny_unknown_fields` is load-bearing.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BackupSecretEnv {
+    #[serde(rename = "AWS_ACCESS_KEY_ID", skip_serializing_if = "Option::is_none")]
+    pub aws_access_key_id: Option<String>,
+    #[serde(rename = "AWS_SECRET_ACCESS_KEY", skip_serializing_if = "Option::is_none")]
+    pub aws_secret_access_key: Option<String>,
+    #[serde(rename = "AWS_DEFAULT_REGION", skip_serializing_if = "Option::is_none")]
+    pub aws_default_region: Option<String>,
+    #[serde(rename = "B2_ACCOUNT_ID", skip_serializing_if = "Option::is_none")]
+    pub b2_account_id: Option<String>,
+    #[serde(rename = "B2_ACCOUNT_KEY", skip_serializing_if = "Option::is_none")]
+    pub b2_account_key: Option<String>,
+    /// "auto" | "dns" | "path"
+    #[serde(rename = "KANAME_S3_BUCKET_LOOKUP", skip_serializing_if = "Option::is_none")]
+    pub kaname_s3_bucket_lookup: Option<String>,
+}
+
+impl BackupSecretEnv {
+    /// The set entries, keyed by their environment name, in the order of
+    /// `providers::backup_secret::SECRET_ENV_KEYS`.
+    pub fn entries(&self) -> Vec<(&'static str, &str)> {
+        [
+            ("AWS_ACCESS_KEY_ID", &self.aws_access_key_id),
+            ("AWS_SECRET_ACCESS_KEY", &self.aws_secret_access_key),
+            ("AWS_DEFAULT_REGION", &self.aws_default_region),
+            ("B2_ACCOUNT_ID", &self.b2_account_id),
+            ("B2_ACCOUNT_KEY", &self.b2_account_key),
+            ("KANAME_S3_BUCKET_LOOKUP", &self.kaname_s3_bucket_lookup),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| v.as_deref().map(|v| (k, v)))
+        .collect()
+    }
+}
+
+/// Names the keys that are set, never their values.
+impl std::fmt::Debug for BackupSecretEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let keys: Vec<&str> = self.entries().into_iter().map(|(k, _)| k).collect();
+        f.debug_struct("BackupSecretEnv").field("keys", &keys).finish()
+    }
+}
+
+/// Write-only: nothing returns it, and `Debug` redacts it.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BackupSecretPutParams {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub password: String,
+    pub env: BackupSecretEnv,
+}
+
+impl std::fmt::Debug for BackupSecretPutParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackupSecretPutParams")
+            .field("ref", &self.reference)
+            .field("password", &"<redacted>")
+            .field("env", &self.env)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BackupSecretPutResult {
+    #[serde(rename = "ref")]
+    pub reference: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BackupSecretDeleteParams {
+    #[serde(rename = "ref")]
+    pub reference: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BackupSecretDeleteResult {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub removed: bool,
+}
+
 /* -------------------------------- logs ------------------------------- */
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

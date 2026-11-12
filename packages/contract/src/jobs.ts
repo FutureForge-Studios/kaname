@@ -121,6 +121,8 @@ export const JOB_TYPES = [
   "backup.restore",
   "backup.verify",
   "backup.prune",
+  "backup.provision",
+  "backup.unprovision",
   "app.restore",
   // lifecycle
   "agent.update",
@@ -695,6 +697,29 @@ export const JOB_SPECS: Record<JobType, JobTypeSpec> = {
     maxAttempts: 1,
     timeoutMs: 60 * M,
     destructive: true,
+  },
+
+  /*
+   * Hands a schedule's repository password and its destination's
+   * credentials to the schedule's host (agent `backup.secret_put`), or
+   * removes them (`backup.secret_delete`). The params carry only the
+   * schedule id or the secret's ref: the values are opened from the
+   * secrets table inside the worker, right before the RPC, so they never
+   * reach a job row, a log line, an audit entry or an event.
+   */
+  "backup.provision": {
+    label: "Provision backup credentials",
+    permission: "backups.schedules:write",
+    idempotent: true,
+    maxAttempts: 2,
+    timeoutMs: 2 * M,
+  },
+  "backup.unprovision": {
+    label: "Remove backup credentials",
+    permission: "backups.schedules:delete",
+    idempotent: true,
+    maxAttempts: 2,
+    timeoutMs: 2 * M,
   },
 
   /*

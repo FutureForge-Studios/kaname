@@ -12,6 +12,7 @@
 //! responsibility.
 
 pub mod app_backup;
+pub mod backup_secret;
 pub mod ftp;
 pub mod managed;
 pub mod payloads;
@@ -534,6 +535,16 @@ pub trait Backups: Send + Sync {
     async fn restore(&self, ctx: &Ctx, p: BackupRestoreParams, s: StreamRef) -> PResult<BackupRestoreResult>;
     async fn verify(&self, ctx: &Ctx, p: BackupVerifyParams, s: StreamRef) -> PResult<BackupVerifyResult>;
     async fn prune(&self, ctx: &Ctx, p: BackupPruneParams, s: StreamRef) -> PResult<BackupPruneResult>;
+    /// Writes or replaces a reference's password and destination
+    /// credentials. Write-only: nothing ever reads them back over the wire.
+    async fn secret_put(&self, ctx: &Ctx, p: BackupSecretPutParams) -> PResult<BackupSecretPutResult>;
+    /// Removes a reference's files; a reference that is not there is not an
+    /// error.
+    async fn secret_delete(
+        &self,
+        ctx: &Ctx,
+        p: BackupSecretDeleteParams,
+    ) -> PResult<BackupSecretDeleteResult>;
 }
 
 /// The one place where free-form execution is allowed at all, so the one

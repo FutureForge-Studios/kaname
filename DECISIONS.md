@@ -1018,3 +1018,53 @@ dumped. A copy restored onto a new domain keeps whatever address the app stores 
 to be present on the host under the agent's `backup-secrets` directory, as before; the S3
 path-style choice reaches restic as `KANAME_S3_BUCKET_LOOKUP` in that file. Migration 0012 adds
 the nullable `restore_points.manifest`.
+
+---
+
+## KD-044 — Backup secrets: a write-only agent verb, provisioned by the worker before each job
+
+**Decision.** The agent keeps resolving a backup's `password_ref` to files under its own state
+directory (`backup-secrets/<ref>` for the restic password, `<ref>.env` for destination
+credentials), and two typed, write-only verbs now put them there: `backup.secret_put { ref,
+password, env }` and `backup.secret_delete { ref }`. `env` is a closed set of keys
+(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `B2_ACCOUNT_ID`,
+`B2_ACCOUNT_KEY`, and `KANAME_S3_BUCKET_LOOKUP` limited to `auto|dns|path`); the reader drops
+any other key, so a file can never feed restic something like `LD_PRELOAD`. A ref is a bare name
+that starts with a letter or digit. Files are written through an `O_NOFOLLOW` directory
+descriptor: a temp file opened `O_EXCL|O_NOFOLLOW` at mode 0600, fsynced, then renamed over the
+target, so a planted symlink is replaced, never followed; a symlinked secrets directory or
+secret file is refused. Nothing ever reads a secret back over the socket.
+
+The job worker provisions once at the start of every backup job (run, restore, verify, prune,
+app backup and restore): it opens the schedule's password and the destination's target from
+`secrets` (envelope-encrypted, PLAN.md §secrets), calls `backup.secret_put`, then uses that ref for
+every restic verb in the job. Job params, job logs, audit entries and events carry only the ref.
+A restore onto a host other than the schedule's own deletes the secret there afterwards.
+Schedule create, a change of destination or name, and a destination credential rotation also
+queue a `backup.provision` job, so a host holds its key before the first run; deleting a
+schedule queues `backup.unprovision`.
+
+The stored ref stays `backup_schedule:<id>`; the worker maps it to `backup_schedule.<id>` at the
+agent boundary, so no data migration is needed and existing schedules and queued jobs keep
+working. A schedule with no password (`encryption: false`, which restic cannot honour) gets one
+generated and sealed the first time it is used.
+
+**Alternatives.** Passing the password and credentials in each `backup.*` request and handing
+them to restic through its environment, never touching disk. Rejected: it changes five verbs
+plus the app-backup paths, and it leaves a host with no way to read its own repository when the
+control plane is gone — the moment a backup matters most. With the file model an operator can
+still run `restic` by hand on the host. Storing a new ref format with a migration was rejected
+as churn for no security gain.
+
+**Why.** It keeps the agent's surface typed and narrow (KD-001: no shell; KD-002: everything over
+the mTLS socket), follows the precedent of the mail relay password (a secret sent once in a
+typed param, held by the agent at 0600), and makes "run now" work on a real host with no
+manual step. Provisioning before every job, rather than only on create, also covers rotation,
+a host that was rebuilt, and restores onto another server.
+
+**Cost accepted.** The repository password and object-store keys sit in plaintext on the host,
+0600 and owned by root, under the agent's state directory; anyone with root on that host can
+read them, as they could read the data being backed up. The secret crosses the socket once per
+job. SFTP destinations are refused with a clear error, because restic's SFTP needs an SSH key or
+password on the host and Kaname does not provision those yet. An agent older than this release
+does not know `backup.secret_put`, and backups on it fail with an "upgrade the agent" message.

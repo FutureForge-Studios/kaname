@@ -128,6 +128,24 @@ control plane unseals at call time and deletes once the host has the credential.
 agent did not create (its GECOS lacks the Kaname marker, or its uid is 0) is refused with
 `conflict` rather than re-passworded or removed.
 
+The `backup` namespace drives restic (`backup.run`, `.list`, `.restore`, `.verify`, `.prune`).
+Those verbs name the repository password only by reference (`password_ref`): a bare name
+(`[A-Za-z0-9._-]`, at most 128, starting with a letter or digit, no `..`, not ending in `.env`)
+that resolves to `<state_dir>/backup-secrets/<ref>`, with the destination's credentials beside it
+in `<ref>.env`. The control plane, which keeps them envelope-encrypted at rest, provisions them
+once per job, right before the restic verbs, with the write-only `backup.secret_put`
+(`ref`, `password`, and `env` limited to `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_DEFAULT_REGION`, `B2_ACCOUNT_ID`, `B2_ACCOUNT_KEY` and `KANAME_S3_BUCKET_LOOKUP` =
+`auto|dns|path`; any other key is a decode error). The agent writes both files 0600 in a 0700
+directory through an `O_NOFOLLOW` directory descriptor, each via a fresh temporary renamed over
+the target, so a planted symlink is replaced rather than followed; an empty `env` removes
+`<ref>.env`. Nothing returns the values, no error quotes them, and restic reads them from
+`RESTIC_PASSWORD_FILE` and its environment, never an argv. `backup.secret_delete` removes both
+files (a missing one is not an error). When reading, the agent refuses a secret file that is a
+symlink and passes only the closed set of `.env` keys to restic. The files stay on the host on
+purpose: a host whose control plane is gone can still be restored by hand. The simulator applies
+the same validation and refuses the restic verbs for a reference that was never provisioned.
+
 The `mail` namespace is Yunori Mail Server ([KD-034](../DECISIONS.md#kd-034)): every verb is one
 `yunori-mail` CLI invocation on the host (`mail.status`, `mail.preflight`, `mail.doctor`,
 `mail.deploy`, `mail.update`, `mail.domain.*`, `mail.mailbox.*`, `mail.alias.*`,

@@ -6,6 +6,11 @@
 //! seeded on first contact rather than answered with an empty list: an
 //! operator wiring up a new destination should see what a populated one
 //! looks like.
+//!
+//! The restic verbs refuse a `password_ref` that `backup.secret_put` has
+//! not provisioned, as the real agent does when the file is missing, so a
+//! control plane that forgets to provision fails in development rather
+//! than first on a real host. Only the reference is remembered.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,9 +21,11 @@ use chrono::Utc;
 use super::databases::find_database;
 use super::files::{MemFs, Node, clean_path, count_nodes, path_base, path_dir, path_join, tree_size};
 use super::state::{GIB, MIB, Sim, World, hash_string, mix, progress, stamp};
+use crate::providers::backup_secret::{check_secret_put, check_secret_ref};
 use crate::providers::{
     BackupListParams, BackupPruneParams, BackupPruneResult, BackupRestoreParams, BackupRestoreResult,
-    BackupRunParams, BackupSnapshotInfo, BackupVerifyParams, BackupVerifyResult, Backups, Ctx, PResult,
+    BackupRunParams, BackupSecretDeleteParams, BackupSecretDeleteResult, BackupSecretPutParams,
+    BackupSecretPutResult, BackupSnapshotInfo, BackupVerifyParams, BackupVerifyResult, Backups, Ctx, PResult,
     ProviderError, StreamRef,
 };
 
@@ -163,9 +170,25 @@ fn write_marker(fs: &mut MemFs, path: &str, content: &str, overwrite: bool) {
 
 pub struct SimBackups(pub Arc<Sim>);
 
+impl SimBackups {
+    /// The simulator's `environment()`: the same reference rules, and the
+    /// same refusal when nothing was provisioned under that name.
+    fn require_secret(&self, password_ref: &str) -> PResult<()> {
+        check_secret_ref(password_ref)?;
+        if self.0.world.lock().backup_secrets.contains(password_ref) {
+            return Ok(());
+        }
+        Err(ProviderError::PreconditionFailed(format!(
+            "no backup secret named {password_ref:?} provisioned on this host; the control plane \
+             provisions it (backup.secret_put) before each backup job"
+        )))
+    }
+}
+
 #[async_trait]
 impl Backups for SimBackups {
     async fn run(&self, ctx: &Ctx, p: BackupRunParams, s: StreamRef) -> PResult<BackupSnapshotInfo> {
+        self.require_secret(&p.password_ref)?;
         let paths = if p.paths.is_empty() {
             vec!["/etc".to_string(), "/var/www".to_string()]
         } else {
@@ -271,6 +294,7 @@ impl Backups for SimBackups {
     }
 
     async fn list(&self, _ctx: &Ctx, p: BackupListParams) -> PResult<Vec<BackupSnapshotInfo>> {
+        self.require_secret(&p.password_ref)?;
         let mut w = self.0.world.lock();
         let mut out = snapshots_for(&self.0, &mut w, &p.repository);
         out.sort_by(|a, b| b.taken_at.cmp(&a.taken_at));
@@ -278,6 +302,7 @@ impl Backups for SimBackups {
     }
 
     async fn restore(&self, ctx: &Ctx, p: BackupRestoreParams, s: StreamRef) -> PResult<BackupRestoreResult> {
+        self.require_secret(&p.password_ref)?;
         let target = clean_path(&p.target)?;
 
         let snapshot = {
@@ -391,6 +416,7 @@ impl Backups for SimBackups {
     }
 
     async fn verify(&self, ctx: &Ctx, p: BackupVerifyParams, s: StreamRef) -> PResult<BackupVerifyResult> {
+        self.require_secret(&p.password_ref)?;
         let (index, snapshot) = {
             let mut w = self.0.world.lock();
             let history = snapshots_for(&self.0, &mut w, &p.repository);
@@ -433,6 +459,7 @@ impl Backups for SimBackups {
     /// Applies the retention policy for real, newest first, so a policy
     /// that would delete everything visibly does.
     async fn prune(&self, ctx: &Ctx, p: BackupPruneParams, s: StreamRef) -> PResult<BackupPruneResult> {
+        self.require_secret(&p.password_ref)?;
         progress(
             ctx,
             &*s,
@@ -499,6 +526,27 @@ impl Backups for SimBackups {
             reclaimed_bytes: reclaimed,
         })
     }
+
+    async fn secret_put(&self, _ctx: &Ctx, p: BackupSecretPutParams) -> PResult<BackupSecretPutResult> {
+        check_secret_put(&p)?;
+        self.0.world.lock().backup_secrets.insert(p.reference.clone());
+        Ok(BackupSecretPutResult {
+            reference: p.reference,
+        })
+    }
+
+    async fn secret_delete(
+        &self,
+        _ctx: &Ctx,
+        p: BackupSecretDeleteParams,
+    ) -> PResult<BackupSecretDeleteResult> {
+        check_secret_ref(&p.reference)?;
+        let removed = self.0.world.lock().backup_secrets.remove(&p.reference);
+        Ok(BackupSecretDeleteResult {
+            reference: p.reference,
+            removed,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -531,10 +579,24 @@ mod tests {
         String::from_utf8_lossy(&node.data).into_owned()
     }
 
+    async fn provision(backups: &SimBackups, reference: &str) {
+        backups
+            .secret_put(
+                &Ctx::background(),
+                BackupSecretPutParams {
+                    reference: reference.into(),
+                    password: "correct-horse-battery-staple".into(),
+                    env: Default::default(),
+                },
+            )
+            .await
+            .expect("secret_put");
+    }
+
     fn restore(snapshot_id: &str, target: &str, overwrite: bool) -> BackupRestoreParams {
         BackupRestoreParams {
             repository: "/var/backups/test".into(),
-            password_ref: String::new(),
+            password_ref: "nightly".into(),
             snapshot_id: snapshot_id.into(),
             target: target.into(),
             include: vec![],
@@ -574,13 +636,14 @@ mod tests {
         let backups = SimBackups(sim.clone());
         let ctx = Ctx::background();
         let original = read(&sim, "/etc/hostname");
+        provision(&backups, "nightly").await;
 
         let snapshot = backups
             .run(
                 &ctx,
                 BackupRunParams {
                     repository: "/var/backups/test".into(),
-                    password_ref: String::new(),
+                    password_ref: "nightly".into(),
                     paths: vec!["/etc".into()],
                     exclude: vec![],
                     tags: vec![],
@@ -623,5 +686,94 @@ mod tests {
             .await
             .expect("in-place restore with overwrite");
         assert_eq!(read(&sim, "/etc/hostname"), original);
+    }
+
+    /// A reference nobody provisioned is refused the way a missing file is
+    /// on a real host; after `secret_put` the same call goes through, and
+    /// after `secret_delete` it is refused again.
+    #[tokio::test]
+    async fn restic_verbs_need_a_provisioned_secret() {
+        let sim = Sim::new(Options {
+            agent_version: "0.1.0".into(),
+            state_dir: std::env::temp_dir().join("kaname-sim-test-backup-secret"),
+        });
+        let backups = SimBackups(sim.clone());
+        let ctx = Ctx::background();
+        let reference = "backup_schedule.0d6c3a52-8a9b-4c5e-9f00-1234567890ab";
+        let list = || BackupListParams {
+            repository: "/var/backups/test".into(),
+            password_ref: reference.into(),
+        };
+
+        let err = backups.list(&ctx, list()).await.expect_err("unprovisioned");
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err}");
+        assert!(err.to_string().contains("no backup secret"), "{err}");
+        let err = backups
+            .prune(
+                &ctx,
+                BackupPruneParams {
+                    repository: "/var/backups/test".into(),
+                    password_ref: reference.into(),
+                    keep_last: 1,
+                    ..Default::default()
+                },
+                quiet(),
+            )
+            .await
+            .expect_err("unprovisioned prune");
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err}");
+
+        // The reference rules are the real agent's.
+        for bad in ["backup_schedule:1", "../x", ".hidden", "x.env"] {
+            let err = backups
+                .list(
+                    &ctx,
+                    BackupListParams {
+                        repository: "r".into(),
+                        password_ref: bad.into(),
+                    },
+                )
+                .await
+                .expect_err(bad);
+            assert!(matches!(err, ProviderError::InvalidParams(_)), "{bad}: {err}");
+        }
+
+        let put = backups
+            .secret_put(
+                &ctx,
+                BackupSecretPutParams {
+                    reference: reference.into(),
+                    password: "p\nq".into(),
+                    env: Default::default(),
+                },
+            )
+            .await
+            .expect_err("a password with a line break");
+        assert!(!put.to_string().contains("p\nq"));
+
+        provision(&backups, reference).await;
+        assert!(!backups.list(&ctx, list()).await.expect("provisioned").is_empty());
+
+        let removed = backups
+            .secret_delete(
+                &ctx,
+                BackupSecretDeleteParams {
+                    reference: reference.into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(removed.removed);
+        let again = backups
+            .secret_delete(
+                &ctx,
+                BackupSecretDeleteParams {
+                    reference: reference.into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!again.removed, "deleting twice is not an error");
+        assert!(backups.list(&ctx, list()).await.is_err());
     }
 }

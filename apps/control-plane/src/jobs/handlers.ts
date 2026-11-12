@@ -37,6 +37,13 @@ import {
 } from "./app-backups.js";
 import type { AppBackupPlanEntry } from "../services/app-backup-plan.js";
 import { banHandler, unbanHandler } from "./threats.js";
+import {
+  ensureSchedulePassword,
+  provisionBackupSecret,
+  provisionForJob,
+  removeBackupSecret,
+  storedRefForJob,
+} from "../services/backup-secrets.js";
 import { recordUpgrade } from "../services/os-updates.js";
 import type { JobContext, JobHandler, JobWorker } from "./worker.js";
 
@@ -198,6 +205,36 @@ function streaming<M extends AgentMethod>(method: M): JobHandler {
       { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
     );
     return handle.done;
+  };
+}
+
+/**
+ * A restic verb run as a job: the schedule's secret is put on the job's
+ * host first (once), the verb names it by its agent ref, and a host that
+ * is not the schedule's own (a restore elsewhere) has it removed again.
+ */
+function restic<M extends "backup.restore" | "backup.verify" | "backup.prune">(method: M): JobHandler {
+  return async (ctx) => {
+    const serverId = requireServer(ctx);
+    const p = params<MethodParams<M>>(ctx);
+    const storedRef = await storedRefForJob(ctx, p.password_ref);
+    const secret = await provisionForJob(ctx, serverId, storedRef);
+    try {
+      const handle = ctx.hub.stream(
+        serverId,
+        method,
+        { ...p, password_ref: secret.ref } as MethodParams<M>,
+        (data) => {
+          for (const line of data.split("\n").filter(Boolean)) {
+            void ctx.log_("info", line);
+          }
+        },
+        { timeoutMs: ctx.job.timeoutMs, signal: ctx.signal },
+      );
+      return await handle.done;
+    } finally {
+      await secret.cleanup();
+    }
   };
 }
 
@@ -898,15 +935,22 @@ export function registerJobHandlers(worker: JobWorker): void {
       await settleSchedule("running");
 
       let snapshot: MethodResult<"backup.run">;
+      // The ref every restic verb in this job names: the stored one mapped
+      // to the agent's form, once its password and the destination's
+      // credentials are on the host. A run always targets the schedule's
+      // own server, so the secret stays there for the next one.
+      let passwordRef = "";
       // App scopes: dumps, manifests and a brief stop before the snapshot,
       // undone after it whatever happens (jobs/app-backups.ts).
       const preparedApps: PreparedApps | null = apps.length > 0 ? emptyPrepared() : null;
       try {
+        const storedRef = await storedRefForJob(ctx, rest.password_ref, scheduleId);
+        passwordRef = (await provisionForJob(ctx, serverId, storedRef)).ref;
         if (preparedApps) await prepareAppBackups(ctx, serverId, apps, preparedApps);
         const handle = ctx.hub.stream(
           serverId,
           "backup.run",
-          rest,
+          { ...rest, password_ref: passwordRef },
           (d) => void ctx.log_("info", d.trim()),
           {
             timeoutMs: ctx.job.timeoutMs,
@@ -1020,7 +1064,7 @@ export function registerJobHandlers(worker: JobWorker): void {
           "backup.prune",
           {
             repository: rest.repository,
-            password_ref: rest.password_ref,
+            password_ref: passwordRef,
             keep_last: retention.keep_last,
             keep_daily: retention.keep_daily,
             keep_weekly: retention.keep_weekly,
@@ -1033,7 +1077,7 @@ export function registerJobHandlers(worker: JobWorker): void {
         const listed = await ctx.hub.call(
           serverId,
           "backup.list",
-          { repository: rest.repository, password_ref: rest.password_ref },
+          { repository: rest.repository, password_ref: passwordRef },
           { signal: ctx.signal },
         );
         const kept = listed.snapshots.map((entry) => entry.id);
@@ -1054,9 +1098,9 @@ export function registerJobHandlers(worker: JobWorker): void {
       }
       return snapshot;
     },
-    "backup.restore": streaming("backup.restore"),
+    "backup.restore": restic("backup.restore"),
     "backup.verify": async (ctx) => {
-      const result = (await streaming("backup.verify")(ctx)) as MethodResult<"backup.verify">;
+      const result = (await restic("backup.verify")(ctx)) as MethodResult<"backup.verify">;
       // A verify that found damage answers ok: false rather than an RPC
       // error. Filed as a success it read as a clean bill of health; and a
       // clean one was never written down, so every point stayed unverified.
@@ -1073,7 +1117,39 @@ export function registerJobHandlers(worker: JobWorker): void {
       }
       return result;
     },
-    "backup.prune": streaming("backup.prune"),
+    "backup.prune": restic("backup.prune"),
+    "backup.provision": async (ctx) => {
+      const serverId = requireServer(ctx);
+      const { schedule_id } = params<{ schedule_id: string }>(ctx);
+      const [schedule] = await ctx.db
+        .select()
+        .from(backupSchedules)
+        .where(eq(backupSchedules.id, schedule_id))
+        .limit(1);
+      if (!schedule) {
+        // Deleted while this waited; its unprovision job cleans the host.
+        await ctx.log_("info", "the schedule no longer exists; nothing to provision");
+        return { provisioned: false };
+      }
+      const storedRef = await ensureSchedulePassword(ctx.db, ctx.config.masterKey, schedule);
+      const outcome = await provisionBackupSecret(
+        { db: ctx.db, hub: ctx.hub, masterKey: ctx.config.masterKey, signal: ctx.signal },
+        serverId,
+        storedRef,
+      );
+      await ctx.log_("info", "backup credentials handed to the host");
+      if (outcome.warning) await ctx.log_("warn", outcome.warning);
+      return { ref: outcome.ref, provisioned: true };
+    },
+    "backup.unprovision": async (ctx) => {
+      const serverId = requireServer(ctx);
+      const { ref } = params<{ ref: string }>(ctx);
+      return removeBackupSecret(
+        { db: ctx.db, hub: ctx.hub, masterKey: ctx.config.masterKey, signal: ctx.signal },
+        serverId,
+        ref,
+      );
+    },
 
     /* lifecycle */
     "agent.update": agentUpdate,

@@ -188,7 +188,7 @@ Method namespaces (v1):
 | `db`        | `instance.list`, `database.*`, `user.*`, `grant.*`, `size`, `dump`, `restore`                                                             |
 | `fw`        | `list`, `apply`, `add`, `remove`, `status`, `ban`, `unban`, `bans.list`                                                                   |
 | `ssh`       | `keys.list`, `keys.add`, `keys.remove`, `config.read`, `config.apply`, `sessions.list`                                                    |
-| `backup`    | `run`, `restore`, `list`, `verify`, `prune`                                                                                               |
+| `backup`    | `run`, `restore`, `list`, `verify`, `prune`, `secret_put`, `secret_delete`                                                                |
 | `log`       | `sources`, `tail`                                                                                                                         |
 | `pty`       | `open`, `write`, `resize`, `close`                                                                                                        |
 

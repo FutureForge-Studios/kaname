@@ -540,6 +540,8 @@ class FakeHub {
     "fs.stat": () => ({ kind: "file" }),
     "container.stop": () => ({}),
     "container.start": () => ({}),
+    "backup.secret_put": (p) => ({ ref: p.ref }),
+    "backup.secret_delete": (p) => ({ ref: p.ref, removed: true }),
     "backup.restore": () => ({ restored_files: 12, bytes: 4096 }),
     "app.db_dump": (p) => ({ path: `/x/${String(p.role)}.dump`, size_bytes: 10, engine: p.engine, database: "ghost" }),
     "app.db_restore": () => ({ ok: true, database: "ghost" }),
@@ -593,7 +595,7 @@ async function drainQueue() {
   await handle.db.update(jobs).set({ status: "cancelled" }).where(inArray(jobs.status, ["queued", "running"]));
 }
 
-async function runRestore(hub: FakeHub, install: typeof appInstalls.$inferSelect, pointId: string) {
+async function runRestore(hub: FakeHub, install: typeof appInstalls.$inferSelect, pointId: string, scheduleId: string) {
   await drainQueue();
   const queued = await ctx.queue.enqueue({
     type: "app.restore",
@@ -603,7 +605,7 @@ async function runRestore(hub: FakeHub, install: typeof appInstalls.$inferSelect
       source_install_id: install.id,
       restore_point_id: pointId,
       repository: "/var/backups/kaname/x",
-      password_ref: "ref",
+      password_ref: `backup_schedule:${scheduleId}`,
       snapshot_id: "abc",
       mode: "in_place",
     },
@@ -626,15 +628,17 @@ describe("app.restore", () => {
 
   it("stages, saves today's database, stops, swaps, imports, starts and checks — in that order", async () => {
     const install = await newInstall("ghost", null);
-    const [schedule] = await handle.db.select().from(backupSchedules).limit(1);
+    const [schedule] = await handle.db.select().from(backupSchedules).where(eq(backupSchedules.serverId, serverId)).limit(1);
     const point = await newPoint(install, schedule!.id);
     const hub = new FakeHub();
     hub.connected.add(serverId);
 
-    const { error, logs } = await runRestore(hub, install, point.id);
+    const { error, logs } = await runRestore(hub, install, point.id, schedule!.id);
     expect(error).toBeNull();
     const order = hub.methods().filter((m) => !m.startsWith("fs.mkdir"));
     expect(order).toEqual([
+      // The repository password reaches the host first, under the agent's ref.
+      "backup.secret_put",
       "backup.restore",
       "app.db_dump",
       "container.stop app",
@@ -649,6 +653,8 @@ describe("app.restore", () => {
     const safety = hub.calls.find((c) => c.method === "app.db_dump")!;
     expect(safety.params).toMatchObject({ slot: "pre_restore", role: "db", engine: "mysql" });
     const staged = hub.calls.find((c) => c.method === "backup.restore")!.params;
+    expect(staged.password_ref).toBe(`backup_schedule.${schedule!.id}`);
+    expect(hub.calls[0]!.params.ref).toBe(`backup_schedule.${schedule!.id}`);
     expect(String(staged.target)).toMatch(new RegExp(`^${MANAGED_APPS_ROOT}/\\.restore/${install.id}-`));
     expect(staged.include).toEqual([`${MANAGED_APPS_ROOT}/${install.id}`]);
     expect(logs.some((l) => l.includes("[8/8] check"))).toBe(true);
@@ -656,7 +662,7 @@ describe("app.restore", () => {
 
   it("puts the original back when the import fails, and starts the app again", async () => {
     const install = await newInstall("ghost", null);
-    const [schedule] = await handle.db.select().from(backupSchedules).limit(1);
+    const [schedule] = await handle.db.select().from(backupSchedules).where(eq(backupSchedules.serverId, serverId)).limit(1);
     const point = await newPoint(install, schedule!.id);
     const hub = new FakeHub();
     hub.connected.add(serverId);
@@ -667,7 +673,7 @@ describe("app.restore", () => {
       return { ok: true, database: "ghost" };
     });
 
-    const { error, logs } = await runRestore(hub, install, point.id);
+    const { error, logs } = await runRestore(hub, install, point.id, schedule!.id);
     expect(String(error)).toContain("pg_restore");
     const moves = hub.calls.filter((c) => c.method === "fs.move").map((c) => [c.params.from, c.params.to]);
     const live = `${MANAGED_APPS_ROOT}/${install.id}/data`;

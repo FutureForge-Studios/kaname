@@ -1,13 +1,23 @@
 //! Backups.
 //!
-//! restic does the work. The interesting decision here is where the
-//! repository password comes from: the control plane sends a *reference*,
-//! never the secret itself, and the agent resolves it against files in
-//! its own state directory. A compromised control plane therefore cannot
-//! read a repository it does not already have the key for, and the
-//! password never travels over the socket or appears in an argv.
+//! restic does the work. The repository password and the destination's
+//! credentials live in files under the agent's state directory
+//! (`backup-secrets/<ref>` and `backup-secrets/<ref>.env`, root-owned,
+//! 0600 in a 0700 directory), and the restic verbs name them only by
+//! reference. The control plane, which keeps them envelope-encrypted at
+//! rest, sends them once per job over the mTLS socket in the typed,
+//! write-only `backup.secret_put`, right before the restic verbs run:
+//! nothing ever returns them, they never appear in an argv (restic reads
+//! `RESTIC_PASSWORD_FILE` and its environment), and the `.env` file holds
+//! only a closed set of keys. Keeping the files on the host is deliberate:
+//! a host whose control plane is gone can still be restored by hand.
+//!
+//! Every write goes through a descriptor for the secrets directory opened
+//! with `O_NOFOLLOW`, into a fresh temporary file that is renamed over the
+//! target, so a symlink planted at either name is replaced, never followed.
 
-use std::path::PathBuf;
+use std::fs::File;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,13 +29,16 @@ use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 use super::Shared;
-use super::common::{invalid, not_found, now_rfc3339, precondition, rfc3339, split_lines};
+use super::common::{invalid, not_found, now_rfc3339, precondition, rfc3339};
 use super::databases::{DatabaseOps, piped_command, spawn_error};
 use super::exec::{self, ExecOptions};
+pub use crate::providers::backup_secret::check_secret_ref;
+use crate::providers::backup_secret::{
+    BACKUP_SECRETS_DIR, BUCKET_LOOKUP_KEY, BUCKET_LOOKUP_VALUES, ENV_SUFFIX, check_secret_put, parse_env,
+    render_env,
+};
 use crate::providers::*;
 
-/// Where password references resolve to, under the agent's state dir.
-const BACKUP_SECRETS_DIR: &str = "backup-secrets";
 /// How often a running backup reports progress upward.
 const BACKUP_PROGRESS_INTERVAL: Duration = Duration::from_secs(1);
 /// The longest line restic's JSON protocol is allowed to print.
@@ -38,11 +51,6 @@ pub struct BackupOps(pub Arc<Shared>);
 
 type Environment = Vec<(String, String)>;
 
-/// The `.env` key that picks restic's S3 bucket addressing. It is turned
-/// into `-o s3.bucket-lookup=<value>` rather than passed through, because
-/// restic reads that setting only as an option.
-const BUCKET_LOOKUP_KEY: &str = "KANAME_S3_BUCKET_LOOKUP";
-
 /// Leading `-o` options derived from the environment, and the environment
 /// without the keys that became options. Unknown values are dropped.
 fn split_options(environment: &Environment) -> (Vec<String>, Environment) {
@@ -50,7 +58,7 @@ fn split_options(environment: &Environment) -> (Vec<String>, Environment) {
     let mut rest = Environment::new();
     for (k, v) in environment {
         if k == BUCKET_LOOKUP_KEY {
-            if matches!(v.as_str(), "auto" | "dns" | "path") {
+            if BUCKET_LOOKUP_VALUES.contains(&v.as_str()) {
                 options.push("-o".to_string());
                 options.push(format!("s3.bucket-lookup={v}"));
             }
@@ -378,6 +386,29 @@ impl Backups for BackupOps {
             reclaimed_bytes: reclaimed,
         })
     }
+
+    /* ------------------------------- secrets ------------------------------ */
+
+    /// Needs no restic: the control plane provisions the secret before the
+    /// first backup, which may be what installs restic in the first place.
+    async fn secret_put(&self, _ctx: &Ctx, p: BackupSecretPutParams) -> PResult<BackupSecretPutResult> {
+        write_secret(&self.0.opts.state_dir, &p)?;
+        Ok(BackupSecretPutResult {
+            reference: p.reference,
+        })
+    }
+
+    async fn secret_delete(
+        &self,
+        _ctx: &Ctx,
+        p: BackupSecretDeleteParams,
+    ) -> PResult<BackupSecretDeleteResult> {
+        let removed = delete_secret(&self.0.opts.state_dir, &p.reference)?;
+        Ok(BackupSecretDeleteResult {
+            reference: p.reference,
+            removed,
+        })
+    }
 }
 
 /* ------------------------------- internals ---------------------------- */
@@ -553,39 +584,216 @@ impl BackupOps {
         self.0.require(cap::RESTIC)?;
         check_repository_uri(repository)?;
         check_secret_ref(password_ref)?;
+        resolve_secret(&self.0.opts.state_dir, repository, password_ref)
+    }
+}
 
-        let secrets_dir = self.0.opts.state_dir.join(BACKUP_SECRETS_DIR);
-        let password_file = secrets_dir.join(password_ref);
-        if !exec::file_exists(&password_file.display().to_string()) {
+/* ---------------------------- backup secrets -------------------------- */
+
+/// Builds restic's environment from `<ref>` and `<ref>.env`. Either one
+/// being a symbolic link is refused rather than followed, and the `.env`
+/// file contributes only the closed set of keys.
+fn resolve_secret(state_dir: &Path, repository: &str, password_ref: &str) -> PResult<Environment> {
+    let secrets_dir = state_dir.join(BACKUP_SECRETS_DIR);
+    match std::fs::symlink_metadata(&secrets_dir) {
+        Ok(meta) if meta.file_type().is_symlink() => {
             return Err(precondition(format!(
-                "no backup secret named {password_ref:?} in {}; install it on the host before running a backup",
+                "{} is a symbolic link; Kaname will not follow it",
                 secrets_dir.display()
             )));
         }
-
-        let mut environment: Environment = vec![
-            ("RESTIC_REPOSITORY".into(), repository.to_string()),
-            ("RESTIC_PASSWORD_FILE".into(), password_file.display().to_string()),
-        ];
-
-        // An object-store repository also needs credentials, which live beside
-        // the password under the same reference and never cross the socket.
-        let extra_path = PathBuf::from(format!("{}.env", password_file.display()));
-        if let Ok(extra) = std::fs::read_to_string(&extra_path) {
-            for line in split_lines(&extra) {
-                let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
-                    continue;
-                }
-                if let Some((key, value)) = trimmed.split_once('=') {
-                    if !key.is_empty() {
-                        environment.push((key.to_string(), value.to_string()));
-                    }
-                }
-            }
-        }
-        Ok(environment)
+        _ => {}
     }
+
+    let password_file = secrets_dir.join(password_ref);
+    match std::fs::symlink_metadata(&password_file) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(precondition(format!(
+                "backup secret {password_ref:?} is a symbolic link; Kaname will not follow it"
+            )));
+        }
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => {
+            return Err(precondition(format!(
+                "backup secret {password_ref:?} is not a regular file"
+            )));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(precondition(format!(
+                "no backup secret named {password_ref:?} in {}; the control plane provisions it \
+                 (backup.secret_put) before each backup job",
+                secrets_dir.display()
+            )));
+        }
+        Err(e) => return Err(wrap_fs_error(&password_file.display().to_string(), e)),
+    }
+
+    let mut environment: Environment = vec![
+        ("RESTIC_REPOSITORY".into(), repository.to_string()),
+        ("RESTIC_PASSWORD_FILE".into(), password_file.display().to_string()),
+    ];
+
+    // An object-store repository also needs credentials, which live beside
+    // the password under the same reference.
+    let extra_path = secrets_dir.join(format!("{password_ref}{ENV_SUFFIX}"));
+    match std::fs::symlink_metadata(&extra_path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(precondition(format!(
+                "the credentials for backup secret {password_ref:?} are a symbolic link; Kaname will not follow it"
+            )));
+        }
+        Ok(meta) if meta.is_file() => {
+            let extra = std::fs::read_to_string(&extra_path)
+                .map_err(|e| wrap_fs_error(&extra_path.display().to_string(), e))?;
+            environment.extend(parse_env(&extra));
+        }
+        Ok(_) => {
+            return Err(precondition(format!(
+                "the credentials for backup secret {password_ref:?} are not a regular file"
+            )));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(wrap_fs_error(&extra_path.display().to_string(), e)),
+    }
+    Ok(environment)
+}
+
+/// Opens `state_dir/backup-secrets` with `O_NOFOLLOW`, creating it 0700 when
+/// `create` is set. `None` means it does not exist and was not created.
+fn open_secrets_dir(state_dir: &Path, create: bool) -> PResult<Option<File>> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+
+    let dir_path = state_dir.join(BACKUP_SECRETS_DIR);
+    let shown = dir_path.display().to_string();
+    match std::fs::symlink_metadata(&dir_path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            return Err(precondition(format!(
+                "{shown} is a symbolic link; Kaname will not follow it"
+            )));
+        }
+        Ok(meta) if !meta.is_dir() => {
+            return Err(precondition(format!("{shown} is not a directory")));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if !create {
+                return Ok(None);
+            }
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&dir_path)
+                .map_err(|e| wrap_fs_error(&shown, e))?;
+        }
+        Err(e) => return Err(wrap_fs_error(&shown, e)),
+    }
+
+    // O_NOFOLLOW closes the window between the check above and this open:
+    // a symlink swapped in meanwhile is ELOOP, not a redirect.
+    let dir = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&dir_path)
+        .map_err(|e| match e.raw_os_error() {
+            Some(libc::ELOOP) | Some(libc::ENOTDIR) => precondition(format!(
+                "{shown} is not a plain directory; Kaname will not follow it"
+            )),
+            _ => wrap_fs_error(&shown, e),
+        })?;
+    dir.set_permissions(std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| wrap_fs_error(&shown, e))?;
+    Ok(Some(dir))
+}
+
+/// Replaces `name` in `dir` atomically: a fresh 0600 temporary created with
+/// `O_EXCL | O_NOFOLLOW`, written, synced and renamed over the target.
+/// The rename replaces whatever is there, a planted symlink included, and
+/// never writes through it.
+fn replace_at(dir: &File, dir_path: &Path, name: &str, content: &[u8]) -> PResult<()> {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::PermissionsExt;
+
+    use nix::fcntl::{OFlag, openat, renameat};
+    use nix::sys::stat::Mode;
+    use nix::unistd::{UnlinkatFlags, unlinkat};
+
+    let dirfd = dir.as_raw_fd();
+    let target = dir_path.join(name).display().to_string();
+    let temp = format!(".{name}.{}", uuid::Uuid::new_v4().simple());
+    let fd = openat(
+        Some(dirfd),
+        temp.as_str(),
+        OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(|e| wrap_fs_error(&target, e.into()))?;
+    // SAFETY: openat has just returned this descriptor and nothing else
+    // holds it, so the File becomes its only owner.
+    let mut file = unsafe { File::from_raw_fd(fd) };
+
+    let result = (|| -> std::io::Result<()> {
+        file.write_all(content)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.sync_all()?;
+        renameat(Some(dirfd), temp.as_str(), Some(dirfd), name)?;
+        match dir.sync_all() {
+            Err(e) if e.raw_os_error() == Some(libc::EINVAL) => Ok(()),
+            other => other,
+        }
+    })();
+    if result.is_err() {
+        let _ = unlinkat(Some(dirfd), temp.as_str(), UnlinkatFlags::NoRemoveDir);
+    }
+    result.map_err(|e| wrap_fs_error(&target, e))
+}
+
+/// Removes `name` from `dir`; true when something was there.
+fn remove_at(dir: &File, dir_path: &Path, name: &str) -> PResult<bool> {
+    use std::os::fd::AsRawFd;
+
+    use nix::unistd::{UnlinkatFlags, unlinkat};
+
+    match unlinkat(Some(dir.as_raw_fd()), name, UnlinkatFlags::NoRemoveDir) {
+        Ok(()) => Ok(true),
+        Err(nix::errno::Errno::ENOENT) => Ok(false),
+        Err(e) => Err(wrap_fs_error(
+            &dir_path.join(name).display().to_string(),
+            e.into(),
+        )),
+    }
+}
+
+/// Writes `<ref>` (the password and a newline) and `<ref>.env` (the
+/// credentials, or nothing: an empty set removes a stale file).
+fn write_secret(state_dir: &Path, p: &BackupSecretPutParams) -> PResult<()> {
+    let entries = check_secret_put(p)?;
+    let dir_path = state_dir.join(BACKUP_SECRETS_DIR);
+    let dir = open_secrets_dir(state_dir, true)?.expect("created");
+
+    let mut password = Vec::with_capacity(p.password.len() + 1);
+    password.extend_from_slice(p.password.as_bytes());
+    password.push(b'\n');
+    replace_at(&dir, &dir_path, &p.reference, &password)?;
+
+    let env_name = format!("{}{ENV_SUFFIX}", p.reference);
+    if entries.is_empty() {
+        remove_at(&dir, &dir_path, &env_name)?;
+    } else {
+        replace_at(&dir, &dir_path, &env_name, render_env(&entries).as_bytes())?;
+    }
+    Ok(())
+}
+
+fn delete_secret(state_dir: &Path, reference: &str) -> PResult<bool> {
+    check_secret_ref(reference)?;
+    let dir_path = state_dir.join(BACKUP_SECRETS_DIR);
+    let Some(dir) = open_secrets_dir(state_dir, false)? else {
+        return Ok(false);
+    };
+    let password = remove_at(&dir, &dir_path, reference)?;
+    let env = remove_at(&dir, &dir_path, &format!("{reference}{ENV_SUFFIX}"))?;
+    Ok(password || env)
 }
 
 fn count_forgotten(out: &str) -> i64 {
@@ -651,24 +859,6 @@ fn truncate_string(s: &str, limit: usize) -> String {
 }
 
 /* ------------------------------ validation ---------------------------- */
-
-/// Keeps a password reference a bare name, so it can only ever resolve
-/// inside the agent's own secrets directory.
-pub fn check_secret_ref(reference: &str) -> PResult<()> {
-    if reference.is_empty() || reference.len() > 128 {
-        return Err(invalid("password_ref must be between 1 and 128 characters"));
-    }
-    if reference.contains(['/', '\\']) || reference.contains("..") || reference.contains('\0') {
-        return Err(invalid("password_ref must be a bare name, not a path"));
-    }
-    if !reference
-        .bytes()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'_'))
-    {
-        return Err(invalid("password_ref contains an illegal character"));
-    }
-    Ok(())
-}
 
 pub fn check_repository_uri(repository: &str) -> PResult<()> {
     if repository.is_empty() || repository.len() > 512 {
@@ -828,5 +1018,205 @@ repository contains 3 packs
         assert_eq!(m.snapshot_id, "abc");
         assert_eq!(m.total_bytes_processed, 10);
         assert!(serde_json::from_str::<ResticMessage>("plain text").is_err());
+    }
+
+    /* ---------------------------- backup secrets -------------------------- */
+
+    use crate::providers::BackupSecretEnv;
+    use std::os::unix::fs::PermissionsExt;
+
+    const PASSWORD: &str = "correct-horse-battery-staple";
+    const REF: &str = "backup_schedule.0d6c3a52-8a9b-4c5e-9f00-1234567890ab";
+
+    fn put(reference: &str, password: &str, env: BackupSecretEnv) -> BackupSecretPutParams {
+        BackupSecretPutParams {
+            reference: reference.into(),
+            password: password.into(),
+            env,
+        }
+    }
+
+    fn s3_env() -> BackupSecretEnv {
+        BackupSecretEnv {
+            aws_access_key_id: Some("AKIDEXAMPLE".into()),
+            aws_secret_access_key: Some("wJalr/XUtnFEMI=K7MDENG".into()),
+            kaname_s3_bucket_lookup: Some("path".into()),
+            ..Default::default()
+        }
+    }
+
+    fn mode(path: &Path) -> u32 {
+        std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[test]
+    fn secret_put_writes_private_files_the_reader_understands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        write_secret(&state, &put(REF, PASSWORD, s3_env())).unwrap();
+
+        let dir = state.join(BACKUP_SECRETS_DIR);
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&dir.join(REF)), 0o600);
+        assert_eq!(mode(&dir.join(format!("{REF}.env"))), 0o600);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(REF)).unwrap(),
+            format!("{PASSWORD}\n")
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(format!("{REF}.env"))).unwrap(),
+            "AWS_ACCESS_KEY_ID=AKIDEXAMPLE\nAWS_SECRET_ACCESS_KEY=wJalr/XUtnFEMI=K7MDENG\nKANAME_S3_BUCKET_LOOKUP=path\n"
+        );
+        // No temporary is left behind.
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+
+        let environment = resolve_secret(&state, "s3:s3.example.com/bucket", REF).unwrap();
+        assert!(environment.contains(&(
+            "RESTIC_PASSWORD_FILE".to_string(),
+            dir.join(REF).display().to_string()
+        )));
+        assert!(environment.contains(&("AWS_ACCESS_KEY_ID".to_string(), "AKIDEXAMPLE".to_string())));
+        let (options, _) = split_options(&environment);
+        assert_eq!(
+            options,
+            vec!["-o".to_string(), "s3.bucket-lookup=path".to_string()]
+        );
+    }
+
+    #[test]
+    fn secret_put_rotates_and_an_empty_env_removes_the_credentials() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        let dir = state.join(BACKUP_SECRETS_DIR);
+        write_secret(state, &put(REF, PASSWORD, s3_env())).unwrap();
+        write_secret(state, &put(REF, "rotated", BackupSecretEnv::default())).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(REF)).unwrap(), "rotated\n");
+        assert!(!dir.join(format!("{REF}.env")).exists());
+        // And again with nothing to remove.
+        write_secret(state, &put(REF, "rotated", BackupSecretEnv::default())).unwrap();
+        assert_eq!(mode(&dir.join(REF)), 0o600);
+    }
+
+    #[test]
+    fn secret_put_refuses_bad_input_before_touching_the_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        for bad in ["", "../x", "a/b", ".hidden", "x.env", "a:b", "a b", "a\0b"] {
+            assert!(
+                write_secret(state, &put(bad, PASSWORD, Default::default())).is_err(),
+                "{bad:?}"
+            );
+        }
+        for bad in ["a\nb", "a\rb", "a\0b", ""] {
+            let err = write_secret(state, &put(REF, bad, Default::default())).unwrap_err();
+            assert!(bad.is_empty() || !err.to_string().contains(bad), "{err}");
+        }
+        let env = BackupSecretEnv {
+            b2_account_key: Some("secret-value\nLD_PRELOAD=/x".into()),
+            ..Default::default()
+        };
+        let err = write_secret(state, &put(REF, PASSWORD, env))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("B2_ACCOUNT_KEY") && !err.contains("secret-value"),
+            "{err}"
+        );
+        assert!(!state.join(BACKUP_SECRETS_DIR).exists(), "nothing was created");
+    }
+
+    #[test]
+    fn a_symlinked_secrets_directory_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, state.join(BACKUP_SECRETS_DIR)).unwrap();
+
+        let err = write_secret(&state, &put(REF, PASSWORD, Default::default())).unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err}");
+        assert!(delete_secret(&state, REF).is_err());
+        assert!(resolve_secret(&state, "/srv/r", REF).is_err());
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+
+        // A plain file in its place is refused too.
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join(BACKUP_SECRETS_DIR), "x").unwrap();
+        assert!(write_secret(&other, &put(REF, PASSWORD, Default::default())).is_err());
+    }
+
+    #[test]
+    fn a_planted_symlink_is_replaced_not_followed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        let dir = state.join(BACKUP_SECRETS_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside = tmp.path().join("shadow");
+        std::fs::write(&outside, "untouched").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join(REF)).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join(format!("{REF}.env"))).unwrap();
+
+        // The reader refuses to follow either one.
+        let err = resolve_secret(&state, "/srv/r", REF).unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)), "{err}");
+        std::fs::remove_file(dir.join(REF)).unwrap();
+        std::fs::write(dir.join(REF), "pw\n").unwrap();
+        let err = resolve_secret(&state, "/srv/r", REF).unwrap_err();
+        assert!(err.to_string().contains("symbolic link"), "{err}");
+        std::fs::remove_file(dir.join(REF)).unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join(REF)).unwrap();
+
+        // The writer replaces both links.
+        write_secret(&state, &put(REF, PASSWORD, s3_env())).unwrap();
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "untouched");
+        for name in [REF.to_string(), format!("{REF}.env")] {
+            let meta = std::fs::symlink_metadata(dir.join(&name)).unwrap();
+            assert!(meta.is_file() && !meta.file_type().is_symlink(), "{name}");
+        }
+        assert!(resolve_secret(&state, "/srv/r", REF).is_ok());
+    }
+
+    #[test]
+    fn the_reader_drops_keys_outside_the_closed_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(BACKUP_SECRETS_DIR);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("nightly"), "pw\n").unwrap();
+        std::fs::write(
+            dir.join("nightly.env"),
+            "B2_ACCOUNT_ID=id\nLD_PRELOAD=/tmp/evil.so\nRESTIC_PASSWORD_COMMAND=reboot\nPATH=/tmp\n",
+        )
+        .unwrap();
+        let environment = resolve_secret(tmp.path(), "b2:bucket:path", "nightly").unwrap();
+        let keys: Vec<&str> = environment.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "B2_ACCOUNT_ID"]
+        );
+
+        let err = resolve_secret(tmp.path(), "/srv/r", "missing").unwrap_err();
+        assert!(matches!(err, ProviderError::PreconditionFailed(_)));
+        assert!(err.to_string().contains("control plane provisions it"), "{err}");
+    }
+
+    #[test]
+    fn secret_delete_removes_both_files_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path();
+        assert!(!delete_secret(state, REF).unwrap(), "no directory yet");
+        write_secret(state, &put(REF, PASSWORD, s3_env())).unwrap();
+        write_secret(state, &put("nightly", PASSWORD, Default::default())).unwrap();
+        assert!(delete_secret(state, REF).unwrap());
+        let dir = state.join(BACKUP_SECRETS_DIR);
+        assert!(!dir.join(REF).exists() && !dir.join(format!("{REF}.env")).exists());
+        assert!(dir.join("nightly").exists(), "other references are left alone");
+        assert!(!delete_secret(state, REF).unwrap());
+        assert!(delete_secret(state, "../nightly").is_err());
     }
 }

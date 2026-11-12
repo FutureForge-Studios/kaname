@@ -492,6 +492,126 @@
       }
     },
     {
+      "name": "backup.secret_delete",
+      "stream": "none",
+      "requires": [],
+      "read_only": false,
+      "summary": "Remove a backup repository's password and destination credentials from the host.",
+      "params": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          },
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ref",
+          "removed"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
+      "name": "backup.secret_put",
+      "stream": "none",
+      "requires": [],
+      "read_only": false,
+      "summary": "Write or replace a backup repository's password and destination credentials on the host (write-only).",
+      "params": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "env": {
+            "type": "object",
+            "properties": {
+              "AWS_ACCESS_KEY_ID": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "AWS_SECRET_ACCESS_KEY": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "AWS_DEFAULT_REGION": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "B2_ACCOUNT_ID": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "B2_ACCOUNT_KEY": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "KANAME_S3_BUCKET_LOOKUP": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "dns",
+                  "path"
+                ]
+              }
+            },
+            "additionalProperties": false,
+            "default": {}
+          }
+        },
+        "required": [
+          "ref",
+          "password"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      }
+    },
+    {
       "name": "backup.verify",
       "stream": "response",
       "requires": [],
