@@ -508,8 +508,9 @@ applied by a systemd unit on the host."
     *) warn "untested distribution '$OS_ID'; continuing" ;;
   esac
 
-  log "    Linux/$ARCH${OS_ID:+ ($OS_ID)}, systemd present"
-  detail "linux/$ARCH${OS_ID:+$SEP$OS_ID}"
+  OS_VERSION="$(sed -n 's/^VERSION_ID=//p' /etc/os-release 2>/dev/null | tr -d '"')"
+  log "    Linux/$ARCH${OS_ID:+ ($OS_ID${OS_VERSION:+ $OS_VERSION})}, systemd present"
+  detail "linux/$ARCH${OS_ID:+$SEP$OS_ID${OS_VERSION:+ $OS_VERSION}}"
 }
 
 # Every download retries a few times and never hangs: a blip on the way
@@ -517,12 +518,41 @@ applied by a systemd unit on the host."
 CURL="curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15"
 
 # 2. Docker
+# A fresh Ubuntu or Debian host runs unattended-upgrades for its first
+# minutes, and the Docker installer's apt-get fails outright on the lock
+# it holds. Wait for it, up to five minutes, saying so.
+wait_for_apt() {
+  command -v apt-get >/dev/null 2>&1 || return 0
+  command -v pgrep >/dev/null 2>&1 || return 0
+  _w=0
+  while pgrep '^(apt|apt-get|dpkg|unattended-upgr|apt.systemd.dai)$' >/dev/null 2>&1; do
+    [ "$_w" -gt 0 ] || { detail "waiting for apt (unattended-upgrades)"; log "    apt is busy; waiting for it"; }
+    _w=$((_w + 2))
+    [ "$_w" -lt 300 ] || die "apt has been busy for five minutes (most likely unattended-upgrades).
+Let it finish, or see what holds it with: ps -ef | grep -E 'apt|dpkg'
+Then run this again."
+    sleep 2
+  done
+  return 0
+}
+
 ensure_docker() {
   step "Installing Docker Engine"
   docker_how="already installed$SEP"
 
+  # Docker from the snap store is confined: it cannot read $DATA_DIR, so
+  # the panel would fail in ways that point nowhere near the cause.
+  if command -v snap >/dev/null 2>&1 && snap list docker >/dev/null 2>&1; then
+    die "Docker is installed as a snap (Ubuntu's 'snap install docker'). Kaname needs
+the Docker Engine package: the snap is confined and cannot use $DATA_DIR.
+Remove it (this deletes the snap's containers and images), then run this again
+and the official Docker Engine is installed for you:
+  sudo snap remove --purge docker"
+  fi
+
   if ! command -v docker >/dev/null 2>&1; then
     docker_how=""
+    wait_for_apt
     detail "installing from get.docker.com"
     log "    not installed; fetching the official installer from $KANAME_DOCKER_INSTALL_URL"
     $CURL "$KANAME_DOCKER_INSTALL_URL" -o /tmp/get-docker.sh ||

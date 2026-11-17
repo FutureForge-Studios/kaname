@@ -280,18 +280,29 @@ impl System for SystemOps {
             check_package_name(name)?;
         }
 
+        // NEEDRESTART_MODE=a: Ubuntu's needrestart restarts what it must
+        // instead of asking a question nobody is there to answer.
         let mut options = ExecOptions::default()
             .c_locale()
-            .env("DEBIAN_FRONTEND", "noninteractive");
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .env("NEEDRESTART_MODE", "a");
         match manager {
             PackageManager::Apt => {
                 options.name = "apt-get".into();
                 // `upgrade` takes no package list, so a targeted upgrade is an
                 // `install --only-upgrade` instead.
-                let mut args: Vec<String> = ["-y", "-o", "Dpkg::Options::=--force-confold"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect();
+                // A fresh Ubuntu host runs unattended-upgrades for its first
+                // minutes; wait for its lock rather than failing on it.
+                let mut args: Vec<String> = [
+                    "-y",
+                    "-o",
+                    "Dpkg::Options::=--force-confold",
+                    "-o",
+                    "DPkg::Lock::Timeout=300",
+                ]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
                 if !names.is_empty() {
                     args.push("install".into());
                     args.push("--only-upgrade".into());
