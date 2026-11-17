@@ -439,16 +439,16 @@ binary goes back and the command says so (the update itself still exits 0). Fina
 command refreshes itself and the host helper from the new release, again by rename. On a host
 installed with `--agent-only`, `sudo kaname update` updates just the agent.
 
-| Exit |                                                                    |
-| ---- | ------------------------------------------------------------------ |
-| 0    | Updated, or already up to date.                                    |
-| 1    | Error.                                                             |
-| 2    | Usage.                                                             |
-| 3    | Refused: needs `--yes`, a release in between first, or a backup.   |
-| 4    | Another update is in flight.                                       |
-| 5    | The update failed and was rolled back; the previous version runs.  |
-| 6    | The rollback failed as well; this needs a person.                  |
-| 10   | `--check` only: an update is available.                            |
+| Exit |                                                                   |
+| ---- | ----------------------------------------------------------------- |
+| 0    | Updated, or already up to date.                                   |
+| 1    | Error.                                                            |
+| 2    | Usage.                                                            |
+| 3    | Refused: needs `--yes`, a release in between first, or a backup.  |
+| 4    | Another update is in flight.                                      |
+| 5    | The update failed and was rolled back; the previous version runs. |
+| 6    | The rollback failed as well; this needs a person.                 |
+| 10   | `--check` only: an update is available.                           |
 
 ### Operating-system updates
 

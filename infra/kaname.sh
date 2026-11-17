@@ -728,7 +728,11 @@ helper_running() {
   if command -v pgrep >/dev/null 2>&1 && pgrep -f 'kaname-host.sh apply' >/dev/null 2>&1; then
     return 0
   fi
-  systemctl is-active --quiet kaname-update.service 2>/dev/null
+  # A oneshot unit is "activating" for as long as it runs.
+  case "$(systemctl show -p ActiveState --value kaname-update.service 2>/dev/null)" in
+    active|activating|reloading) return 0 ;;
+  esac
+  return 1
 }
 
 # Sets INFLIGHT_RUN, INFLIGHT_LOG and INFLIGHT_RESULT to the run in
@@ -1401,7 +1405,7 @@ drain_log() {
 # Follows RUN_ID until it has a verdict, which it leaves in VERDICT.
 follow_run() {
   FOLLOWING=1 FOLLOW_RUN="$RUN_ID" VERDICT="" REASON=""
-  _quiet=0 _gone=0 _last_size=""
+  _changed_at="$(date +%s)" _gone=0 _last_size=""
   while :; do
     drain_log
     VERDICT="$(verdict_of "$RUN_RESULT")"
@@ -1412,9 +1416,10 @@ follow_run() {
       break
     fi
 
-    # The panel files its own runs and then deletes their files; if they
-    # went before the verdict was read here, ask it.
-    if [ "$PATH_KIND" = panel ] && [ "$SEEN_LINES" -gt 0 ] && [ ! -f "$RUN_LOG" ] && [ ! -f "$RUN_RESULT" ]; then
+    # The panel files its own runs and then deletes their files, and
+    # takes back a request the unit never picked up. Either way there is
+    # nothing left here to read: ask it.
+    if [ "$PATH_KIND" = panel ] && [ ! -f "$QUEUE" ] && [ ! -f "$RUN_LOG" ] && [ ! -f "$RUN_RESULT" ]; then
       _gone=$((_gone + 1))
       if [ "$_gone" -ge 10 ]; then
         _status="$(json_field "$(panel_status "$RUN_ID")" status)"
@@ -1430,8 +1435,8 @@ follow_run() {
 
     # Nothing written for half an hour: the unit is gone.
     _size="$(cat "$RUN_LOG" "$RUN_RESULT" 2>/dev/null | wc -c | tr -d ' ')"
-    if [ "$_size" = "$_last_size" ]; then _quiet=$((_quiet + 1)); else _quiet=0 _last_size="$_size"; fi
-    if [ "$_quiet" -ge $((STALE_MINUTES * 60 * 4)) ]; then
+    if [ "$_size" != "$_last_size" ]; then _changed_at="$(date +%s)" _last_size="$_size"; fi
+    if [ $(($(date +%s) - _changed_at)) -ge $((STALE_MINUTES * 60)) ]; then
       die "kaname-update.service has written nothing for $STALE_MINUTES minutes. Check:
   systemctl status kaname-update.service
   $RUN_LOG"
