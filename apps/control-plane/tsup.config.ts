@@ -6,7 +6,8 @@ import { defineConfig } from "tsup";
  * WASM-backed dependencies stay external because they cannot be bundled.
  */
 export default defineConfig({
-  entry: { main: "src/main.ts" },
+  // cli is the server console `kaname update` runs through `docker compose exec`.
+  entry: { main: "src/main.ts", cli: "src/cli.ts" },
   format: ["esm"],
   target: "node22",
   platform: "node",

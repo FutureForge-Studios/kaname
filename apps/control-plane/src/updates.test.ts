@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -24,6 +31,7 @@ import {
   type UpdateDispatcher,
   type UpdateRequest,
 } from "./services/updates.js";
+import { EXIT, consoleStatus, consoleUpdate } from "./server-console.js";
 
 /* ------------------------------------------------------------------ *
  * Updates.
@@ -675,6 +683,249 @@ describe("the panel's own address", () => {
     } finally {
       dispatcher.installed = true;
     }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * The server console: `sudo kaname update` on the host, through
+ * `docker compose exec`. It must be the same apply the page calls, so
+ * every refusal below is checked against what the page answers.
+ * ------------------------------------------------------------------ */
+
+describe("the server console", () => {
+  let consoleRunId: string;
+
+  it("refuses a breaking release without confirmation, as the page does", async () => {
+    manifestBody = MANIFEST;
+    await ctx.updates.checkNow();
+
+    const page = await as("/api/v1/updates/control-plane", {
+      to_version: "0.3.0",
+      confirm_breaking: false,
+      skip_backup_check: true,
+    });
+    const result = await consoleUpdate(ctx, {
+      toVersion: "0.3.0",
+      confirmBreaking: false,
+      skipBackupCheck: true,
+    });
+
+    expect(page.statusCode).toBe(412);
+    expect(result.exitCode).toBe(EXIT.refused);
+    expect(result.output.code).toBe("refused");
+    expect(result.output.message).toBe(JSON.parse(page.body).error.message);
+  });
+
+  it("refuses without a recent backup, and says how to skip it", async () => {
+    const result = await consoleUpdate(ctx, {
+      toVersion: "0.2.0",
+      confirmBreaking: false,
+      skipBackupCheck: false,
+    });
+    expect(result.exitCode).toBe(EXIT.refused);
+    expect(String(result.output.message)).toContain("backup");
+    expect(String(result.output.remediation)).toContain("skipped");
+  });
+
+  it("refuses a release that has to be stepped through", async () => {
+    manifestBody = {
+      schema: 1,
+      releases: [release("0.4.0", { min_upgrade_from: "0.2.0" }), ...MANIFEST.releases],
+    };
+    await ctx.updates.checkNow();
+    try {
+      const result = await consoleUpdate(ctx, {
+        toVersion: "0.4.0",
+        confirmBreaking: true,
+        skipBackupCheck: true,
+      });
+      expect(result.exitCode).toBe(EXIT.refused);
+      expect(String(result.output.message)).toContain("cannot be applied directly");
+    } finally {
+      manifestBody = MANIFEST;
+      await ctx.updates.checkNow();
+    }
+  });
+
+  it("hands over through the same sequence, as the server console", async () => {
+    const requestsBefore = dispatcher.requests.length;
+    const result = await consoleUpdate(ctx, {
+      toVersion: "0.2.0",
+      confirmBreaking: false,
+      skipBackupCheck: true,
+    });
+
+    expect(result.exitCode, JSON.stringify(result.output)).toBe(EXIT.ok);
+    expect(result.output.code).toBe("handed_over");
+    consoleRunId = String(result.output.run_id);
+
+    // Already handed over when it answers: the command exits and the
+    // host follows the files it names.
+    const request = dispatcher.requests[dispatcher.requests.length - 1] as UpdateRequest;
+    expect(dispatcher.requests.length).toBe(requestsBefore + 1);
+    expect(request.run_id).toBe(consoleRunId);
+    expect(result.output.log_file).toBe(request.log_file);
+    expect((await pendingRecord())?.run_id).toBe(consoleRunId);
+
+    const run = await readRun(consoleRunId);
+    expect(run.status).toBe("running");
+    expect(run.started_by).toBeNull();
+    expect(run.started_by_name).toBe("server console");
+
+    const audits = await ctx.db
+      .select()
+      .from(auditEvents)
+      .where(eq(auditEvents.targetId, consoleRunId));
+    expect(audits.map((a) => a.action).sort()).toEqual([
+      "update.backup_check_skipped",
+      "update.control_plane_started",
+    ]);
+    for (const audit of audits) {
+      expect(audit.actorType).toBe("system");
+      expect(audit.actorName).toBe("server console");
+    }
+  });
+
+  it("answers busy while that run is in flight, and so does the page", async () => {
+    const result = await consoleUpdate(ctx, {
+      toVersion: "0.2.0",
+      confirmBreaking: false,
+      skipBackupCheck: true,
+    });
+    const page = await as("/api/v1/updates/control-plane", {
+      to_version: "0.2.0",
+      skip_backup_check: true,
+    });
+
+    expect(result.exitCode).toBe(EXIT.busy);
+    expect(result.output.code).toBe("busy");
+    expect(page.statusCode).toBe(409);
+    expect(result.output.message).toBe(JSON.parse(page.body).error.message);
+  });
+
+  it("reports where a run stands", async () => {
+    const status = await consoleStatus(ctx, consoleRunId);
+    expect(status.exitCode).toBe(EXIT.ok);
+    expect(status.output.status).toBe("running");
+
+    expect((await consoleStatus(ctx, "host-20261117T101500Z")).exitCode).toBe(EXIT.error);
+
+    // Done with it: the host gave up on the request.
+    await ctx.updates.pollHost(Date.now() + 3 * 60_000);
+    expect((await consoleStatus(ctx, consoleRunId)).output.status).toBe("needs_attention");
+  });
+
+  it("says there is nothing to do when already on that release", async () => {
+    let result!: Awaited<ReturnType<typeof consoleUpdate>>;
+    await withVersion("0.2.0", async () => {
+      result = await consoleUpdate(ctx, {
+        toVersion: "0.2.0",
+        confirmBreaking: false,
+        skipBackupCheck: true,
+      });
+    });
+    expect(result.exitCode).toBe(EXIT.ok);
+    expect(result.output.code).toBe("up_to_date");
+  });
+});
+
+describe("runs the server console applied while the panel was not looking", () => {
+  const updates = () => join(dataDir, "updates");
+
+  function hostRun(
+    id: string,
+    result: string,
+    note: Record<string, unknown> | null,
+    ageMs = 5 * 60_000,
+  ): void {
+    mkdirSync(updates(), { recursive: true });
+    writeFileSync(
+      join(updates(), `${id}.log`),
+      `10:15:00 ==> applying 0.2.0 over 0.1.0 (run ${id})\n10:15:01 --> pulling images\n`,
+    );
+    const resultFile = join(updates(), `${id}.result`);
+    writeFileSync(resultFile, result);
+    const at = new Date(Date.now() - ageMs);
+    utimesSync(resultFile, at, at);
+    if (note) {
+      mkdirSync(join(dataDir, "rollback", id), { recursive: true });
+      writeFileSync(join(dataDir, "rollback", id, "images.json"), JSON.stringify(note));
+    }
+  }
+
+  async function filedRun(id: string) {
+    const rows = await controlPlaneRuns();
+    return rows.find((row) => row.log.includes(`(run ${id})`));
+  }
+
+  it("files a finished run with the host's own log, once", async () => {
+    hostRun("host-20261117T101500Z", "picked_up\nsucceeded\n", {
+      version: "0.1.0",
+      to_version: "0.2.0",
+      breaking: true,
+    });
+
+    const filed = await ctx.updates.ingestHostRuns();
+    expect(filed).toHaveLength(1);
+
+    const row = await filedRun("host-20261117T101500Z");
+    expect(row?.status).toBe("succeeded");
+    expect(row?.fromVersion).toBe("0.1.0");
+    expect(row?.toVersion).toBe("0.2.0");
+    expect(row?.breaking).toBe(true);
+    expect(row?.startedByName).toBe("server console");
+    expect(row?.startedAt?.toISOString()).toBe("2026-11-17T10:15:00.000Z");
+    expect(row?.log).toContain("--> pulling images");
+
+    expect(existsSync(join(updates(), "host-20261117T101500Z.result"))).toBe(false);
+    expect(existsSync(join(updates(), "host-20261117T101500Z.log"))).toBe(false);
+    expect(await ctx.updates.ingestHostRuns()).toHaveLength(0);
+  });
+
+  it("maps the host's verdicts the way the panel's own runs are filed", async () => {
+    hostRun("host-20261117T110000Z", "picked_up\npull_failed\nrolled_back\n", null);
+    hostRun("host-20261117T120000Z", "picked_up\nhealth_failed\nrolled_back\n", {
+      version: "0.1.0",
+      to_version: "0.2.0",
+      migrations_before: await countMigrations(),
+    });
+    hostRun("host-20261117T130000Z", "picked_up\nrestart_failed\nrollback_failed\n", null);
+    hostRun("host-20261117T140000Z", "picked_up\nhealth_failed\nrolled_back\n", {
+      version: "0.1.0",
+      to_version: "0.2.0",
+      migrations_before: (await countMigrations()) - 1,
+    });
+
+    await ctx.updates.ingestHostRuns();
+
+    const pull = await filedRun("host-20261117T110000Z");
+    expect(pull?.status).toBe("failed");
+    expect(pull?.error).toContain("nothing was stopped");
+    // No note: the versions come from the log's first line.
+    expect(pull?.fromVersion).toBe("0.1.0");
+
+    const health = await filedRun("host-20261117T120000Z");
+    expect(health?.status).toBe("rolled_back");
+    expect(health?.rolledBack).toBe(true);
+    expect(health?.error).toContain("/health");
+
+    expect((await filedRun("host-20261117T130000Z"))?.status).toBe("needs_attention");
+
+    const migrated = await filedRun("host-20261117T140000Z");
+    expect(migrated?.status).toBe("needs_attention");
+    expect(migrated?.log).toContain("migrated database");
+  });
+
+  it("leaves a run alone while it is in flight, and a verdict the command may still be reading", async () => {
+    hostRun("host-20261117T150000Z", "picked_up\n", null);
+    hostRun("host-20261117T160000Z", "picked_up\nsucceeded\n", null, 0);
+
+    expect(await ctx.updates.ingestHostRuns()).toHaveLength(0);
+    expect(existsSync(join(updates(), "host-20261117T150000Z.result"))).toBe(true);
+
+    expect(await ctx.updates.ingestHostRuns(Date.now() + 2 * 60_000)).toHaveLength(1);
+    expect(await filedRun("host-20261117T160000Z")).toBeTruthy();
+    expect(await filedRun("host-20261117T150000Z")).toBeUndefined();
   });
 });
 

@@ -3,8 +3,10 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -83,6 +85,11 @@ const HOST_PICKUP_TIMEOUT_MS = 2 * 60_000;
 const HOST_QUIET_TIMEOUT_MS = 30 * 60_000;
 /** After a run is settled, how long to wait for the helper's closing lines before cleaning up. */
 const HOST_TAIL_TIMEOUT_MS = 10 * 60_000;
+/** How long a server console run's verdict is left for the command following it. */
+const HOST_RUN_INGEST_GRACE_MS = 60_000;
+
+/** Who a run started on the host itself, with `kaname update`, is filed as. */
+export const HOST_ACTOR_NAME = "server console";
 
 /**
  * How long an agent gets to download, swap and dial back in. Mirrors
@@ -302,7 +309,16 @@ interface HostWatch {
 export interface UpdateServiceDeps {
   dispatcher?: UpdateDispatcher;
   fetch?: typeof globalThis.fetch;
+  /**
+   * A manifest to decide from instead of the one the policy last
+   * fetched. The host's `kaname update` passes the manifest it read, so
+   * the release it showed the operator is the release applied here.
+   */
+  manifest?: ReleaseManifest;
 }
+
+/** Who started a control-plane update. No id: the server console, not a user. */
+export type UpdateActor = { id: string | null; name: string } | null;
 
 export class UpdateService {
   private readonly dispatcher: UpdateDispatcher;
@@ -317,6 +333,8 @@ export class UpdateService {
    * this; the run row and the pending record cover everything else.
    */
   private applyChain: Promise<void> = Promise.resolve();
+  /** The sequence each run started in this process, up to and including the handover. */
+  private readonly handovers = new Map<string, Promise<void>>();
 
   constructor(
     private readonly ctx: AppContext,
@@ -324,6 +342,7 @@ export class UpdateService {
   ) {
     this.dispatcher = deps.dispatcher ?? fileDispatcher;
     this.fetchImpl = deps.fetch ?? globalThis.fetch;
+    this.manifest = deps.manifest ?? null;
   }
 
   get currentVersion(): string {
@@ -377,6 +396,7 @@ export class UpdateService {
   }
 
   private async tick(): Promise<void> {
+    await this.ingestHostRunsQuietly();
     try {
       const policy = await this.loadPolicy();
       if (policy.tier === "off") return;
@@ -662,7 +682,7 @@ export class UpdateService {
     confirmBreaking: boolean;
     skipBackupCheck: boolean;
     trigger: "manual" | "scheduled" | "onboarding";
-    actor: { id: string; name: string } | null;
+    actor: UpdateActor;
   }): Promise<UpdateRun> {
     const previous = this.applyChain;
     let release!: () => void;
@@ -680,7 +700,7 @@ export class UpdateService {
     confirmBreaking: boolean;
     skipBackupCheck: boolean;
     trigger: "manual" | "scheduled" | "onboarding";
-    actor: { id: string; name: string } | null;
+    actor: UpdateActor;
   }): Promise<UpdateRun> {
     // Before anything else: a second run would snapshot an .env already
     // pinned to the new images and overwrite the pending record, so the
@@ -742,7 +762,7 @@ export class UpdateService {
     if (input.skipBackupCheck) {
       await this.ctx.audit.record({
         actor: {
-          type: "user",
+          type: input.actor && !input.actor.id ? "system" : "user",
           id: input.actor?.id ?? null,
           name: input.actor?.name ?? "system",
         },
@@ -757,11 +777,27 @@ export class UpdateService {
     // Deliberately not awaited: the caller gets the run row immediately
     // and follows it, and the sequence has to survive them navigating
     // away or losing the connection.
-    void this.executeControlPlane(run.id, release).catch(async (err) => {
+    const handover = this.executeControlPlane(run.id, release).catch(async (err) => {
       await this.failRun(run.id, err instanceof Error ? err.message : String(err));
     });
+    this.handovers.set(run.id, handover);
 
     return toApiRun(run, null);
+  }
+
+  /**
+   * Resolves once a run started here has been handed to the host, or
+   * has failed before it could be. The panel never waits on this; the
+   * server console's `update` command does, because it is a process of
+   * its own and would otherwise exit before the request was written.
+   */
+  handover(runId: string): Promise<void> {
+    return this.handovers.get(runId) ?? Promise.resolve();
+  }
+
+  /** Whether this process is still following a handover. */
+  following(): boolean {
+    return this.watches.size > 0;
   }
 
   /** The version an in-flight control-plane update is moving to, if there is one. */
@@ -888,6 +924,7 @@ export class UpdateService {
    */
   async reconcile(): Promise<void> {
     await this.settleOrphanAgentRuns();
+    await this.ingestHostRunsQuietly();
 
     const pending = await this.readPending();
 
@@ -981,6 +1018,145 @@ export class UpdateService {
     this.ctx.events.publish("updates", "update.succeeded", { version: pending.to_version });
     await this.clearPending();
     this.settle(watch);
+  }
+
+  /* ---------------------- server console runs ----------------------- */
+
+  /**
+   * `kaname update` on the host hands kaname-host.sh a request of its
+   * own, named `host-<stamp>`, when this process could not take it: the
+   * control plane was down, or a build older than the server console's
+   * entry. Nothing here watched that run, so once the helper has written
+   * its verdict the run is filed from what it left behind — the result,
+   * the log, and the note the command wrote beside its snapshot — and
+   * shows up in History like any other.
+   *
+   * A verdict is left alone for a minute, so the command following it
+   * reads it first. The files go once the run holds them, which is also
+   * what keeps a run from being filed twice. Called at boot and on the
+   * scheduler's tick: the build that boots during the restart comes up
+   * before the helper has a verdict to write.
+   */
+  async ingestHostRuns(now = Date.now()): Promise<string[]> {
+    const dir = join(this.ctx.config.dataDir, "updates");
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return [];
+    }
+
+    const filed: string[] = [];
+    for (const name of names.sort()) {
+      const match = /^(host-[0-9A-Za-z-]+)\.result$/.exec(name);
+      if (!match) continue;
+      const hostRunId = match[1]!;
+      const resultFile = join(dir, name);
+      const outcome = readOutcome(resultFile);
+      // No verdict yet: the helper is still working, or the command is.
+      if (!outcome?.verdict) continue;
+      let finishedAt: Date;
+      try {
+        finishedAt = statSync(resultFile).mtime;
+      } catch {
+        continue;
+      }
+      if (now - finishedAt.getTime() < HOST_RUN_INGEST_GRACE_MS) continue;
+
+      const logFile = join(dir, `${hostRunId}.log`);
+      const log = readIfPresent(logFile) ?? "";
+      const note = readHostRunNote(
+        join(this.ctx.config.dataDir, "rollback", hostRunId, "images.json"),
+      );
+      const applying = /==> applying (\S+) over (\S+)/.exec(log);
+      const fromVersion = note.version ?? applying?.[2] ?? "unknown";
+      const toVersion = note.to_version ?? applying?.[1] ?? "unknown";
+      const reason = describeReason(outcome.reason, toVersion);
+
+      let status: UpdateRun["status"];
+      let error: string | null;
+      let closing: string;
+      if (outcome.verdict === "succeeded") {
+        status = "succeeded";
+        error = null;
+        closing = `==> ${toVersion} is up and answering`;
+      } else if (outcome.verdict === "rolled_back" && outcome.reason === "pull_failed") {
+        status = "failed";
+        error = `${capitalize(reason)}; nothing was stopped.`;
+        closing = `!! ${reason}; nothing was stopped`;
+      } else if (outcome.verdict === "rolled_back") {
+        const migrated =
+          typeof note.migrations_before === "number" &&
+          (await this.countMigrations()) > note.migrations_before;
+        if (migrated) {
+          status = "needs_attention";
+          error = `Migrations from ${toVersion} ran, but ${fromVersion} is what came back up.`;
+          closing = `!! migrations from ${toVersion} were applied before it failed. The previous version is running against a migrated database; restore the dump taken before this upgrade, or move forward to ${toVersion}.`;
+        } else {
+          status = "rolled_back";
+          error = `${capitalize(reason)}; ${fromVersion} was restored.`;
+          closing = `!! ${reason}; ${fromVersion} was restored`;
+        }
+      } else {
+        status = "needs_attention";
+        error = `${capitalize(reason)}, and the rollback to ${fromVersion} did not come up either.`;
+        closing = `!! ${error}`;
+      }
+
+      const startedAt = stampDate(hostRunId) ?? finishedAt;
+      const text = [
+        `==> updating the control plane to ${toVersion} from the server console (run ${hostRunId})`,
+        log.replace(/\n+$/, ""),
+        closing,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const [row] = await this.ctx.db
+        .insert(updateRuns)
+        .values({
+          kind: "control_plane",
+          serverId: null,
+          fromVersion,
+          toVersion,
+          status,
+          trigger: "manual",
+          breaking: note.breaking === true,
+          log: `${text}\n`,
+          error,
+          rolledBack: status === "rolled_back",
+          startedAt,
+          finishedAt,
+          durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
+          startedBy: null,
+          startedByName: HOST_ACTOR_NAME,
+        })
+        .returning({ id: updateRuns.id });
+
+      await this.ctx.audit.record({
+        actor: { type: "system", id: null, name: HOST_ACTOR_NAME },
+        action: "update.control_plane_host_run",
+        targetType: "update_run",
+        targetId: row!.id,
+        targetLabel: toVersion,
+        metadata: { from: fromVersion, to: toVersion, status, host_run: hostRunId },
+      });
+      this.ctx.events.publish("updates", "update.finished", { run_id: row!.id, status });
+
+      // The run holds every line now.
+      rmSync(logFile, { force: true });
+      rmSync(resultFile, { force: true });
+      filed.push(row!.id);
+    }
+    return filed;
+  }
+
+  private async ingestHostRunsQuietly(): Promise<void> {
+    try {
+      await this.ingestHostRuns();
+    } catch (err) {
+      this.ctx.log.warn({ err }, "filing the server console's update runs failed");
+    }
   }
 
   /* --------------------------- host watch --------------------------- */
@@ -1251,7 +1427,7 @@ export class UpdateService {
     toVersion: string;
     trigger: "manual" | "scheduled" | "onboarding";
     breaking: boolean;
-    actor: { id: string; name: string } | null;
+    actor: UpdateActor;
     jobId?: string | null;
   }): Promise<typeof updateRuns.$inferSelect> {
     const [row] = await this.ctx.db
@@ -1495,6 +1671,36 @@ function readIfPresent(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * What `kaname update` writes beside its snapshot. Every field is
+ * optional: the log's first line names the versions too.
+ */
+interface HostRunNote {
+  version?: string;
+  to_version?: string;
+  breaking?: boolean;
+  migrations_before?: number;
+}
+
+function readHostRunNote(path: string): HostRunNote {
+  const text = readIfPresent(path);
+  if (!text) return {};
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value && typeof value === "object" ? (value as HostRunNote) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** `host-20261117T101500Z` is that instant. */
+function stampDate(hostRunId: string): Date | null {
+  const m = /^host-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/.exec(hostRunId);
+  if (!m) return null;
+  const date = new Date(Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +m[6]!));
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function capitalize(text: string): string {
