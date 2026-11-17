@@ -198,11 +198,11 @@ fi
 
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*)
-    TICK="✓" CROSS="✗" SEP=" · " MARK="◆" RULE="─" BAR_ON="━" BAR_OFF="━"
+    TICK="✓" CROSS="✗" SEP=" · " MARK="◆" RULE="─" BAR_ON="━" BAR_HALF="╸" BAR_OFF="━"
     # The keystone (要, kaname) filling and emptying.
     FRAMES="◇ ◇ ◈ ◆ ◆ ◈" ;;
   *)
-    TICK="+" CROSS="x" SEP=", " MARK="*" RULE="-" BAR_ON="=" BAR_OFF="-"
+    TICK="+" CROSS="x" SEP=", " MARK="*" RULE="-" BAR_ON="=" BAR_HALF="-" BAR_OFF="-"
     FRAMES="| / - \\" ;;
 esac
 
@@ -261,13 +261,16 @@ row_s() {
 }
 row() { row_s "$@"; printf '%s' "$ROW"; }
 
-# The bar beneath the stage's line into BAR, aligned under the title.
-# $1 percent, $2 label.
+# The bar beneath the stage's line into BAR, aligned under the title,
+# 30 cells drawn in half-cell steps. $1 progress in tenths of a
+# percent, $2 label.
 bar_s() {
-  _f=$(( $1 * 30 / 100 ))
-  BAR="$(printf '\r%s            %s%s%s%s%s  %s%3d%%%s  %s%s%s' "$CLR" \
-    "$C_FILL" "$(repeat "$_f" "$BAR_ON")" "$C_TRACK" "$(repeat $((30 - _f)) "$BAR_OFF")" "$C_RESET" \
-    "$C_ACCENT$C_BOLD" "$1" "$C_RESET" "$C_MUTED" "$2" "$C_RESET")"
+  _h=$(( $1 * 60 / 1000 ))
+  _f=$(( _h / 2 )) _half="" _e=$(( 30 - _h / 2 ))
+  if [ $(( _h % 2 )) = 1 ]; then _half="$BAR_HALF" _e=$(( _e - 1 )); fi
+  BAR="$(printf '\r%s            %s%s%s%s%s%s  %s%3d%%%s  %s%s%s' "$CLR" \
+    "$C_FILL" "$(repeat "$_f" "$BAR_ON")" "$_half" "$C_TRACK" "$(repeat "$_e" "$BAR_OFF")" "$C_RESET" \
+    "$C_ACCENT$C_BOLD" $(( $1 / 10 )) "$C_RESET" "$C_MUTED" "$2" "$C_RESET")"
 }
 
 # The spinner owns the terminal while a stage runs: it redraws the line
@@ -278,7 +281,7 @@ spin_start() {
   (
     trap - EXIT INT TERM
     set -f
-    _pct=0 _label=""
+    _shown=0 _target=0 _ceil=0 _label=""
     # shellcheck disable=SC2086 # split into frames on purpose
     set -- $FRAMES
     while :; do
@@ -286,9 +289,19 @@ spin_start() {
         row_s "$C_ACCENT$f$C_RESET" "$(fmt_ms $(( $(now_ms) - STEP_T0 )))"
         if [ "$BAR_LINE" = 1 ]; then
           # A read that races the writer comes back empty; keep the last.
-          IFS='|' read -r _p _l <"$BAR_STATE" 2>/dev/null || _p=""
-          [ -z "$_p" ] || { _pct="$_p" _label="$_l"; }
-          bar_s "$_pct" "$_label"
+          IFS='|' read -r _p _c _l <"$BAR_STATE" 2>/dev/null || _p=""
+          [ -z "$_p" ] || { _target="$_p" _ceil="$_c" _label="$_l"; }
+          # Ease toward what the pull reported, then creep toward the
+          # next layer's mark without reaching it; never backwards.
+          if [ "$_shown" -lt "$_target" ]; then
+            _d=$(( (_target - _shown) / 3 ))
+            [ "$_d" -ge 10 ] || _d=10
+            _shown=$(( _shown + _d ))
+            [ "$_shown" -le "$_target" ] || _shown="$_target"
+          elif [ "$_shown" -lt $(( _ceil - 15 )) ]; then
+            _shown=$(( _shown + 1 ))
+          fi
+          bar_s "$_shown" "$_label"
           printf '%s%s\n%s' "$UP" "$ROW" "$BAR"
         else
           printf '%s' "$ROW"
@@ -368,13 +381,15 @@ detail() {
 bar_open() {
   [ "$UI" = 1 ] || return 0
   BAR_STATE="$(mktemp)"
-  printf '0|%s\n' "$1" >"$BAR_STATE"
+  printf '0|0|%s\n' "$1" >"$BAR_STATE"
   spin_stop
   printf '\n'
   BAR_LINE=1
   spin_start
 }
-bar_set() { [ -z "$BAR_STATE" ] || printf '%s|%s\n' "$1" "$2" >"$BAR_STATE"; }
+# $1 progress and $2 the most the next update can bring, both in tenths
+# of a percent, $3 label.
+bar_set() { [ -z "$BAR_STATE" ] || printf '%s|%s|%s\n' "$1" "$2" "$3" >"$BAR_STATE"; }
 
 warn() {
   to_log "    !! $*"
@@ -833,7 +848,8 @@ pull_progress() {
       "Pull complete"*|"Already exists"*)
         case "$_done" in *" $_id "*) ;; *) _done="$_done$_id " _finished=$((_finished + 1)) ;; esac ;;
     esac
-    bar_set $(( ($1 * 100 + _finished * 100 / _total) / $2 )) "$3$SEP$_finished/$_total layers"
+    bar_set $(( ($1 * 1000 + _finished * 1000 / _total) / $2 )) \
+      $(( ($1 * 1000 + (_finished + 1) * 1000 / _total) / $2 )) "$3$SEP$_finished/$_total layers"
   done
   return "$_rc"
 }
@@ -867,8 +883,10 @@ pull_images() {
     { docker pull "$img" 2>&1 && echo "__kaname_pulled"; } | pull_progress "$i" "$n" "$short" ||
       die "could not pull $img. See $LOG_FILE."
     i=$((i + 1))
-    bar_set $(( i * 100 / n )) "$i/$n images"
+    bar_set $(( i * 1000 / n )) $(( i * 1000 / n )) "$i/$n images"
   done
+  # Let the bar finish its run to 100% before the line settles.
+  sleep 0.8 2>/dev/null || true
 }
 
 deploy() {
