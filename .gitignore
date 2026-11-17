@@ -36,3 +36,6 @@ test-results/
 e2e/.artifacts-*/
 e2e/.state/
 apps/web/tsconfig.e2e-*.json
+
+# Local editor/agent tooling, never committed.
+.claude/

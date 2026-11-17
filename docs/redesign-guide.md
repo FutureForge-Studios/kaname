@@ -345,8 +345,8 @@ Dev servers are already running (web :3000, control plane :4000, hot reload). Do
 stop them.
 
 ```bash
-SNAP=/tmp/claude-0/-home-user-kaname/5360cf53-97c1-5313-a80b-33031f6c4f54/scratchpad/snap.cjs
-OUT=/tmp/claude-0/-home-user-kaname/5360cf53-97c1-5313-a80b-33031f6c4f54/scratchpad/<your-area>
+SNAP=/tmp/kaname-snap/snap.cjs
+OUT=/tmp/kaname-snap/<your-area>
 
 node $SNAP $OUT /monitoring /infrastructure/servers        # dark, 1440×900, logs in for you
 THEME=light node $SNAP $OUT /monitoring                    # writes monitoring-light.png
