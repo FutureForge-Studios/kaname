@@ -15,8 +15,8 @@
 # working afterwards, so setting one cannot lock anyone out.
 #
 # This script is meant to be read before it is run. It fetches exactly
-# two files, both from KANAME_SOURCE_URL below, and prints each URL
-# before it fetches it. Re-running it is a repair, never a wipe: --force
+# two files, both from KANAME_SOURCE_URL below, names that source when it
+# starts and logs each URL before it fetches it. Re-running it is a repair, never a wipe: --force
 # is the only thing that destroys data, and it says what first.
 # ==================================================================
 set -eu
@@ -106,20 +106,223 @@ case "$PUBLIC_URL" in
 esac
 PUBLIC_URL="${PUBLIC_URL%/}"
 
-# Everything said below goes to the terminal and to a log under the data
-# root, so a failed install can be read afterwards without scrolling back.
+# Everything said below also goes to a log under the data root, so a
+# failed install can be read afterwards without scrolling back.
 LOG_FILE=""
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
-log()  { printf '%s\n' "$*"; [ -n "$LOG_FILE" ] && printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" >>"$LOG_FILE"; return 0; }
-step() { log ""; log "==> $*"; }
-warn() { log "    !! $*"; }
+# ------------------------------------------------------------------
+# Output. On a terminal each stage is one line that settles into
+#
+#   3/11  Installing Docker Engine    already installed · v29.1.0   0.4s ✓
+#
+# with a spinner while it runs, and the image pull draws a progress
+# bar. The detail behind every line goes to the install log. Piped,
+# redirected, TERM=dumb or NO_COLOR set, the output is plain "==> ..."
+# text, every line of it also in the log.
+# ------------------------------------------------------------------
+UI=0
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then UI=1; fi
+
+C_RESET="" C_BOLD="" C_DIM="" C_RED="" C_GREEN="" C_YELLOW="" C_MAGENTA=""
+CLR="" UP="" HIDE_CURSOR="" SHOW_CURSOR=""
+if [ "$UI" = 1 ]; then
+  e="$(printf '\033')"
+  C_RESET="${e}[0m" C_BOLD="${e}[1m" C_DIM="${e}[2m" C_RED="${e}[31m" C_GREEN="${e}[32m"
+  C_YELLOW="${e}[33m" C_MAGENTA="${e}[35m"
+  CLR="${e}[2K" UP="${e}[1A" HIDE_CURSOR="${e}[?25l" SHOW_CURSOR="${e}[?25h"
+fi
+
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+  *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*)
+    TICK="✓" CROSS="✗" SEP=" · " BAR_ON="▰" BAR_OFF="▱" DOTS="…"
+    FRAMES="⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏" ;;
+  *)
+    TICK="ok" CROSS="!!" SEP=", " BAR_ON="#" BAR_OFF="-" DOTS="..."
+    FRAMES="| / - \\" ;;
+esac
+
+# Columns: "  NN/TT  <title>  <detail> <time> ✓". The detail column takes
+# whatever the terminal has left, so a line never wraps (a wrapped line
+# cannot be redrawn in place).
+DONE_MARK=""
+[ "$UI" != 1 ] || DONE_MARK="$TICK "
+
+COLS="$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)" || COLS=""
+case "$COLS" in ''|*[!0-9]*) COLS=80 ;; esac
+TITLE_W=25
+DETAIL_W=$((COLS - 47))
+[ "$DETAIL_W" -le 44 ] || DETAIL_W=44
+[ "$DETAIL_W" -ge 8 ] || DETAIL_W=8
+
+STEP_N=0 STEP_TOTAL=0 STEP_OPEN=0 STEP_T0=0 STEP_WARN="" SPIN_PID="" BAR_LINE=0
+STEP_TITLE_F="" STEP_DETAIL_F=""
+
+to_log() { [ -n "$LOG_FILE" ] && printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" >>"$LOG_FILE"; return 0; }
+log()  { [ "$UI" = 1 ] || printf '%s\n' "$*"; to_log "$*"; }
+say()  { printf '%s\n' "$*"; to_log "$*"; }
+
+now_ms() {
+  t="$(date +%s%N 2>/dev/null)" || t=""
+  case "$t" in
+    ''|*[!0-9]*) echo $(( $(date +%s) * 1000 )) ;;
+    *) echo $(( t / 1000000 )) ;;
+  esac
+}
+fmt_ms() { printf '%d.%ds' $(( $1 / 1000 )) $(( $1 % 1000 / 100 )); }
+
+# $1 text, $2 width: exactly $2 columns, padded or cut. A text too long
+# turns its " · " into ", " and drops any other non-ASCII before it is
+# cut, so a cut can never land inside a multi-byte character.
+fit() {
+  _n="$(printf '%s' "$1" | wc -m | tr -d ' ')"
+  if [ "$_n" -gt "$2" ]; then
+    printf "%-$2.$2s" "$(printf '%s' "$1" | sed 's/ · /, /g' | LC_ALL=C tr -cd ' -~')"
+  else
+    printf "%s%$(( $2 - _n ))s" "$1" ""
+  fi
+}
+
+row() {
+  # $1 mark, $2 duration
+  printf '\r%s  %s%5s%s  %s%s%s  %s%s%s %s%6s%s %s' "$CLR" \
+    "$C_GREEN$C_BOLD" "$STEP_N/$STEP_TOTAL" "$C_RESET" \
+    "$C_BOLD" "$STEP_TITLE_F" "$C_RESET" \
+    "$C_DIM" "$STEP_DETAIL_F" "$C_RESET" \
+    "$C_DIM" "$2" "$C_RESET" "$1"
+}
+
+spin_start() {
+  [ "$UI" = 1 ] || return 0
+  (
+    trap - EXIT INT TERM
+    set -f
+    # shellcheck disable=SC2086 # split into frames on purpose
+    set -- $FRAMES
+    while :; do
+      for f in "$@"; do
+        row "$C_MAGENTA$f$C_RESET" ""
+        sleep 0.1 2>/dev/null || sleep 1
+      done
+    done
+  ) &
+  SPIN_PID=$!
+}
+
+spin_stop() {
+  [ -n "$SPIN_PID" ] || return 0
+  # A signal sent while the spinner is still starting up can be lost,
+  # so it is asked until it is gone, and told after half a second.
+  _k=0
+  while kill "$SPIN_PID" 2>/dev/null; do
+    _k=$((_k + 1))
+    [ "$_k" -lt 10 ] || kill -9 "$SPIN_PID" 2>/dev/null || true
+    sleep 0.05 2>/dev/null || sleep 1
+  done
+  wait "$SPIN_PID" 2>/dev/null || true
+  SPIN_PID=""
+}
+
+flush_warnings() {
+  [ -n "$STEP_WARN" ] || return 0
+  printf '%s' "$STEP_WARN" | while IFS= read -r w; do
+    printf '         %s! %s%s\n' "$C_YELLOW" "$w" "$C_RESET"
+  done
+  STEP_WARN=""
+}
+
+# Close the open stage with $1 as its mark.
+step_close() {
+  [ "$STEP_OPEN" = 1 ] || return 0
+  STEP_OPEN=0
+  [ "$UI" = 1 ] || return 0
+  spin_stop
+  if [ "$BAR_LINE" = 1 ]; then printf '\r%s%s' "$CLR" "$UP"; BAR_LINE=0; fi
+  row "$1" "$(fmt_ms $(( $(now_ms) - STEP_T0 )))"
+  printf '\n'
+  flush_warnings
+}
+
+step_end() { step_close "$C_GREEN$TICK$C_RESET"; }
+
+step() {
+  step_end
+  STEP_N=$((STEP_N + 1))
+  STEP_OPEN=1
+  STEP_T0="$(now_ms)"
+  [ -n "$LOG_FILE" ] && printf '%s ==> %s\n' "$(date -u +%H:%M:%S)" "$1" >>"$LOG_FILE"
+  if [ "$UI" = 1 ]; then
+    STEP_TITLE_F="$(fit "$1" "$TITLE_W")"
+    STEP_DETAIL_F="$(fit "" "$DETAIL_W")"
+    spin_start
+  else
+    printf '\n==> %s\n' "$1"
+  fi
+}
+
+# The short note shown beside the open stage, e.g. "v29.1.0".
+detail() {
+  to_log "    ($1)"
+  [ "$UI" = 1 ] || return 0
+  STEP_DETAIL_F="$(fit "$1" "$DETAIL_W")"
+  # The spinner holds its own copy of the line; restart it to show this.
+  if [ -n "$SPIN_PID" ]; then spin_stop; spin_start; fi
+}
+
+warn() {
+  to_log "    !! $*"
+  if [ "$UI" != 1 ]; then
+    printf '    !! %s\n' "$*"
+  elif [ "$STEP_OPEN" = 1 ]; then
+    STEP_WARN="$STEP_WARN$*
+"
+  else
+    printf '         %s! %s%s\n' "$C_YELLOW" "$*" "$C_RESET"
+  fi
+}
 
 die() {
-  printf '\n%s\n' "kaname: $*" >&2
+  step_close "$C_RED$CROSS$C_RESET"
+  printf '\n%skaname:%s %s\n' "$C_RED$C_BOLD" "$C_RESET" "$*" >&2
   [ -n "$LOG_FILE" ] && printf 'FAILED %s\n' "$*" >>"$LOG_FILE"
   [ -n "$LOG_FILE" ] && printf '%s\n' "The full log is at $LOG_FILE" >&2
   exit 1
+}
+
+ui_cleanup() {
+  spin_stop
+  [ "$UI" != 1 ] || printf '%s' "$SHOW_CURSOR"
+}
+trap ui_cleanup EXIT
+trap 'exit 130' INT TERM
+
+banner() {
+  to_log "Kaname installer $STAMP, source $KANAME_SOURCE_URL"
+  if [ "$UI" = 1 ]; then
+    printf '%s\n' "$HIDE_CURSOR"
+    printf '  %sWelcome to the Kaname installer!%s\n' "$C_GREEN$C_BOLD" "$C_RESET"
+    printf '  %sThis script installs everything for you. Sit back and relax.%s\n' "$C_DIM" "$C_RESET"
+    printf '  %sLog file: %s%s\n' "$C_DIM" "$LOG_FILE" "$C_RESET"
+    printf '  %sSource:   %s%s\n\n' "$C_DIM" "$KANAME_SOURCE_URL" "$C_RESET"
+  else
+    printf '%s\n' "Kaname installer — $STAMP" "Source: $KANAME_SOURCE_URL"
+  fi
+}
+
+# $1 percent, $2 label
+draw_bar() {
+  _f=$(( $1 * 34 / 100 )) _on="" _off="" _j=0
+  while [ "$_j" -lt "$_f" ]; do _on="$_on$BAR_ON"; _j=$((_j + 1)); done
+  while [ "$_j" -lt 34 ]; do _off="$_off$BAR_OFF"; _j=$((_j + 1)); done
+  printf '\r%s  %s%s%s%s%s  %s%3d%%%s  %s%s%s' "$CLR" \
+    "$C_MAGENTA" "$_on" "$C_DIM" "$_off" "$C_RESET" \
+    "$C_BOLD" "$1" "$C_RESET" "$C_DIM" "$2" "$C_RESET"
+}
+
+# A summary line: dim label, bold value. The log gets it plain.
+kv() {
+  printf '  %s%-14s%s %s%s%s\n' "$C_DIM" "$1" "$C_RESET" "$C_BOLD" "$2" "$C_RESET"
+  to_log "  $1  $2"
 }
 
 open_log() {
@@ -136,7 +339,7 @@ compose() {
 
 # 1. Preflight
 preflight() {
-  step "checking this host"
+  step "Checking this host"
 
   [ "$(id -u)" = "0" ] || die "run this as root (prefix the command with sudo)."
 
@@ -165,6 +368,7 @@ applied by a systemd unit on the host."
   esac
 
   log "    Linux/$ARCH${OS_ID:+ ($OS_ID)}, systemd present"
+  detail "linux/$ARCH${OS_ID:+$SEP$OS_ID}"
 }
 
 # Every download retries a few times and never hangs: a blip on the way
@@ -173,9 +377,12 @@ CURL="curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15"
 
 # 2. Docker
 ensure_docker() {
-  step "checking Docker"
+  step "Installing Docker Engine"
+  docker_how="already installed$SEP"
 
   if ! command -v docker >/dev/null 2>&1; then
+    docker_how=""
+    detail "installing from get.docker.com"
     log "    not installed; fetching the official installer from $KANAME_DOCKER_INSTALL_URL"
     $CURL "$KANAME_DOCKER_INSTALL_URL" -o /tmp/get-docker.sh ||
       die "could not download the Docker installer from $KANAME_DOCKER_INSTALL_URL.
@@ -206,21 +413,25 @@ Upgrade Docker and run this again: https://docs.docker.com/engine/install/"
 Install it and run this again: https://docs.docker.com/compose/install/linux/"
 
   log "    Docker $DOCKER_VERSION with the Compose plugin"
+  detail "${docker_how}v$DOCKER_VERSION"
 }
 
 # 3. Existing install. Re-running is a repair; only --force destroys, and
 #    only after saying exactly what it is about to destroy.
 check_existing() {
-  [ -f "$DATA_DIR/.env" ] || return 0
+  step "Checking existing install"
+  if [ ! -f "$DATA_DIR/.env" ]; then
+    detail "none found${SEP}fresh install"
+    return 0
+  fi
 
   if [ "$FORCE" = "1" ]; then
-    step "--force: removing the existing install"
-    log "    this deletes:"
-    log "      - the Kaname database, including every server, user and audit record"
-    log "      - $DATA_DIR (secrets, rollback snapshots, logs)"
-    log "      - the Compose project '$KANAME_COMPOSE_PROJECT' and its volumes"
-    log "      - $STATE_DIR, this host's agent identity, which the new database would not know"
-    log ""
+    detail "removing it (--force)"
+    warn "--force: removing the existing install. This deletes:"
+    warn "  - the Kaname database, including every server, user and audit record"
+    warn "  - $DATA_DIR (secrets, rollback snapshots, logs)"
+    warn "  - the Compose project '$KANAME_COMPOSE_PROJECT' and its volumes"
+    warn "  - $STATE_DIR, this host's agent identity, which the new database would not know"
     compose down -v >>"$LOG_FILE" 2>&1 || true
     systemctl stop kanamed >/dev/null 2>&1 || true
     # The log lives under here, so it is moved aside first.
@@ -228,10 +439,12 @@ check_existing() {
     rm -rf "$DATA_DIR" "$STATE_DIR"
     open_log
     log "    removed."
+    detail "removed (--force)"
     return 0
   fi
 
-  step "found an existing install at $DATA_DIR"
+  detail "found${SEP}repairing it"
+  log "    found an existing install at $DATA_DIR"
   log "    re-running as a repair: existing secrets, data and version are kept,"
   log "    the deployment files and units are refreshed, and the services are restarted."
   log "    to wipe and start over instead, re-run with --force."
@@ -354,7 +567,7 @@ reconcile_version() {
 }
 
 prepare_data_dir() {
-  step "preparing $DATA_DIR"
+  step "Preparing $DATA_DIR"
 
   mkdir -p "$DATA_DIR" "$DATA_DIR/logs" "$DATA_DIR/rollback" "$DATA_DIR/updates/queue"
   chmod 0700 "$DATA_DIR/logs"
@@ -369,6 +582,7 @@ prepare_data_dir() {
 
   if [ -f "$DATA_DIR/.env" ]; then
     log "    keeping the existing secrets in $DATA_DIR/.env"
+    detail "kept existing secrets"
     reconcile_version
     # A repair is how a wrong address gets corrected: the new URL lands
     # in .env and the Caddyfile is regenerated from it below. The domain
@@ -384,6 +598,7 @@ prepare_data_dir() {
 
   resolve_public_url
   log "    generating secrets with openssl rand"
+  detail "generated secrets"
   MASTER_KEY="$(random_b64 32)"
   POSTGRES_PASSWORD="$(random_b64 24 | tr -d '/+=' | cut -c1-32)"
   SETUP_TOKEN="kn_setup_$(random_hex 24)"
@@ -437,7 +652,7 @@ fetch() {
 }
 
 fetch_deployment() {
-  step "fetching the deployment files"
+  step "Downloading files"
   mkdir -p "$LIB_DIR"
   fetch "$KANAME_SOURCE_URL/infra/docker-compose.yml" "$DATA_DIR/docker-compose.yml"
   fetch "$KANAME_SOURCE_URL/infra/kaname-host.sh" "$LIB_DIR/kaname-host.sh"
@@ -448,6 +663,7 @@ fetch_deployment() {
   "$LIB_DIR/kaname-host.sh" caddyfile "$DATA_DIR" >>"$LOG_FILE" 2>&1 ||
     die "could not generate $DATA_DIR/Caddyfile. See $LOG_FILE."
   log "    generated $DATA_DIR/Caddyfile"
+  detail "compose${SEP}host helper${SEP}Caddyfile"
 }
 
 # 6. The host-side helper. A container cannot restart itself and still be
@@ -455,7 +671,7 @@ fetch_deployment() {
 #    the control plane queues a request and this unit, on the host, does
 #    the pull, the restart, the health check and the rollback.
 install_host_units() {
-  step "installing the host helper units"
+  step "Installing host units"
 
   cat >/etc/systemd/system/kaname-update.service <<UNIT
 [Unit]
@@ -484,14 +700,69 @@ UNIT
   systemctl daemon-reload
   systemctl enable --now kaname-update.path >>"$LOG_FILE" 2>&1
   log "    kaname-update.path is watching $DATA_DIR/updates/queue"
+  detail "kaname-update.path"
 }
 
 # 7. Deploy
-deploy() {
-  step "starting the control plane"
+# Read off "<layer>: <status>" lines on stdin (docker pull, not on a
+# terminal) and redraw the bar. $1 images already pulled, $2 in all,
+# $3 the image's short name. Fails unless the pull said it finished.
+pull_progress() {
+  _rc=1 _seen=" " _done=" " _total=0 _finished=0
+  while IFS= read -r line; do
+    printf '%s\n' "$line" >>"$LOG_FILE"
+    [ "$line" != "__kaname_pulled" ] || { _rc=0; continue; }
+    _id="${line%%: *}"
+    case "$_id" in ''|*[!0-9a-f]*) continue ;; esac
+    case "$_seen" in *" $_id "*) ;; *) _seen="$_seen$_id " _total=$((_total + 1)) ;; esac
+    case "${line#*: }" in
+      "Pull complete"*|"Already exists"*)
+        case "$_done" in *" $_id "*) ;; *) _done="$_done$_id " _finished=$((_finished + 1)) ;; esac ;;
+    esac
+    draw_bar $(( ($1 * 100 + _finished * 100 / _total) / $2 )) "pulling $3$DOTS"
+  done
+  return "$_rc"
+}
 
-  compose pull >>"$LOG_FILE" 2>&1 ||
-    die "could not pull the Kaname images. See $LOG_FILE."
+pull_images() {
+  step "Pulling images"
+  images="$(compose config --images 2>>"$LOG_FILE")" || images=""
+
+  # No terminal to draw on, or a Compose too old to list its images:
+  # one plain pull, as before.
+  if [ "$UI" != 1 ] || [ -z "$images" ]; then
+    compose pull >>"$LOG_FILE" 2>&1 ||
+      die "could not pull the Kaname images. See $LOG_FILE."
+    log "    images pulled"
+    return 0
+  fi
+
+  names="" n=0
+  for img in $images; do
+    short="${img##*/}"; short="${short%%[:@]*}"; short="${short#kaname-}"
+    names="${names:+$names$SEP}$short"
+    n=$((n + 1))
+  done
+  detail "$names"
+  spin_stop
+  row "$C_MAGENTA${FRAMES%% *}$C_RESET" ""
+  printf '\n'
+  BAR_LINE=1
+  draw_bar 0 "pulling images$DOTS"
+
+  i=0
+  for img in $images; do
+    short="${img##*/}"; short="${short%%[:@]*}"; short="${short#kaname-}"
+    log "    pulling $img"
+    { docker pull "$img" 2>&1 && echo "__kaname_pulled"; } | pull_progress "$i" "$n" "$short" ||
+      die "could not pull $img. See $LOG_FILE."
+    i=$((i + 1))
+    draw_bar $(( i * 100 / n )) "pulling images$DOTS"
+  done
+}
+
+deploy() {
+  step "Starting control plane"
 
   compose up -d --wait >>"$LOG_FILE" 2>&1 ||
     die "the containers did not become healthy. See $LOG_FILE, and:
@@ -499,6 +770,7 @@ deploy() {
   docker compose -p $KANAME_COMPOSE_PROJECT -f $DATA_DIR/docker-compose.yml logs control-plane"
 
   log "    containers are up"
+  detail "$(compose ps -q 2>/dev/null | wc -l | tr -d ' ') containers healthy"
 }
 
 wait_for_api() {
@@ -675,18 +947,18 @@ start_agent() {
 
 install_agent() {
   # $1 control plane url, $2 pairing token
-  step "installing the agent"
   fetch_agent_binary "$1"
   enroll_agent "$1" "$2"
   write_agent_unit
   start_agent
+  detail "kanamed enrolled"
 }
 
 # The all-in-one repair. Which of the three steps are missing is read off
 # the disk, not off .env: a run that failed after the download, or a host
 # whose unit or identity was lost, is fixed by running this again.
 repair_local_agent() {
-  step "checking the agent on this host"
+  step "Pairing this host"
   [ -x "$BIN_DIR/kanamed" ] || fetch_agent_binary "$KANAME_LOCAL_API"
 
   if [ ! -f "$STATE_DIR/cert.pem" ]; then
@@ -707,6 +979,7 @@ Infrastructure > Servers > Add server, then run this again with --token=<token>.
   # Restarted, not merely started: the binary or the unit may be new.
   systemctl restart kanamed >>"$LOG_FILE" 2>&1 || start_agent
   log "    kanamed is running"
+  detail "kanamed running as $(hostname -s)"
 }
 
 # Public by necessity: the panel asks the same question before anyone
@@ -716,7 +989,7 @@ setup_has_owner() {
 }
 
 pair_local_agent() {
-  step "pairing this host as the first managed server"
+  log "    pairing this host as the first managed server"
 
   # The pairing token comes from the control plane that was just
   # started, authorised by the setup token this installer generated —
@@ -745,10 +1018,12 @@ then run this again with --token=<token>."
 # 9. Verification. "It installed" is not "it works", and a success banner
 #    over a broken install is worse than no banner at all.
 verify_agent() {
+  step "Verifying the agent"
   i=0
   while [ "$i" -lt 60 ]; do
     if curl -fsS "$KANAME_LOCAL_API/health" 2>/dev/null | grep -q '"agents_connected":[1-9]'; then
       log "    agent is connected"
+      detail "connected to the panel"
       return 0
     fi
     i=$((i + 1))
@@ -766,20 +1041,20 @@ summary() {
   token="$(grep '^KANAME_SETUP_TOKEN=' "$DATA_DIR/.env" | cut -d= -f2-)"
   installed="$(grep '^KANAME_VERSION=' "$DATA_DIR/.env" | cut -d= -f2-)"
 
-  printf '\n'
-  log "Kaname $installed is running."
-  log ""
-  log "  Open           $url"
-  log "  Setup token    $token"
-  log ""
-  log "The token is asked for once, on the first screen, and stops working as"
-  log "soon as an account exists."
-  log ""
-  log "  Secrets        $DATA_DIR/.env  (back up KANAME_MASTER_KEY)"
-  log "  Install log    $LOG_FILE"
-  log ""
-  log "A domain and HTTPS can be set later from Administration in the panel."
-  log "$url keeps working after that."
+  step_end
+  printf '\n  %s%sKaname %s is running.%s\n\n' "$C_GREEN$C_BOLD" "$DONE_MARK" "$installed" "$C_RESET"
+  to_log "Kaname $installed is running."
+  kv "Open" "$url"
+  kv "Setup token" "$token"
+  say ""
+  say "  The token is asked for once, on the first screen, and stops working as"
+  say "  soon as an account exists."
+  say ""
+  kv "Secrets" "$DATA_DIR/.env  (back up KANAME_MASTER_KEY)"
+  kv "Install log" "$LOG_FILE"
+  say ""
+  say "  A domain and HTTPS can be set later from Administration in the panel."
+  say "  $url keeps working after that."
 }
 
 # Run
@@ -791,22 +1066,27 @@ expire in minutes."
 agent should dial, e.g. http://203.0.113.10"
 
   open_log
+  banner
+  STEP_TOTAL=2
   preflight
+  step "Installing the agent"
   install_agent "$CONTROL_PLANE" "$TOKEN"
+  step_end
 
-  printf '\n'
-  log "kanamed is installed and dialling $CONTROL_PLANE."
-  log "It should appear in the panel within a few seconds."
-  log ""
-  log "  Status   systemctl status kanamed"
-  log "  Logs     journalctl -u kanamed -f"
-  log "  Log      $LOG_FILE"
+  printf '\n  %s%skanamed is installed and dialling %s.%s\n' "$C_GREEN$C_BOLD" "$DONE_MARK" "$CONTROL_PLANE" "$C_RESET"
+  to_log "kanamed is installed and dialling $CONTROL_PLANE."
+  say "  It should appear in the panel within a few seconds."
+  say ""
+  kv "Status" "systemctl status kanamed"
+  kv "Logs" "journalctl -u kanamed -f"
+  kv "Install log" "$LOG_FILE"
   exit 0
 fi
 
 open_log
-log "Kaname installer — $STAMP"
-log "Source: $KANAME_SOURCE_URL"
+banner
+STEP_TOTAL=9
+[ "$MODE" != "all-in-one" ] || STEP_TOTAL=11
 
 preflight
 ensure_docker
@@ -814,13 +1094,15 @@ check_existing
 prepare_data_dir
 fetch_deployment
 install_host_units
+pull_images
 deploy
 
-step "verifying"
+step "Waiting for the panel"
 wait_for_api 90 ||
   die "the control plane did not answer $KANAME_LOCAL_API/health within 90 seconds.
   docker compose -p $KANAME_COMPOSE_PROJECT -f $DATA_DIR/docker-compose.yml logs control-plane"
 log "    control plane is answering"
+detail "health check passed"
 
 if [ "$MODE" = "all-in-one" ]; then
   # Whether to pair is decided by whether this host is actually
