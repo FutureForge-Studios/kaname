@@ -112,51 +112,74 @@ LOG_FILE=""
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 # ------------------------------------------------------------------
-# Output. On a terminal each stage is one line that settles into
+# Output. On a terminal each stage is one line, in the panel's colours:
 #
-#   3/11  Installing Docker Engine    already installed · v29.1.0   0.4s ✓
+#   ✓  03/11  Installing Docker Engine   already installed · v29.1.0   0.4s
 #
-# with a spinner while it runs, and the image pull draws a progress
-# bar. The detail behind every line goes to the install log. Piped,
-# redirected, TERM=dumb or NO_COLOR set, the output is plain "==> ..."
-# text, every line of it also in the log.
+# The mark on the left spins in the accent while the stage runs, the
+# time on the right counts up, and the image pull draws a bar beneath
+# its line. The detail behind every line goes to the install log.
+# Piped, redirected, TERM=dumb or NO_COLOR set, the output is plain
+# "==> ..." text, every line of it also in the log.
 # ------------------------------------------------------------------
 UI=0
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then UI=1; fi
 
-C_RESET="" C_BOLD="" C_DIM="" C_RED="" C_GREEN="" C_YELLOW="" C_MAGENTA=""
+# The panel's tokens (packages/ui/src/styles/tokens.css): accent 400 and
+# 500, ok, warn, danger, text-3, and a track a step above surface-3.
+# Exact on a 24-bit terminal, the nearest xterm-256 colour otherwise,
+# and the basic eight on anything older.
+C_RESET="" C_BOLD="" C_ACCENT="" C_FILL="" C_OK="" C_WARN="" C_DANGER="" C_MUTED="" C_TRACK=""
 CLR="" UP="" HIDE_CURSOR="" SHOW_CURSOR=""
 if [ "$UI" = 1 ]; then
   e="$(printf '\033')"
-  C_RESET="${e}[0m" C_BOLD="${e}[1m" C_DIM="${e}[2m" C_RED="${e}[31m" C_GREEN="${e}[32m"
-  C_YELLOW="${e}[33m" C_MAGENTA="${e}[35m"
+  case "${COLORTERM:-}:${TERM:-}" in
+    truecolor:*|24bit:*) PALETTE=rgb ;;
+    *256color*) PALETTE=256 ;;
+    *) PALETTE=8 ;;
+  esac
+  # $1 r;g;b, $2 xterm-256 index, $3 basic SGR
+  colour() {
+    case "$PALETTE" in
+      rgb) printf '%s[38;2;%sm' "$e" "$1" ;;
+      256) printf '%s[38;5;%sm' "$e" "$2" ;;
+      *) printf '%s[%sm' "$e" "$3" ;;
+    esac
+  }
+  C_RESET="${e}[0m" C_BOLD="${e}[1m"
+  C_ACCENT="$(colour '169;141;248' 141 35)"
+  C_FILL="$(colour '122;79;244' 99 35)"
+  C_OK="$(colour '79;227;203' 79 36)"
+  C_WARN="$(colour '251;177;60' 215 33)"
+  C_DANGER="$(colour '244;91;105' 204 31)"
+  C_MUTED="$(colour '142;141;139' 245 2)"
+  C_TRACK="$(colour '58;58;66' 237 2)"
   CLR="${e}[2K" UP="${e}[1A" HIDE_CURSOR="${e}[?25l" SHOW_CURSOR="${e}[?25h"
 fi
 
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*)
-    TICK="✓" CROSS="✗" SEP=" · " BAR_ON="▰" BAR_OFF="▱" DOTS="…"
+    TICK="✓" CROSS="✗" SEP=" · " MARK="◆" RULE="─" BAR_ON="━" BAR_OFF="━"
     FRAMES="⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏" ;;
   *)
-    TICK="ok" CROSS="!!" SEP=", " BAR_ON="#" BAR_OFF="-" DOTS="..."
+    TICK="+" CROSS="x" SEP=", " MARK="*" RULE="-" BAR_ON="=" BAR_OFF="-"
     FRAMES="| / - \\" ;;
 esac
 
-# Columns: "  NN/TT  <title>  <detail> <time> ✓". The detail column takes
+# Columns: "  M  NN/TT  <title>  <detail> <time>". The detail takes
 # whatever the terminal has left, so a line never wraps (a wrapped line
 # cannot be redrawn in place).
-DONE_MARK=""
-[ "$UI" != 1 ] || DONE_MARK="$TICK "
-
-COLS="$(stty size </dev/tty 2>/dev/null | cut -d' ' -f2)" || COLS=""
+COLS="$( { stty size </dev/tty; } 2>/dev/null | cut -d' ' -f2)" || COLS=""
 case "$COLS" in ''|*[!0-9]*) COLS=80 ;; esac
 TITLE_W=25
 DETAIL_W=$((COLS - 47))
 [ "$DETAIL_W" -le 44 ] || DETAIL_W=44
 [ "$DETAIL_W" -ge 8 ] || DETAIL_W=8
+RULE_W=$((COLS - 4))
+[ "$RULE_W" -le 72 ] || RULE_W=72
 
 STEP_N=0 STEP_TOTAL=0 STEP_OPEN=0 STEP_T0=0 STEP_WARN="" SPIN_PID="" BAR_LINE=0
-STEP_TITLE_F="" STEP_DETAIL_F=""
+STEP_TITLE_F="" STEP_DETAIL_F="" BAR_STATE=""
 
 to_log() { [ -n "$LOG_FILE" ] && printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" >>"$LOG_FILE"; return 0; }
 log()  { [ "$UI" = 1 ] || printf '%s\n' "$*"; to_log "$*"; }
@@ -171,6 +194,13 @@ now_ms() {
 }
 fmt_ms() { printf '%d.%ds' $(( $1 / 1000 )) $(( $1 % 1000 / 100 )); }
 
+# $1 count, $2 character: the character $1 times.
+repeat() {
+  _r="" _i=0
+  while [ "$_i" -lt "$1" ]; do _r="$_r$2"; _i=$((_i + 1)); done
+  printf '%s' "$_r"
+}
+
 # $1 text, $2 width: exactly $2 columns, padded or cut. A text too long
 # turns its " · " into ", " and drops any other non-ASCII before it is
 # cut, so a cut can never land inside a multi-byte character.
@@ -183,29 +213,50 @@ fit() {
   fi
 }
 
-row() {
-  # $1 mark, $2 duration
-  printf '\r%s  %s%5s%s  %s%s%s  %s%s%s %s%6s%s %s' "$CLR" \
-    "$C_GREEN$C_BOLD" "$STEP_N/$STEP_TOTAL" "$C_RESET" \
-    "$C_BOLD" "$STEP_TITLE_F" "$C_RESET" \
-    "$C_DIM" "$STEP_DETAIL_F" "$C_RESET" \
-    "$C_DIM" "$2" "$C_RESET" "$1"
+# The stage's line into ROW. $1 mark (coloured), $2 time.
+row_s() {
+  ROW="$(printf '\r%s  %s  %s%02d/%02d%s  %s  %s%s %6s%s' "$CLR" "$1" \
+    "$C_MUTED" "$STEP_N" "$STEP_TOTAL" "$C_RESET" "$STEP_TITLE_F" \
+    "$C_MUTED" "$STEP_DETAIL_F" "$2" "$C_RESET")"
+}
+row() { row_s "$@"; printf '%s' "$ROW"; }
+
+# The bar beneath the stage's line into BAR, aligned under the title.
+# $1 percent, $2 label.
+bar_s() {
+  _f=$(( $1 * 30 / 100 ))
+  BAR="$(printf '\r%s            %s%s%s%s%s  %s%3d%%%s  %s%s%s' "$CLR" \
+    "$C_FILL" "$(repeat "$_f" "$BAR_ON")" "$C_TRACK" "$(repeat $((30 - _f)) "$BAR_OFF")" "$C_RESET" \
+    "$C_ACCENT$C_BOLD" "$1" "$C_RESET" "$C_MUTED" "$2" "$C_RESET")"
 }
 
+# The spinner owns the terminal while a stage runs: it redraws the line
+# (and, during the pull, the bar from BAR_STATE, which the pull writes)
+# in one write per frame, so nothing else ever draws over it.
 spin_start() {
   [ "$UI" = 1 ] || return 0
   (
     trap - EXIT INT TERM
     set -f
+    _pct=0 _label=""
     # shellcheck disable=SC2086 # split into frames on purpose
     set -- $FRAMES
     while :; do
       for f in "$@"; do
-        row "$C_MAGENTA$f$C_RESET" ""
+        row_s "$C_ACCENT$f$C_RESET" "$(fmt_ms $(( $(now_ms) - STEP_T0 )))"
+        if [ "$BAR_LINE" = 1 ]; then
+          # A read that races the writer comes back empty; keep the last.
+          IFS='|' read -r _p _l <"$BAR_STATE" 2>/dev/null || _p=""
+          [ -z "$_p" ] || { _pct="$_p" _label="$_l"; }
+          bar_s "$_pct" "$_label"
+          printf '%s%s\n%s' "$UP" "$ROW" "$BAR"
+        else
+          printf '%s' "$ROW"
+        fi
         sleep 0.1 2>/dev/null || sleep 1
       done
     done
-  ) &
+  ) 2>/dev/null &
   SPIN_PID=$!
 }
 
@@ -226,7 +277,7 @@ spin_stop() {
 flush_warnings() {
   [ -n "$STEP_WARN" ] || return 0
   printf '%s' "$STEP_WARN" | while IFS= read -r w; do
-    printf '         %s! %s%s\n' "$C_YELLOW" "$w" "$C_RESET"
+    printf '             %s%s%s\n' "$C_WARN" "$w" "$C_RESET"
   done
   STEP_WARN=""
 }
@@ -237,13 +288,17 @@ step_close() {
   STEP_OPEN=0
   [ "$UI" = 1 ] || return 0
   spin_stop
-  if [ "$BAR_LINE" = 1 ]; then printf '\r%s%s' "$CLR" "$UP"; BAR_LINE=0; fi
+  if [ "$BAR_LINE" = 1 ]; then
+    printf '\r%s%s' "$CLR" "$UP"
+    BAR_LINE=0
+    rm -f "$BAR_STATE"
+  fi
   row "$1" "$(fmt_ms $(( $(now_ms) - STEP_T0 )))"
   printf '\n'
   flush_warnings
 }
 
-step_end() { step_close "$C_GREEN$TICK$C_RESET"; }
+step_end() { step_close "$C_OK$TICK$C_RESET"; }
 
 step() {
   step_end
@@ -269,6 +324,18 @@ detail() {
   if [ -n "$SPIN_PID" ]; then spin_stop; spin_start; fi
 }
 
+# Put a bar under the open stage, or ($1 percent, $2 label) move it.
+bar_open() {
+  [ "$UI" = 1 ] || return 0
+  BAR_STATE="$(mktemp)"
+  printf '0|%s\n' "$1" >"$BAR_STATE"
+  spin_stop
+  printf '\n'
+  BAR_LINE=1
+  spin_start
+}
+bar_set() { [ -z "$BAR_STATE" ] || printf '%s|%s\n' "$1" "$2" >"$BAR_STATE"; }
+
 warn() {
   to_log "    !! $*"
   if [ "$UI" != 1 ]; then
@@ -277,51 +344,58 @@ warn() {
     STEP_WARN="$STEP_WARN$*
 "
   else
-    printf '         %s! %s%s\n' "$C_YELLOW" "$*" "$C_RESET"
+    printf '             %s%s%s\n' "$C_WARN" "$*" "$C_RESET"
   fi
 }
 
 die() {
-  step_close "$C_RED$CROSS$C_RESET"
-  printf '\n%skaname:%s %s\n' "$C_RED$C_BOLD" "$C_RESET" "$*" >&2
+  step_close "$C_DANGER$CROSS$C_RESET"
+  printf '\n  %skaname:%s %s\n' "$C_DANGER$C_BOLD" "$C_RESET" "$*" >&2
   [ -n "$LOG_FILE" ] && printf 'FAILED %s\n' "$*" >>"$LOG_FILE"
-  [ -n "$LOG_FILE" ] && printf '%s\n' "The full log is at $LOG_FILE" >&2
+  [ -n "$LOG_FILE" ] && printf '  %s%s%s\n' "$C_MUTED" "The full log is at $LOG_FILE" "$C_RESET" >&2
   exit 1
 }
 
 ui_cleanup() {
   spin_stop
+  [ -z "$BAR_STATE" ] || rm -f "$BAR_STATE"
   [ "$UI" != 1 ] || printf '%s' "$SHOW_CURSOR"
 }
 trap ui_cleanup EXIT
 trap 'exit 130' INT TERM
 
+HEAD_MARK=""
+[ "$UI" != 1 ] || HEAD_MARK="$MARK "
+
+rule() { printf '  %s%s%s\n' "$C_TRACK" "$(repeat "$RULE_W" "$RULE")" "$C_RESET"; }
+
 banner() {
   to_log "Kaname installer $STAMP, source $KANAME_SOURCE_URL"
   if [ "$UI" = 1 ]; then
     printf '%s\n' "$HIDE_CURSOR"
-    printf '  %sWelcome to the Kaname installer!%s\n' "$C_GREEN$C_BOLD" "$C_RESET"
-    printf '  %sThis script installs everything for you. Sit back and relax.%s\n' "$C_DIM" "$C_RESET"
-    printf '  %sLog file: %s%s\n' "$C_DIM" "$LOG_FILE" "$C_RESET"
-    printf '  %sSource:   %s%s\n\n' "$C_DIM" "$KANAME_SOURCE_URL" "$C_RESET"
+    printf '  %s%s%s %skaname%s  %sinstaller%s\n' "$C_ACCENT" "$MARK" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_MUTED" "$C_RESET"
+    printf '  %sOne panel for your servers. This sets it up; nothing to answer.%s\n' "$C_MUTED" "$C_RESET"
+    rule
+    kv "log" "$LOG_FILE"
+    kv "source" "$KANAME_SOURCE_URL"
+    printf '\n'
   else
     printf '%s\n' "Kaname installer — $STAMP" "Source: $KANAME_SOURCE_URL"
   fi
 }
 
-# $1 percent, $2 label
-draw_bar() {
-  _f=$(( $1 * 34 / 100 )) _on="" _off="" _j=0
-  while [ "$_j" -lt "$_f" ]; do _on="$_on$BAR_ON"; _j=$((_j + 1)); done
-  while [ "$_j" -lt 34 ]; do _off="$_off$BAR_OFF"; _j=$((_j + 1)); done
-  printf '\r%s  %s%s%s%s%s  %s%3d%%%s  %s%s%s' "$CLR" \
-    "$C_MAGENTA" "$_on" "$C_DIM" "$_off" "$C_RESET" \
-    "$C_BOLD" "$1" "$C_RESET" "$C_DIM" "$2" "$C_RESET"
+# A closing line: the accent mark and a bold sentence.
+headline() {
+  printf '\n'
+  [ "$UI" != 1 ] || rule
+  printf '  %s%s%s%s%s\n\n' "$C_ACCENT" "${HEAD_MARK:-}" "$C_RESET$C_BOLD" "$1" "$C_RESET"
+  to_log "$1"
 }
 
-# A summary line: dim label, bold value. The log gets it plain.
+# A summary line: muted label, value. $3 colours the value. The log
+# gets it plain.
 kv() {
-  printf '  %s%-14s%s %s%s%s\n' "$C_DIM" "$1" "$C_RESET" "$C_BOLD" "$2" "$C_RESET"
+  printf '  %s%-12s%s %s%s%s\n' "$C_MUTED" "$1" "$C_RESET" "${3:-}" "$2" "$C_RESET"
   to_log "  $1  $2"
 }
 
@@ -719,7 +793,7 @@ pull_progress() {
       "Pull complete"*|"Already exists"*)
         case "$_done" in *" $_id "*) ;; *) _done="$_done$_id " _finished=$((_finished + 1)) ;; esac ;;
     esac
-    draw_bar $(( ($1 * 100 + _finished * 100 / _total) / $2 )) "pulling $3$DOTS"
+    bar_set $(( ($1 * 100 + _finished * 100 / _total) / $2 )) "$3$SEP$_finished/$_total layers"
   done
   return "$_rc"
 }
@@ -744,11 +818,7 @@ pull_images() {
     n=$((n + 1))
   done
   detail "$names"
-  spin_stop
-  row "$C_MAGENTA${FRAMES%% *}$C_RESET" ""
-  printf '\n'
-  BAR_LINE=1
-  draw_bar 0 "pulling images$DOTS"
+  bar_open "starting"
 
   i=0
   for img in $images; do
@@ -757,7 +827,7 @@ pull_images() {
     { docker pull "$img" 2>&1 && echo "__kaname_pulled"; } | pull_progress "$i" "$n" "$short" ||
       die "could not pull $img. See $LOG_FILE."
     i=$((i + 1))
-    draw_bar $(( i * 100 / n )) "pulling images$DOTS"
+    bar_set $(( i * 100 / n )) "$i/$n images"
   done
 }
 
@@ -1042,16 +1112,15 @@ summary() {
   installed="$(grep '^KANAME_VERSION=' "$DATA_DIR/.env" | cut -d= -f2-)"
 
   step_end
-  printf '\n  %s%sKaname %s is running.%s\n\n' "$C_GREEN$C_BOLD" "$DONE_MARK" "$installed" "$C_RESET"
-  to_log "Kaname $installed is running."
-  kv "Open" "$url"
-  kv "Setup token" "$token"
+  headline "Kaname $installed is running."
+  kv "open" "$url" "$C_ACCENT$C_BOLD"
+  kv "setup token" "$token" "$C_BOLD"
   say ""
   say "  The token is asked for once, on the first screen, and stops working as"
   say "  soon as an account exists."
   say ""
-  kv "Secrets" "$DATA_DIR/.env  (back up KANAME_MASTER_KEY)"
-  kv "Install log" "$LOG_FILE"
+  kv "secrets" "$DATA_DIR/.env  (back up KANAME_MASTER_KEY)"
+  kv "install log" "$LOG_FILE"
   say ""
   say "  A domain and HTTPS can be set later from Administration in the panel."
   say "  $url keeps working after that."
@@ -1073,13 +1142,12 @@ agent should dial, e.g. http://203.0.113.10"
   install_agent "$CONTROL_PLANE" "$TOKEN"
   step_end
 
-  printf '\n  %s%skanamed is installed and dialling %s.%s\n' "$C_GREEN$C_BOLD" "$DONE_MARK" "$CONTROL_PLANE" "$C_RESET"
-  to_log "kanamed is installed and dialling $CONTROL_PLANE."
+  headline "kanamed is installed and dialling $CONTROL_PLANE."
   say "  It should appear in the panel within a few seconds."
   say ""
-  kv "Status" "systemctl status kanamed"
-  kv "Logs" "journalctl -u kanamed -f"
-  kv "Install log" "$LOG_FILE"
+  kv "status" "systemctl status kanamed"
+  kv "logs" "journalctl -u kanamed -f"
+  kv "install log" "$LOG_FILE"
   exit 0
 fi
 
