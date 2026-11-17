@@ -68,6 +68,8 @@ kaname installer
                            whose own interface carries a private address (cloud NAT).
                            KANAME_PUBLIC_URL in the environment does the same.
   --force                  Destroy an existing install first. Never the default.
+                           KANAME_THEME=light|dark picks the colours when the
+                           terminal's background cannot be detected.
   --help                   This.
 USAGE
 }
@@ -125,10 +127,37 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 UI=0
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then UI=1; fi
 
-# The panel's tokens (packages/ui/src/styles/tokens.css): accent 400 and
-# 500, ok, warn, danger, text-3, and a track a step above surface-3.
-# Exact on a 24-bit terminal, the nearest xterm-256 colour otherwise,
-# and the basic eight on anything older.
+# Light or dark background, so the palette below can match it:
+# KANAME_THEME=light|dark if set, then COLORFGBG (rxvt, Konsole and
+# friends), then the terminal itself, asked for its background colour
+# (OSC 11) with half a second to answer. Dark when nothing answers.
+detect_theme() {
+  case "${KANAME_THEME:-}" in light|dark) echo "$KANAME_THEME"; return 0 ;; esac
+  case "${COLORFGBG:-}" in
+    *\;7|*\;15) echo light; return 0 ;;
+    *\;[0-9]|*\;1[0-4]) echo dark; return 0 ;;
+  esac
+  _tty="$( { stty -g </dev/tty; } 2>/dev/null)" || { echo dark; return 0; }
+  { stty -echo -icanon min 0 time 5 </dev/tty; } 2>/dev/null || { echo dark; return 0; }
+  printf '%s]11;?%s' "$e" "$e\\" >/dev/tty
+  _ans="$(dd bs=128 count=1 </dev/tty 2>/dev/null | tr -d '\033\007')" || _ans=""
+  stty "$_tty" </dev/tty 2>/dev/null || true
+  # "rgb:RRRR/GGGG/BBBB": the first two hex digits of each are enough.
+  _rgb="$(printf '%s' "$_ans" |
+    sed -n 's/.*rgb:\([0-9a-fA-F][0-9a-fA-F]\)[0-9a-fA-F]*\/\([0-9a-fA-F][0-9a-fA-F]\)[0-9a-fA-F]*\/\([0-9a-fA-F][0-9a-fA-F]\).*/\1 \2 \3/p')"
+  if [ -n "$_rgb" ]; then
+    # shellcheck disable=SC2086 # three words on purpose
+    set -- $_rgb
+    if [ $(( 0x$1 * 299 + 0x$2 * 587 + 0x$3 * 114 )) -gt 127500 ]; then echo light; return 0; fi
+  fi
+  echo dark
+}
+
+# The panel's tokens (packages/ui/src/styles/tokens.css), from its dark
+# or its light (paper) theme: accent 400 for text, accent 500 for the
+# bar, ok, warn, danger, text-3, and a track for the empty part of the
+# bar. Exact on a 24-bit terminal, the nearest xterm-256 colour
+# otherwise, and the basic eight on anything older.
 C_RESET="" C_BOLD="" C_ACCENT="" C_FILL="" C_OK="" C_WARN="" C_DANGER="" C_MUTED="" C_TRACK=""
 CLR="" UP="" HIDE_CURSOR="" SHOW_CURSOR=""
 if [ "$UI" = 1 ]; then
@@ -147,13 +176,23 @@ if [ "$UI" = 1 ]; then
     esac
   }
   C_RESET="${e}[0m" C_BOLD="${e}[1m"
-  C_ACCENT="$(colour '169;141;248' 141 35)"
-  C_FILL="$(colour '122;79;244' 99 35)"
-  C_OK="$(colour '79;227;203' 79 36)"
-  C_WARN="$(colour '251;177;60' 215 33)"
-  C_DANGER="$(colour '244;91;105' 204 31)"
-  C_MUTED="$(colour '142;141;139' 245 2)"
-  C_TRACK="$(colour '58;58;66' 237 2)"
+  if [ "$(detect_theme)" = light ]; then
+    C_ACCENT="$(colour '106;62;232' 56 35)"
+    C_FILL="$(colour '122;79;244' 99 35)"
+    C_OK="$(colour '11;117;100' 29 32)"
+    C_WARN="$(colour '143;83;0' 130 33)"
+    C_DANGER="$(colour '196;43;60' 161 31)"
+    C_MUTED="$(colour '107;107;116' 242 2)"
+    C_TRACK="$(colour '214;211;204' 252 2)"
+  else
+    C_ACCENT="$(colour '169;141;248' 141 35)"
+    C_FILL="$(colour '122;79;244' 99 35)"
+    C_OK="$(colour '79;227;203' 79 36)"
+    C_WARN="$(colour '251;177;60' 215 33)"
+    C_DANGER="$(colour '244;91;105' 204 31)"
+    C_MUTED="$(colour '142;141;139' 245 2)"
+    C_TRACK="$(colour '58;58;66' 237 2)"
+  fi
   CLR="${e}[2K" UP="${e}[1A" HIDE_CURSOR="${e}[?25l" SHOW_CURSOR="${e}[?25h"
 fi
 
