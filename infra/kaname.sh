@@ -459,14 +459,15 @@ banner() {
   to_log "$UI_TITLE $STAMP, source $KANAME_SOURCE_URL"
   if [ "$UI" = 1 ]; then
     printf '%s\n' "$HIDE_CURSOR"
-    printf '  %s%s%s %skaname%s  %s%s%s\n' "$C_ACCENT" "$MARK" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_MUTED" "$UI_ROLE" "$C_RESET"
+    printf '  %s%s%s %skaname%s  %s%s%sby%s FutureForge Studios\n' "$C_ACCENT" "$MARK" "$C_RESET" \
+      "$C_BOLD" "$C_RESET" "$C_MUTED" "$UI_ROLE" "$SEP" "$C_RESET"
     printf '  %s%s%s\n' "$C_MUTED" "$UI_TAGLINE" "$C_RESET"
     rule
     [ -z "$LOG_FILE" ] || kv "log" "$LOG_FILE"
     kv "source" "$KANAME_SOURCE_URL"
     printf '\n'
   else
-    printf '%s\n' "$UI_TITLE — $STAMP" "Source: $KANAME_SOURCE_URL"
+    printf '%s\n' "$UI_TITLE by FutureForge Studios — $STAMP" "Source: $KANAME_SOURCE_URL"
   fi
 }
 
