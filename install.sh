@@ -60,7 +60,7 @@ FORCE=0
 
 usage() {
   cat <<'USAGE'
-kaname installer
+kaname installer, by FutureForge Studios
 
   --control-plane-only     Install the control plane, do not pair an agent here.
   --agent-only             Install only the agent. Requires --token and --control-plane.

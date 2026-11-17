@@ -4,6 +4,8 @@
 
 **要** — the keystone. The control plane for your infrastructure.
 
+by [FutureForge Studios](https://ffstudios.io)
+
 </div>
 
 Kaname is a self-hosted control panel for a small fleet of Linux servers: infrastructure,

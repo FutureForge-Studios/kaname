@@ -61,10 +61,12 @@ export interface WordmarkProps extends React.HTMLAttributes<HTMLSpanElement> {
   size?: number;
   /** Hides the word, leaving the mark — the collapsed sidebar state. */
   markOnly?: boolean;
+  /** Adds "by FutureForge Studios" under the word. */
+  byline?: boolean;
 }
 
 export const Wordmark = React.forwardRef<HTMLSpanElement, WordmarkProps>(function Wordmark(
-  { size = 20, markOnly = false, className, ...props },
+  { size = 20, markOnly = false, byline = false, className, ...props },
   ref,
 ) {
   return (
@@ -75,14 +77,21 @@ export const Wordmark = React.forwardRef<HTMLSpanElement, WordmarkProps>(functio
     >
       <Logo size={size} />
       {!markOnly && (
-        <span
-          className="font-medium leading-none tracking-[-0.03em] text-[var(--kn-text)]"
-          style={{ fontSize: Math.round(size * 0.82) }}
-        >
-          Kaname
+        <span className="inline-flex min-w-0 flex-col gap-1">
+          <span
+            className="font-medium leading-none tracking-[-0.03em] text-[var(--kn-text)]"
+            style={{ fontSize: Math.round(size * 0.82) }}
+          >
+            Kaname
+          </span>
+          {byline && (
+            <span className="truncate text-[11px] leading-none text-[var(--kn-text-3)]">
+              by FutureForge Studios
+            </span>
+          )}
         </span>
       )}
-      <span className="sr-only">{markOnly ? "Kaname" : ""}</span>
+      <span className="sr-only">{markOnly ? "Kaname by FutureForge Studios" : ""}</span>
     </span>
   );
 });

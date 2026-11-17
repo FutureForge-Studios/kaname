@@ -27,7 +27,7 @@ export function StandaloneFrame({
     <GridBackdrop rails railInset={12} glow="right" fade className="flex min-h-dvh flex-col">
       <header className="kn-crosshairs shrink-0 border-b border-[var(--kn-border)]">
         <div className="mx-auto flex h-14 w-full max-w-7xl items-center justify-between gap-4 px-6 sm:px-10 lg:px-16">
-          <Wordmark size={22} />
+          <Wordmark size={22} byline />
           {caption && (
             <MonoLabel as="p" size="xs" className="m-0 min-w-0 truncate">
               {caption}

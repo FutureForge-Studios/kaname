@@ -40,7 +40,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 const BACKOFF_RESET_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Parser)]
-#[command(name = "kanamed", version = VERSION, about = "kanamed — the Kaname agent")]
+#[command(name = "kanamed", version = VERSION, about = "kanamed — the Kaname agent, by FutureForge Studios")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,

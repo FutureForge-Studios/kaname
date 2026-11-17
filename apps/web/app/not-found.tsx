@@ -18,7 +18,7 @@ export default function RootNotFound() {
   return (
     <GridBackdrop rails fade className="flex min-h-dvh flex-col px-6 sm:px-16">
       <header className="flex h-[var(--kn-topbar-h)] shrink-0 items-center">
-        <Wordmark size={22} />
+        <Wordmark size={22} byline />
       </header>
       <main className="flex flex-1 items-center py-16">
         <PageHero

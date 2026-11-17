@@ -24,11 +24,14 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "Kaname",
+    default: "Kaname by FutureForge Studios",
     template: "%s · Kaname",
   },
   description: "The control plane for your infrastructure.",
   applicationName: "Kaname",
+  authors: [{ name: "FutureForge Studios", url: "https://ffstudios.io" }],
+  creator: "FutureForge Studios",
+  publisher: "FutureForge Studios",
   /* This panel is reachable only with a session; nothing here belongs in an index. */
   robots: { index: false, follow: false },
   formatDetection: { telephone: false, address: false, email: false },

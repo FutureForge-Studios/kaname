@@ -69,7 +69,7 @@ EXIT_AVAILABLE=10
 
 usage() {
   cat <<'USAGE'
-kaname — the command on a Kaname host
+kaname — the command on a Kaname host, by FutureForge Studios
 
   sudo kaname update         Update this host to the newest release on its channel:
                              the control plane, the panel and the local agent.

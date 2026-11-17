@@ -75,13 +75,13 @@ export function Sidebar({
         >
           <Link
             href="/"
-            aria-label={branding ? `${branding.display_name} — Home` : "Kaname — Command Center"}
+            aria-label={branding ? `${branding.display_name} — Home` : "Kaname by FutureForge Studios — Command Center"}
             className="min-w-0 rounded-[var(--kn-r-sm)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
           >
             {branding ? (
               <BrandMark branding={branding} markOnly={narrow} />
             ) : (
-              <Wordmark markOnly={narrow} />
+              <Wordmark markOnly={narrow} byline />
             )}
           </Link>
           {!narrow && onCollapsedChange && (
