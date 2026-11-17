@@ -198,11 +198,11 @@ fi
 
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*)
-    TICK="✓" CROSS="✗" SEP=" · " MARK="◆" RULE="─" BAR_ON="━" BAR_HALF="╸" BAR_OFF="━"
+    TICK="✓" CROSS="✗" SEP=" · " MARK="◆" RULE="─" BAR_ON="━" BAR_OFF="━"
     # The keystone (要, kaname) filling and emptying.
     FRAMES="◇ ◇ ◈ ◆ ◆ ◈" ;;
   *)
-    TICK="+" CROSS="x" SEP=", " MARK="*" RULE="-" BAR_ON="=" BAR_HALF="-" BAR_OFF="-"
+    TICK="+" CROSS="x" SEP=", " MARK="*" RULE="-" BAR_ON="=" BAR_OFF="-"
     FRAMES="| / - \\" ;;
 esac
 
@@ -262,14 +262,12 @@ row_s() {
 row() { row_s "$@"; printf '%s' "$ROW"; }
 
 # The bar beneath the stage's line into BAR, aligned under the title,
-# 30 cells drawn in half-cell steps. $1 progress in tenths of a
-# percent, $2 label.
+# 30 cells. (Half cells were tried: a half-width glyph leaves a visible
+# gap before the track.) $1 progress in tenths of a percent, $2 label.
 bar_s() {
-  _h=$(( $1 * 60 / 1000 ))
-  _f=$(( _h / 2 )) _half="" _e=$(( 30 - _h / 2 ))
-  if [ $(( _h % 2 )) = 1 ]; then _half="$BAR_HALF" _e=$(( _e - 1 )); fi
-  BAR="$(printf '\r%s            %s%s%s%s%s%s  %s%3d%%%s  %s%s%s' "$CLR" \
-    "$C_FILL" "$(repeat "$_f" "$BAR_ON")" "$_half" "$C_TRACK" "$(repeat "$_e" "$BAR_OFF")" "$C_RESET" \
+  _f=$(( $1 * 30 / 1000 ))
+  BAR="$(printf '\r%s            %s%s%s%s%s  %s%3d%%%s  %s%s%s' "$CLR" \
+    "$C_FILL" "$(repeat "$_f" "$BAR_ON")" "$C_TRACK" "$(repeat $((30 - _f)) "$BAR_OFF")" "$C_RESET" \
     "$C_ACCENT$C_BOLD" $(( $1 / 10 )) "$C_RESET" "$C_MUTED" "$2" "$C_RESET")"
 }
 
