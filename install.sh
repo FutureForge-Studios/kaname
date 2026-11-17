@@ -843,7 +843,7 @@ pull_progress() {
     case "$_id" in ''|*[!0-9a-f]*) continue ;; esac
     case "$_seen" in *" $_id "*) ;; *) _seen="$_seen$_id " _total=$((_total + 1)) ;; esac
     case "${line#*: }" in
-      "Pull complete"*|"Already exists"*)
+      "Download complete"*|"Pull complete"*|"Already exists"*)
         case "$_done" in *" $_id "*) ;; *) _done="$_done$_id " _finished=$((_finished + 1)) ;; esac ;;
     esac
     bar_set $(( ($1 * 1000 + _finished * 1000 / _total) / $2 )) \
