@@ -12,14 +12,15 @@
 # reach the health check below, let alone the rollback.
 #
 # `apply` is started by the path unit install.sh installs, when the
-# control plane writes <data-dir>/updates/queue/request.json. The
-# control plane has already done everything reversible before handing
-# over — it snapshotted .env and wrote the new values into it. This
-# script pulls, restarts, checks, and puts the snapshot back if the new
-# build does not answer. Everything it does is written to the request's
-# log file, and every turn it takes to <data-dir>/updates/<run>.result,
-# which is how the control plane — the one still running, or the one
-# that boots next — finds out what happened.
+# control plane — or `kaname update` on this host, when the control plane
+# cannot — writes <data-dir>/updates/queue/request.json. Whoever wrote
+# it has already done everything reversible before handing over: it
+# snapshotted .env and wrote the new values into it. This script pulls,
+# restarts, checks, and puts the snapshot back if the new build does not
+# answer. Everything it does is written to the request's log file, and
+# every turn it takes to <data-dir>/updates/<run>.result, which is how
+# the control plane — the one still running, or the one that boots next
+# — and `kaname update` find out what happened.
 # ==================================================================
 set -eu
 
@@ -245,10 +246,22 @@ do_update() {
   say "==> applying $TO_VERSION over $FROM_VERSION (run $RUN_ID)"
 
   # 1. Pull first. Nothing is stopped yet, so a pull that fails costs
-  #    nothing but the time it took.
+  #    nothing but the time it took. One image at a time, with docker
+  #    pull's own lines in the log ("<layer>: Pull complete"): they are
+  #    what `kaname update` draws its progress bar from.
   PHASE=pulling
   say "--> pulling images"
-  if ! compose pull control-plane web >>"$LOG_FILE" 2>&1; then
+  image_cp="$(env_value KANAME_IMAGE_CONTROL_PLANE)"
+  image_web="$(env_value KANAME_IMAGE_WEB)"
+  if [ -n "$image_cp" ] && [ -n "$image_web" ]; then
+    for image in "$image_cp" "$image_web"; do
+      say "--> pulling $image"
+      if ! docker pull "$image" >>"$LOG_FILE" 2>&1; then
+        say "!! could not pull $image for $TO_VERSION"
+        rollback pull_failed
+      fi
+    done
+  elif ! compose pull control-plane web >>"$LOG_FILE" 2>&1; then
     say "!! could not pull the images for $TO_VERSION"
     rollback pull_failed
   fi
@@ -302,7 +315,48 @@ do_reconfigure() {
   exit 1
 }
 
+# ------------------------------------------------------------------
+# One apply at a time
+#
+# Requests come from the panel and from `kaname update` on the host. The
+# path unit never starts a second copy of itself, but nothing stops a
+# person running this by hand, so the lock is taken here, before the
+# queue is read: a second apply waits for the first to finish rather
+# than restarting the containers underneath it.
+# ------------------------------------------------------------------
+LOCK_DIR=""
+
+release_lock() {
+  [ -z "$LOCK_DIR" ] || rm -rf "$LOCK_DIR"
+}
+
+take_lock() {
+  mkdir -p "$DATA_DIR/updates"
+  lock="$DATA_DIR/updates/.lock"
+  if command -v flock >/dev/null 2>&1; then
+    # Held for as long as this process has descriptor 9 open, so it goes
+    # away with the process however that ends.
+    exec 9>"$lock"
+    flock 9
+    return 0
+  fi
+  # No flock (BusyBox without it): a directory is created atomically.
+  # A holder that died without cleaning up is recognised by its pid.
+  while ! mkdir "$lock.d" 2>/dev/null; do
+    holder="$(cat "$lock.d/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      rm -rf "$lock.d"
+      continue
+    fi
+    sleep 1
+  done
+  echo "$$" >"$lock.d/pid"
+  LOCK_DIR="$lock.d"
+  trap release_lock EXIT
+}
+
 apply() {
+  take_lock
   [ -f "$QUEUE" ] || exit 0
 
   KIND="$(field kind)"
