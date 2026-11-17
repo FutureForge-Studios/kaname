@@ -199,7 +199,8 @@ fi
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*)
     TICK="✓" CROSS="✗" SEP=" · " MARK="◆" RULE="─" BAR_ON="━" BAR_OFF="━"
-    FRAMES="⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏" ;;
+    # The keystone (要, kaname) filling and emptying.
+    FRAMES="◇ ◇ ◈ ◆ ◆ ◈" ;;
   *)
     TICK="+" CROSS="x" SEP=", " MARK="*" RULE="-" BAR_ON="=" BAR_OFF="-"
     FRAMES="| / - \\" ;;
