@@ -117,6 +117,9 @@ printf 'FROM %s\nCMD ["node", "-e", "console.error(\\"e2e: this build never come
 push kaname-e2e/broken "$REG/kaname-control-plane:$BROKEN"
 push "$E2E_WEB_IMAGE" "$REG/kaname-web:$BROKEN"
 if [ -n "${E2E_LEGACY:-}" ]; then
+  # Published images: pulled, since a fresh runner has none of them.
+  docker pull -q "ghcr.io/futureforge-studios/kaname-control-plane:$E2E_LEGACY"
+  docker pull -q "ghcr.io/futureforge-studios/kaname-web:$E2E_LEGACY"
   push "ghcr.io/futureforge-studios/kaname-control-plane:$E2E_LEGACY" "$REG/kaname-control-plane:$E2E_LEGACY"
   push "ghcr.io/futureforge-studios/kaname-web:$E2E_LEGACY" "$REG/kaname-web:$E2E_LEGACY"
 fi
