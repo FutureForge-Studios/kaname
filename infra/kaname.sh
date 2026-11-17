@@ -777,6 +777,7 @@ health() { curl -fsS --max-time 5 "$KANAME_LOCAL_API/health" 2>/dev/null; }
 # Free space where the images and the dump land.
 check_space() {
   _docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null)" || _docker_root=""
+  _least=""
   for _dir in ${_docker_root:+"$_docker_root"} "$DATA_DIR"; do
     _free="$(free_mb "$_dir")"
     case "$_free" in ''|*[!0-9]*) warn "could not read the free space in $_dir"; continue ;; esac
@@ -784,7 +785,10 @@ check_space() {
       die "only ${_free} MB free in $_dir; an update needs at least $MIN_FREE_MB MB there
 for the new images and the database dump. Free some space and run this again
 (docker image prune removes images nothing uses)."
-    FREE_DESC="${_free} MB free"
+    if [ -z "$_least" ] || [ "$_free" -lt "$_least" ]; then
+      _least="$_free"
+      FREE_DESC="$((_free / 1024)) GB free"
+    fi
   done
 }
 
@@ -849,9 +853,9 @@ Re-running install.sh puts it back as well."
     STEP_TOTAL=$((3 + 6 + _agent + 1))
   fi
 
-  _panel="control plane down"
-  if [ "$PANEL_UP" = 1 ]; then _panel="control plane up"; fi
-  detail "linux/$ARCH$SEP$_panel${FREE_DESC:+$SEP$FREE_DESC}"
+  _panel="panel down"
+  if [ "$PANEL_UP" = 1 ]; then _panel="panel up"; fi
+  detail "$ARCH$SEP$_panel${FREE_DESC:+$SEP$FREE_DESC}"
 }
 
 # ------------------------------------------------------------------
@@ -882,7 +886,7 @@ load_manifest() {
 read_manifest() {
   step "Reading the manifest"
   load_manifest || die "$MANIFEST_ERROR"
-  detail "$(wc -l <"$RELEASES" | tr -d ' ') releases$SEP$(head -n 1 "$RELEASES" | cut -f1) newest"
+  detail "$(wc -l <"$RELEASES" | tr -d ' ') releases"
 }
 
 choose_release() {
@@ -918,12 +922,14 @@ choose_release() {
 Update to $MIN_FROM first: sudo kaname update --version=$MIN_FROM"
   fi
 
-  _flags=""
-  [ "$DOWNGRADE" = 0 ] || _flags="${_flags}${SEP}downgrade"
-  ! is_true "$BREAKING" || _flags="${_flags}${SEP}breaking"
-  ! is_true "$DESTRUCTIVE" || _flags="${_flags}${SEP}destructive"
-  ! is_true "$SECURITY" || _flags="${_flags}${SEP}security"
-  detail "$CURRENT → $TARGET$_flags"
+  # The weightiest flag only; the release block below lists them all.
+  _flag=""
+  if [ "$DOWNGRADE" = 1 ]; then _flag="downgrade"
+  elif is_true "$BREAKING"; then _flag="breaking"
+  elif is_true "$DESTRUCTIVE"; then _flag="destructive"
+  elif is_true "$SECURITY"; then _flag="security"
+  fi
+  detail "$CURRENT → $TARGET${_flag:+$SEP$_flag}"
 }
 
 # Agent-only host: the release its control plane runs, if that answers
@@ -949,7 +955,7 @@ cp_version_known() {
 choose_path() {
   PATH_KIND=direct PATH_WHY=""
   if [ "$MODE" = agent ]; then PATH_KIND=agent; return 0; fi
-  if [ "$DIRECT" = 1 ]; then PATH_WHY="--direct"
+  if [ "$DIRECT" = 1 ]; then PATH_WHY="asked for with --direct"
   elif [ "$DOWNGRADE" = 1 ]; then PATH_WHY="the panel never applies an older release"
   elif [ "$PANEL_UP" = 0 ]; then PATH_WHY="the control plane is not answering"
   elif [ "$PANEL_CONSOLE" = 0 ]; then PATH_WHY="this control plane predates the server console"
@@ -1008,7 +1014,7 @@ confirm_release() {
 database the newer one may have migrated; restoring the backup taken before
 the upgrade is usually the safer way back. To do it anyway:
   sudo kaname update --version=$TARGET --yes"
-    warn "downgrading from $CURRENT to $TARGET (--yes)"
+    to_log "    downgrading from $CURRENT to $TARGET (--yes)"
   fi
 
   needs_confirmation || return 0
@@ -1079,7 +1085,7 @@ could be taken. Nothing was changed. See $LOG_FILE."
   { compose exec -T postgres pg_dump -U kaname -d kaname --clean --if-exists --no-owner 2>>"$LOG_FILE" ||
       : >"$WORK/dump.failed"; } | gzip -c >"$_dump.partial"
   if [ -f "$WORK/dump.failed" ] || ! gzip -t "$_dump.partial" 2>/dev/null ||
-    ! gzip -dc "$_dump.partial" | head -c 4096 | grep -q 'PostgreSQL database dump'; then
+    ! gzip -dc "$_dump.partial" 2>/dev/null | head -c 4096 | grep -q 'PostgreSQL database dump'; then
     rm -f "$_dump.partial"
     die_with "$EXIT_REFUSED" "could not dump the database, so there would be no way back from a bad
 migration. Nothing was changed. See $LOG_FILE.
@@ -1090,7 +1096,11 @@ migration. Nothing was changed. See $LOG_FILE.
   DUMP="$_dump"
   _size="$(du -k "$DUMP" | cut -f1)"
   log "    database dumped to $DUMP"
-  detail "db.sql.gz$SEP$((_size / 1024)) MB"
+  if [ "$_size" -lt 1024 ]; then
+    detail "db.sql.gz$SEP$_size KB"
+  else
+    detail "db.sql.gz$SEP$((_size / 1024)) MB"
+  fi
 }
 
 # Adds the keys the release declares it needs, an existing value always
@@ -1210,7 +1220,7 @@ and .env was put back. Check:
     _i=$((_i + 1))
     nap 0.2
   done
-  detail "picked up by kaname-update.service"
+  detail "picked up by the host unit"
 }
 
 # ------------------------------------------------------------------
@@ -1255,7 +1265,7 @@ handover_panel() {
       RUN_RESULT="$(json_field "$_answer" result_file)"
       [ -n "$RUN_ID" ] && [ -n "$RUN_LOG" ] || die "the server console answered without a run: $_answer"
       log "    run $RUN_ID"
-      detail "run ${RUN_ID%%-*}${SEP}snapshot and pin by the panel"
+      detail "run ${RUN_ID%%-*}"
       ;;
     up_to_date)
       die "the control plane says it is already running $TARGET."
@@ -1440,12 +1450,16 @@ describe_reason() {
   esac
 }
 
+# Run from the data directory, Compose finds the project file and .env
+# by itself, which keeps every line short enough to copy.
 restore_command() {
   printf '      %s\n' \
-    "docker compose -p $PROJECT -f $DATA_DIR/docker-compose.yml stop control-plane web" \
-    "gunzip -c $1 | docker compose -p $PROJECT -f $DATA_DIR/docker-compose.yml \\" \
-    "  exec -T postgres psql -U kaname -d kaname -v ON_ERROR_STOP=1 --single-transaction" \
-    "docker compose -p $PROJECT -f $DATA_DIR/docker-compose.yml start control-plane web"
+    "cd $DATA_DIR" \
+    "docker compose -p $PROJECT stop control-plane web" \
+    "gunzip -c ${1#"$DATA_DIR"/} |" \
+    "  docker compose -p $PROJECT exec -T postgres \\" \
+    "  psql -U kaname -d kaname -v ON_ERROR_STOP=1 --single-transaction" \
+    "docker compose -p $PROJECT start control-plane web"
 }
 
 # The run did not succeed: say what happened and what is running now.
@@ -1636,7 +1650,7 @@ refresh_file() {
 # Fetches the scripts that belong to release $1: from its tag when the
 # source is the upstream branch, else from the source itself.
 refresh_command() {
-  step "Refreshing the kaname command"
+  step "Refreshing kaname"
   _bases="$KANAME_SOURCE_URL"
   case "$KANAME_SOURCE_URL" in
     */main) _bases="${KANAME_SOURCE_URL%/main}/v$1 $KANAME_SOURCE_URL" ;;
@@ -1772,6 +1786,8 @@ Check: systemctl status kaname-update.path kaname-update.service"
   fi
   step_end
   headline "Kaname ${CURRENT:+$CURRENT → }${TARGET:-the new release} is running."
+  _url="$(env_value KANAME_PUBLIC_URL)"
+  [ -z "$_url" ] || kv "open" "$_url" "$C_ACCENT$C_BOLD"
   kv "run" "$RUN_ID"
   [ -z "$AGENT_RESULT" ] || kv "agent" "$AGENT_RESULT"
   kv "log" "$LOG_FILE"
@@ -1897,7 +1913,8 @@ headline "Kaname $CURRENT → $TARGET is running."
 _url="$(env_value KANAME_PUBLIC_URL)"
 [ -z "$_url" ] || kv "open" "$_url" "$C_ACCENT$C_BOLD"
 [ -z "$AGENT_RESULT" ] || kv "agent" "$AGENT_RESULT"
-kv "run" "$RUN_ID${SEP}in Administration > Updates"
+kv "run" "$RUN_ID"
+kv "history" "Administration > Updates"
 [ -z "$DUMP" ] || kv "dump" "$DUMP"
 kv "log" "$LOG_FILE"
 exit "$EXIT_OK"
