@@ -1718,6 +1718,8 @@ fi
 
 [ "$(id -u)" = 0 ] || { echo "kaname: run this as root: sudo kaname update" >&2; exit 1; }
 
+# Nothing this writes is anyone else's to read; what has to be is chmod-ed so.
+umask 077
 WORK="$(mktemp -d)"
 if [ "$CHECK" = 0 ]; then
   if [ "$MODE" = cp ]; then _logs="$DATA_DIR/logs"; else _logs="$STATE_DIR/logs"; fi
@@ -1779,6 +1781,17 @@ Check: systemctl status kaname-update.path kaname-update.service"
     CURRENT="$(printf '%s' "$_first" | sed -n 's/.*==> applying \([^ ]*\) over \([^ ]*\).*/\2/p')"
   fi
   CURRENT="${CURRENT:-$(env_value KANAME_VERSION)}"
+  # What a failure report needs: the run's dump and migration count, if
+  # this command took them, and whether the release rewrites data.
+  if [ "$PATH_KIND" = direct ]; then
+    SNAP="$DATA_DIR/rollback/$RUN_ID"
+    [ ! -f "$SNAP/db.sql.gz" ] || DUMP="$SNAP/db.sql.gz"
+    MIGRATIONS_BEFORE="$(sed -n 's/.*"migrations_before": *\([0-9][0-9]*\).*/\1/p' "$SNAP/images.json" 2>/dev/null)" ||
+      MIGRATIONS_BEFORE=""
+  fi
+  if [ "$_have_manifest" = 1 ] && [ -n "$TARGET" ] && [ -n "$(rel "$TARGET" 1)" ]; then
+    DESTRUCTIVE="$(rel "$TARGET" 5)"
+  fi
   detail "re-attached to $RUN_ID"
   follow_run
   if [ "$VERDICT" != succeeded ]; then report_failure; fi
