@@ -59,7 +59,48 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck --version
-          shellcheck install.sh infra/*.sh
+          shellcheck install.sh infra/*.sh scripts/*.sh
+
+      # `kaname` (infra/kaname.sh) draws exactly what the installer
+      # draws. The block between the markers is copied, not shared at
+      # runtime, so a fix made to one copy has to reach the other.
+      - name: install.sh and kaname.sh share one terminal UI
+        run: |
+          block() { sed -n '/^# ---- kaname ui: begin ----$/,/^# ---- kaname ui: end ----$/p' "$1"; }
+          [ "$(block install.sh | wc -l)" -gt 100 ] || { echo "no ui block in install.sh"; exit 1; }
+          diff -u <(block install.sh) <(block infra/kaname.sh)
+
+      - name: Both parse as POSIX sh
+        run: |
+          sudo apt-get install -y -qq dash >/dev/null
+          for f in install.sh infra/*.sh; do dash -n "$f"; sh -n "$f"; done
+
+  # `sudo kaname update` against real containers on a real systemd host:
+  # install.sh installs one release built from this checkout, the update
+  # to the next goes through the panel, the published 0.2.0 (which has
+  # no server console) goes the direct path, and a build that never
+  # comes up is rolled back on both paths. See scripts/updater-e2e.sh.
+  updater-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the images from this checkout
+        run: |
+          docker build -f infra/Dockerfile.control-plane \
+            --build-arg KANAME_VERSION=9.0.0 -t kaname-e2e/control-plane .
+          docker build -f infra/Dockerfile.web \
+            --build-arg KANAME_CONTROL_PLANE_URL=http://control-plane:4000 -t kaname-e2e/web .
+
+      - name: install.sh, then kaname update
+        run: |
+          sudo env E2E_CP_IMAGE=kaname-e2e/control-plane E2E_WEB_IMAGE=kaname-e2e/web \
+            E2E_LEGACY=0.2.0 sh scripts/updater-e2e.sh
+
+      - name: What the host unit wrote
+        if: failure()
+        run: sudo journalctl -u kaname-update.service --no-pager -n 300 || true
 
   # The release manifest is built from release.json, and the hard rule
   # on unattended updates runs on what it says. A pull request that adds

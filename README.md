@@ -378,6 +378,78 @@ the release notes — summary, and whether it is breaking, migrates destructivel
 security issue. Dismissing it lasts until the next release; after the update the panel says
 "Updated to X" once.
 
+### From the server: `sudo kaname update`
+
+install.sh also installs `/usr/local/bin/kaname`, on a fresh install and on every repair. Over SSH,
+`sudo kaname update` moves the host to the newest release on its channel (stable, unless it runs
+a prerelease) — control plane, panel and the agent on the same box — with the installer's
+numbered steps and pull bar, and it works when the panel does not.
+
+```
+sudo kaname update                    # newest release on this host's channel
+sudo kaname update --check            # what it would do; changes nothing
+sudo kaname update --version=0.3.0    # that release instead
+```
+
+`--yes` confirms a breaking or destructive release without the prompt; with no terminal to ask
+on, such a release is refused rather than applied. An older release is only applied with
+`--version` and `--yes`. `--direct` takes the direct path below even when the panel is up.
+
+It takes one of two paths, and says which before it starts:
+
+- **Panel path** — the control plane is answering and its image has the server console. The
+  update is started through `docker compose exec` with the same apply the Updates page calls:
+  the same in-flight lock, the same refusals (breaking without confirmation, `min_upgrade_from`,
+  no backup in the last 24 hours unless `--skip-backup`, which is audited), the same snapshot
+  and run in History, started by "server console". No endpoint or token is involved: root on
+  the host is the authority.
+- **Direct path** — the control plane is down, or older than the server console (every 0.2.0
+  install), or `--direct`. The command does the panel's half itself: the same release checks,
+  then a database dump to `<data-dir>/rollback/host-<time>/db.sql.gz` (refused if the dump
+  fails; `--skip-backup` goes without it, except for a release whose migration rewrites data),
+  the `.env` snapshot beside it, the declared configuration keys added (existing values win)
+  and the three image keys pinned. The run is filed into History by the control plane once
+  the host unit has written its verdict.
+
+Either way the pull, the restart, the health check and the rollback are done by
+`kaname-update.service`, the same host unit the panel hands its updates to, and an exclusive
+lock in it means a panel update and a server one can never overlap. The command only follows
+the files that unit writes, so Ctrl-C or a dropped SSH session leaves the update running, and
+`sudo kaname update` run again re-attaches to the run in flight instead of starting another.
+At least 2 GB has to be free where Docker keeps its images and in the data directory.
+
+If the new build does not come up, the unit puts the previous one back and the command marks
+the failing step, prints the reason and the logs, and exits 5. If migrations from the new
+release had already run — or the release's migration rewrites data — it also prints the
+commands that put the dump back; it never restores a database on its own:
+
+```
+cd /etc/kaname
+docker compose -p kaname stop control-plane web
+gunzip -c rollback/host-<time>/db.sql.gz |
+  docker compose -p kaname exec -T postgres \
+  psql -U kaname -d kaname -v ON_ERROR_STOP=1 --single-transaction
+docker compose -p kaname start control-plane web
+```
+
+Only after the update has succeeded is the local agent updated: downloaded from the URL in the
+manifest, checked against its sha256, the old binary kept as `/var/lib/kaname/kanamed.previous`,
+swapped in with a rename and restarted. If it has not reconnected within 60 seconds the previous
+binary goes back and the command says so (the update itself still exits 0). Finally the
+command refreshes itself and the host helper from the new release, again by rename. On a host
+installed with `--agent-only`, `sudo kaname update` updates just the agent.
+
+| Exit |                                                                    |
+| ---- | ------------------------------------------------------------------ |
+| 0    | Updated, or already up to date.                                    |
+| 1    | Error.                                                             |
+| 2    | Usage.                                                             |
+| 3    | Refused: needs `--yes`, a release in between first, or a backup.   |
+| 4    | Another update is in flight.                                       |
+| 5    | The update failed and was rolled back; the previous version runs.  |
+| 6    | The rollback failed as well; this needs a person.                  |
+| 10   | `--check` only: an update is available.                            |
+
 ### Operating-system updates
 
 Each server's **System updates** tab lists the host's pending package updates (apt, dnf/yum, apk,
