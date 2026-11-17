@@ -15,8 +15,10 @@
 # working afterwards, so setting one cannot lock anyone out.
 #
 # This script is meant to be read before it is run. It fetches exactly
-# two files, both from KANAME_SOURCE_URL below, names that source when it
-# starts and logs each URL before it fetches it. Re-running it is a repair, never a wipe: --force
+# three files, all from KANAME_SOURCE_URL below — the Compose file, the
+# host helper and the `kaname` command (`sudo kaname update`) — names
+# that source when it starts and logs each URL before it fetches it.
+# Re-running it is a repair, never a wipe: --force
 # is the only thing that destroys data, and it says what first.
 # ==================================================================
 set -eu
@@ -31,7 +33,8 @@ KANAME_DEFAULT_VERSION="0.2.0"
 KANAME_MIN_DOCKER_MAJOR=24
 KANAME_COMPOSE_PROJECT="kaname"
 
-DATA_DIR="/etc/kaname"
+# KANAME_DATA_DIR moves the data root; the end-to-end tests use a throwaway one.
+DATA_DIR="${KANAME_DATA_DIR:-/etc/kaname}"
 STATE_DIR="/var/lib/kaname"
 BIN_DIR="/usr/local/bin"
 LIB_DIR="/usr/local/lib/kaname"
@@ -113,6 +116,14 @@ PUBLIC_URL="${PUBLIC_URL%/}"
 LOG_FILE=""
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
+# What the banner calls this script. Everything between the two ui
+# markers below is shared, byte for byte, with infra/kaname.sh (the
+# `kaname` command); CI fails if the copies drift apart.
+UI_TITLE="Kaname installer"
+UI_ROLE="installer"
+UI_TAGLINE="One panel for your servers. This sets it up; nothing to answer."
+
+# ---- kaname ui: begin ----
 # ------------------------------------------------------------------
 # Output. On a terminal each stage is one line, in the panel's colours:
 #
@@ -406,9 +417,10 @@ die() {
   printf '\n  %skaname:%s %s\n' "$C_DANGER$C_BOLD" "$C_RESET" "$*" >&2
   [ -n "$LOG_FILE" ] && printf 'FAILED %s\n' "$*" >>"$LOG_FILE"
   [ -n "$LOG_FILE" ] && printf '  %s%s%s\n' "$C_MUTED" "The full log is at $LOG_FILE" "$C_RESET" >&2
-  exit 1
+  exit "${DIE_STATUS:-1}"
 }
 
+# shellcheck disable=SC2329 # run by the EXIT trap
 ui_cleanup() {
   spin_stop
   [ -z "$BAR_STATE" ] || rm -f "$BAR_STATE"
@@ -423,17 +435,17 @@ HEAD_MARK=""
 rule() { printf '  %s%s%s\n' "$C_TRACK" "$(repeat "$RULE_W" "$RULE")" "$C_RESET"; }
 
 banner() {
-  to_log "Kaname installer $STAMP, source $KANAME_SOURCE_URL"
+  to_log "$UI_TITLE $STAMP, source $KANAME_SOURCE_URL"
   if [ "$UI" = 1 ]; then
     printf '%s\n' "$HIDE_CURSOR"
-    printf '  %s%s%s %skaname%s  %sinstaller%s\n' "$C_ACCENT" "$MARK" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_MUTED" "$C_RESET"
-    printf '  %sOne panel for your servers. This sets it up; nothing to answer.%s\n' "$C_MUTED" "$C_RESET"
+    printf '  %s%s%s %skaname%s  %s%s%s\n' "$C_ACCENT" "$MARK" "$C_RESET" "$C_BOLD" "$C_RESET" "$C_MUTED" "$UI_ROLE" "$C_RESET"
+    printf '  %s%s%s\n' "$C_MUTED" "$UI_TAGLINE" "$C_RESET"
     rule
-    kv "log" "$LOG_FILE"
+    [ -z "$LOG_FILE" ] || kv "log" "$LOG_FILE"
     kv "source" "$KANAME_SOURCE_URL"
     printf '\n'
   else
-    printf '%s\n' "Kaname installer — $STAMP" "Source: $KANAME_SOURCE_URL"
+    printf '%s\n' "$UI_TITLE — $STAMP" "Source: $KANAME_SOURCE_URL"
   fi
 }
 
@@ -451,6 +463,7 @@ kv() {
   printf '  %s%-12s%s %s%s%s\n' "$C_MUTED" "$1" "$C_RESET" "${3:-}" "$2" "$C_RESET"
   to_log "  $1  $2"
 }
+# ---- kaname ui: end ----
 
 open_log() {
   mkdir -p "$DATA_DIR/logs"
@@ -778,19 +791,35 @@ fetch() {
   mv "$2.partial" "$2"
 }
 
+# `kaname`, the command that updates this host later (`sudo kaname
+# update`). Swapped in with a rename, never rewritten in place: it may be
+# the very script a shell is running. The source it came from is kept
+# beside the host helper, so an update reads the same manifest this
+# install did.
+install_kaname_command() {
+  mkdir -p "$LIB_DIR"
+  printf '%s\n' "$KANAME_SOURCE_URL" >"$LIB_DIR/source"
+  log "    fetching $KANAME_SOURCE_URL/infra/kaname.sh"
+  $CURL "$KANAME_SOURCE_URL/infra/kaname.sh" -o "$BIN_DIR/kaname.new" 2>>"$LOG_FILE" ||
+    { rm -f "$BIN_DIR/kaname.new"; return 1; }
+  chmod 0755 "$BIN_DIR/kaname.new"
+  mv "$BIN_DIR/kaname.new" "$BIN_DIR/kaname"
+}
+
 fetch_deployment() {
   step "Downloading files"
   mkdir -p "$LIB_DIR"
   fetch "$KANAME_SOURCE_URL/infra/docker-compose.yml" "$DATA_DIR/docker-compose.yml"
   fetch "$KANAME_SOURCE_URL/infra/kaname-host.sh" "$LIB_DIR/kaname-host.sh"
   chmod 0755 "$LIB_DIR/kaname-host.sh"
+  install_kaname_command || die "could not download $KANAME_SOURCE_URL/infra/kaname.sh"
 
   # The Caddyfile is generated from .env rather than downloaded, so it
   # can never disagree with the configuration it is supposed to serve.
   "$LIB_DIR/kaname-host.sh" caddyfile "$DATA_DIR" >>"$LOG_FILE" 2>&1 ||
     die "could not generate $DATA_DIR/Caddyfile. See $LOG_FILE."
   log "    generated $DATA_DIR/Caddyfile"
-  detail "compose${SEP}host helper${SEP}Caddyfile"
+  detail "compose${SEP}helpers${SEP}Caddyfile"
 }
 
 # 6. The host-side helper. A container cannot restart itself and still be
@@ -1176,6 +1205,7 @@ summary() {
   say "  soon as an account exists."
   say ""
   kv "secrets" "$DATA_DIR/.env  (back up KANAME_MASTER_KEY)"
+  kv "update" "sudo kaname update  (or Administration > Updates)"
   kv "install log" "$LOG_FILE"
   say ""
   say "  A domain and HTTPS can be set later from Administration in the panel."
@@ -1196,6 +1226,10 @@ agent should dial, e.g. http://203.0.113.10"
   preflight
   step "Installing the agent"
   install_agent "$CONTROL_PLANE" "$TOKEN"
+  # The agent is what this run is for; a source that cannot be reached
+  # only costs the update command, which a re-run puts back.
+  install_kaname_command ||
+    warn "could not install the kaname command from $KANAME_SOURCE_URL; re-run this to add it"
   step_end
 
   headline "kanamed is installed and dialling $CONTROL_PLANE."
@@ -1203,6 +1237,7 @@ agent should dial, e.g. http://203.0.113.10"
   say ""
   kv "status" "systemctl status kanamed"
   kv "logs" "journalctl -u kanamed -f"
+  [ ! -x "$BIN_DIR/kaname" ] || kv "update" "sudo kaname update"
   kv "install log" "$LOG_FILE"
   exit 0
 fi
