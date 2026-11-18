@@ -195,9 +195,10 @@ export function DoneStep({ state, onStale }: { state: SetupState; onStale: () =>
           </StatusLine>
           <p className="m-0 text-[var(--kn-text-2)]">
             The address you are on keeps answering throughout, so nothing depends on the certificate
-            arriving. Once it does, <MonoText className="text-[var(--kn-text)]">{applied.public_url}</MonoText>{" "}
-            answers too — and if the A record is not pointing here yet, correct it and the request
-            retries on its own. The new name asks you to sign in once.
+            arriving. Once it does,{" "}
+            <MonoText className="text-[var(--kn-text)]">{applied.public_url}</MonoText> answers too
+            — and if the A record is not pointing here yet, correct it and the request retries on
+            its own. The new name asks you to sign in once.
           </p>
           <StepActions
             start={
@@ -258,7 +259,9 @@ export function DoneStep({ state, onStale }: { state: SetupState; onStale: () =>
                   className="group relative"
                   state={outcome === "done" ? "done" : "todo"}
                   title={SETUP_STEP_LABELS[step]}
-                  description={<span className="block truncate">{describe(step, facts, domain)}</span>}
+                  description={
+                    <span className="block truncate">{describe(step, facts, domain)}</span>
+                  }
                   action={
                     <>
                       <Badge tone={outcome === "done" ? "ok" : "neutral"} size="sm">
@@ -267,7 +270,7 @@ export function DoneStep({ state, onStale }: { state: SetupState; onStale: () =>
                       {/* The whole row is the link: its hit area is stretched over the item. */}
                       <Link
                         href={link.href}
-                        className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--kn-r-pill)] text-[var(--kn-text-3)] outline-none transition-colors duration-[var(--kn-dur-fast)] after:absolute after:inset-0 group-hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-[var(--kn-r-sm)] text-[var(--kn-text-3)] outline-none transition-colors duration-[var(--kn-dur-fast)] after:absolute after:inset-0 group-hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
                       >
                         <span className="sr-only">
                           {SETUP_STEP_LABELS[step]}: open {link.label}
@@ -284,8 +287,9 @@ export function DoneStep({ state, onStale }: { state: SetupState; onStale: () =>
 
         {domain && (
           <p className="m-0 text-sm text-[var(--kn-text-2)]">
-            Finishing names this panel <MonoText className="text-[var(--kn-text)]">{domain}</MonoText>.
-            Kaname restarts once to apply it, and this address keeps working while it does.
+            Finishing names this panel{" "}
+            <MonoText className="text-[var(--kn-text)]">{domain}</MonoText>. Kaname restarts once to
+            apply it, and this address keeps working while it does.
           </p>
         )}
 
@@ -301,8 +305,15 @@ export function DoneStep({ state, onStale }: { state: SetupState; onStale: () =>
             )
           }
         >
-          <Button type="submit" variant="primary" size="lg" arrow={!pending} loading={pending} autoFocus>
-            {error && completed ? "Try again" : "Open the Command Center"}
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            arrow={!pending}
+            loading={pending}
+            autoFocus
+          >
+            {error && completed ? "Try again" : "Open Projects"}
           </Button>
         </StepActions>
 
@@ -317,8 +328,8 @@ function MasterKeyNote() {
     <p className="m-0 flex items-start gap-2 text-sm text-[var(--kn-text-3)]">
       <TriangleAlert size={14} className="mt-0.5 shrink-0 text-[var(--kn-warn)]" aria-hidden />
       <span>
-        Back up <MonoText>KANAME_MASTER_KEY</MonoText> from the environment file the installer wrote.
-        Without it, every credential Kaname stores for you is unrecoverable.
+        Back up <MonoText>KANAME_MASTER_KEY</MonoText> from the environment file the installer
+        wrote. Without it, every credential Kaname stores for you is unrecoverable.
       </span>
     </p>
   );

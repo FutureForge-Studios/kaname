@@ -12,7 +12,7 @@ import { expect, test } from "@playwright/test";
 
 test("Cmd/Ctrl+K finds a host by name and offers verbs against it", async ({ page }) => {
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Command Center" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Projects" })).toBeVisible();
 
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await expect(palette).toBeHidden();

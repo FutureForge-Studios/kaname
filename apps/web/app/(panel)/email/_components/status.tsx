@@ -25,6 +25,7 @@ import type {
   MailServiceState,
 } from "@kaname/contract";
 import {
+  Button,
   CheckItem,
   CheckList,
   Combobox,
@@ -32,7 +33,6 @@ import {
   Skeleton,
   StatusBadge,
   cn,
-  formatIndex,
   type CheckItemState,
   type ComboboxOption,
   type Tone,
@@ -227,16 +227,17 @@ export function ChecksList({
         ))}
       </CheckList>
       {collapsePassing && passing.length > 0 && (
-        <button
-          type="button"
+        <Button
+          variant="link"
+          size="xs"
           onClick={() => setShowPassing((current) => !current)}
           aria-expanded={showPassing}
-          className="kn-label-sm mt-3 self-start rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]"
+          className="mt-3 self-start"
         >
           {showPassing
             ? `Hide ${pluralize(passing.length, "passing check")}`
             : `Show ${pluralize(passing.length, "passing check")}`}
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -344,7 +345,7 @@ export function InstallSteps({ steps, className }: InstallStepsProps) {
             title={
               <span className="inline-flex min-w-0 items-baseline gap-2.5">
                 <span aria-hidden className="kn-num text-xs text-[var(--kn-text-3)]">
-                  {formatIndex(index + 1)}
+                  {index + 1}
                 </span>
                 <span
                   className={cn(

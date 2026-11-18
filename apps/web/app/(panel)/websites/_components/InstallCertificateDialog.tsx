@@ -4,7 +4,7 @@ import * as React from "react";
 import type { Job } from "@kaname/contract";
 import { Combobox, FormField, Textarea, type ComboboxOption } from "@kaname/ui";
 import { useCan, useServers } from "@/lib/queries";
-import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "../../_components/FormDialog";
 import { useDomains, useInstallCertificate } from "./queries";
 
 /* ------------------------------------------------------------------ *
@@ -140,7 +140,7 @@ export function InstallCertificateDialog({
       onSubmit={submit}
       size="lg"
     >
-      <FormSection index={1} title="Placement">
+      <FormSection title="Placement">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <FormField label="Domain" error={errorFor("domain_id")} required>
             <Combobox
@@ -183,7 +183,7 @@ export function InstallCertificateDialog({
         </div>
       </FormSection>
 
-      <FormSection index={2} title="Key pair">
+      <FormSection title="Key pair">
         <FormField
           label="Certificate chain"
           description={

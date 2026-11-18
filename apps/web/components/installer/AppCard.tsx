@@ -61,8 +61,8 @@ export function AppCard({ app, canInstall, onInstall }: AppCardProps) {
             {versionLabel(app.version)}
           </Badge>
         ) : (
-          <Badge tone="info" size="xs">
-            Coming soon
+          <Badge tone="neutral" size="xs">
+            Not available
           </Badge>
         )}
       </div>
@@ -71,7 +71,9 @@ export function AppCard({ app, canInstall, onInstall }: AppCardProps) {
       </h3>
       <p className="m-0 mt-1 flex-1 text-sm text-[var(--kn-text-2)]">{app.tagline}</p>
 
-      <p className="kn-mono m-0 mt-3 truncate text-xs text-[var(--kn-text-3)]">{needs.join(" · ")}</p>
+      <p className="kn-mono m-0 mt-3 truncate text-xs text-[var(--kn-text-3)]">
+        {needs.join(" · ")}
+      </p>
 
       <div className="mt-4 flex items-center justify-between gap-2">
         {available ? (
@@ -88,8 +90,8 @@ export function AppCard({ app, canInstall, onInstall }: AppCardProps) {
         ) : (
           <Tooltip content={app.unavailable_reason ?? "Not available yet."}>
             <span tabIndex={0} className="inline-flex">
-              <Button size="sm" disabled aria-label={`${app.name} is coming soon`}>
-                Coming soon
+              <Button size="sm" disabled aria-label={`${app.name} is not available`}>
+                Not available
               </Button>
             </span>
           </Tooltip>

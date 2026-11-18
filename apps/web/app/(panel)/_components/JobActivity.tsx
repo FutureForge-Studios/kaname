@@ -30,7 +30,7 @@ import { useJob, useJobDrawer } from "@/lib/queries";
 const MAX_ROWS = 5;
 const TERMINAL = new Set<Job["status"]>(TERMINAL_JOB_STATUSES);
 
-/** Mono uppercase text link: the quiet action at the end of a row. */
+/** Quiet text link: the action at the end of a row. */
 const ROW_LINK =
   "kn-label-sm rounded-[var(--kn-r-xs)] text-[var(--kn-text-2)] outline-none transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)] hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]";
 

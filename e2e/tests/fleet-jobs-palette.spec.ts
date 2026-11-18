@@ -17,7 +17,7 @@ import {
 } from "../support/fleet.js";
 
 /* ------------------------------------------------------------------ *
- * Jobs, the Command Center and the command palette — the three places
+ * Jobs, the Projects home and the command palette — the three places
  * an operator finds out what happened and starts the next thing.
  *
  * The job rules (KD-008) that matter to someone watching the drawer:
@@ -125,17 +125,10 @@ test("a job has an address: the drawer's details link survives a reload", async 
   await expect(page.getByRole("alert").filter({ hasText: "not_found" })).toBeVisible();
 });
 
-test("the Command Center's numbers are the fleet's numbers", async ({ page }) => {
-  const fleet = await ownerCall<{ connection: string; health: string }[]>(
-    "GET",
-    "/servers?per_page=100",
-  );
-  const connected = fleet.filter((s) => s.connection === "connected").length;
-
+test("the home page's attention item for a failed unit opens that host's services", async ({
+  page,
+}) => {
   await page.goto("/");
-  await expect(
-    page.getByText(`${connected}/${fleet.length} agents connected`, { exact: true }),
-  ).toBeVisible();
 
   /* A failed-unit item goes to that host's failed units, already filtered. */
   const item = sectionNamed(page, "Needs attention")

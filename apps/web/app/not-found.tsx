@@ -29,7 +29,7 @@ export default function RootNotFound() {
           actions={
             <>
               <Button variant="primary" size="lg" arrow onClick={() => router.push("/")}>
-                Go to the Command Center
+                Go to Projects
               </Button>
               <Button size="lg" onClick={() => router.back()}>
                 Go back

@@ -10,6 +10,7 @@ import { useSession } from "@/lib/queries";
 import { JobDrawer } from "./JobDrawer";
 import { PageError } from "./PageError";
 import { KeyboardShortcuts } from "./KeyboardShortcuts";
+import { SectionTabs } from "./SectionTabs";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 
@@ -18,9 +19,7 @@ import { Topbar } from "./Topbar";
  *
  * Desktop-first: a fixed 240px rail that collapses to 56px, a 52px
  * topbar, and one scroll container for the page body. The body is the
- * ffstudios canvas (`.kn-canvas`): the faint blueprint grid plus two
- * vertical frame rails half a gutter in from each edge, which the page
- * headers' crosshair marks register against. Below 1024px the
+ * flat canvas (`.kn-canvas`, KD-044). Below 1024px the
  * rail becomes a sheet, because a 232px column on a tablet costs a
  * quarter of a dense table's width for navigation that is not being
  * read.
@@ -81,7 +80,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (!signedIn) {
     return (
-      <div className="kn-grid flex h-dvh items-center justify-center bg-[var(--kn-bg)] px-4">
+      <div className="flex h-dvh items-center justify-center bg-[var(--kn-bg)] px-4">
         {unreachable ? (
           <div className="w-full max-w-md">
             <PageError error={error} onRetry={refresh} context="Session" />
@@ -150,6 +149,7 @@ function Frame({ collapsed, changeCollapsed, navOpen, setNavOpen, children }: Fr
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <Topbar onOpenNav={() => setNavOpen(true)} />
         <PreviewBanner />
+        <SectionTabs />
         <main id="kn-main" tabIndex={-1} className="kn-canvas flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto outline-none">
           {children}
         </main>

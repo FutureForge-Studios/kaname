@@ -3,8 +3,8 @@
 #
 #   docker buildx create --use            # once, for the two platforms
 #   cd infra
-#   KANAME_VERSION=0.2.0 docker compose -f docker-compose.build.yml build
-#   KANAME_VERSION=0.2.0 docker compose -f docker-compose.build.yml push
+#   KANAME_VERSION=1.0.0 docker compose -f docker-compose.build.yml build
+#   KANAME_VERSION=1.0.0 docker compose -f docker-compose.build.yml push
 #
 # Releases normally come out of .github/workflows/release.yml; this is
 # the same two builds, kept here so a fork can publish to its own
@@ -18,7 +18,7 @@ name: kaname-build
 
 services:
   control-plane:
-    image: ${KANAME_REGISTRY:-ghcr.io/futureforge-studios}/kaname-control-plane:${KANAME_VERSION:-0.1.0}
+    image: ${KANAME_REGISTRY:-ghcr.io/futureforge-studios}/kaname-control-plane:${KANAME_VERSION:-1.0.0}
     build:
       context: ..
       dockerfile: infra/Dockerfile.control-plane
@@ -26,10 +26,10 @@ services:
         - linux/amd64
         - linux/arm64
       args:
-        KANAME_VERSION: ${KANAME_VERSION:-0.1.0}
+        KANAME_VERSION: ${KANAME_VERSION:-1.0.0}
 
   web:
-    image: ${KANAME_REGISTRY:-ghcr.io/futureforge-studios}/kaname-web:${KANAME_VERSION:-0.1.0}
+    image: ${KANAME_REGISTRY:-ghcr.io/futureforge-studios}/kaname-web:${KANAME_VERSION:-1.0.0}
     build:
       context: ..
       dockerfile: infra/Dockerfile.web

@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { missingId } from "../support/config.js";
 import {
   api,
@@ -90,6 +90,15 @@ async function deployed(site: SiteRow, body: Record<string, unknown> = {}): Prom
   return rows.find((d) => d.job_id === res.data.job.id)!;
 }
 
+/** The deploy dialog, opened from the site's Deployments tab, which every site has. */
+async function openDeployDialog(page: Page, name: string): Promise<Locator> {
+  await page.getByRole("tab", { name: /Deployments/ }).click();
+  await page.getByRole("button", { name: "Deploy", exact: true }).last().click();
+  const dialog = page.getByRole("dialog", { name: `Deploy ${name}` });
+  await expect(dialog).toBeVisible();
+  return dialog;
+}
+
 /* ------------------------------ trigger ------------------------------ */
 
 test("a deploy runs as a job, moves its row to succeeded and keeps its log", async ({ page }) => {
@@ -98,9 +107,7 @@ test("a deploy runs as a job, moves its row to succeeded and keeps its log", asy
   const before = await deploymentsOf(www.id);
 
   await page.goto(`/websites/sites/${www.id}`);
-  await page.getByRole("button", { name: "Deploy", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Deploy futureforge-www" });
-  await expect(dialog).toBeVisible();
+  const dialog = await openDeployDialog(page, "futureforge-www");
   await dialog.getByLabel("Branch").fill("main");
   await dialog.getByRole("button", { name: "Start deployment" }).click();
   await expect(dialog).toBeHidden();
@@ -142,8 +149,7 @@ test("a site without a repository can only be deployed from an upload", async ({
   const shop = await site("legacy-shop");
   await quiet(shop.id);
   await page.goto(`/websites/sites/${shop.id}`);
-  await page.getByRole("button", { name: "Deploy", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Deploy legacy-shop" });
+  const dialog = await openDeployDialog(page, "legacy-shop");
 
   await dialog.getByRole("button", { name: "Start deployment" }).click();
   const refusal = dialog.getByRole("alert").filter({ hasText: "precondition_failed" });
@@ -187,8 +193,7 @@ test("the revision field is checked, and redeploying the running commit needs fo
   )!;
 
   await page.goto(`/websites/sites/${www.id}`);
-  await page.getByRole("button", { name: "Deploy", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Deploy futureforge-www" });
+  const dialog = await openDeployDialog(page, "futureforge-www");
 
   await field(dialog, "Revision").fill("not-a-sha");
   await dialog.getByRole("button", { name: "Start deployment" }).click();

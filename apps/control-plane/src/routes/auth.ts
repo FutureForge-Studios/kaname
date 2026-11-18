@@ -713,8 +713,8 @@ const accountLocked = (until: Date) =>
     remediation: {
       // "Unlock", not "reactivate": a locked account is still active, and
       // Unlock is the row action Administration > Users offers for it.
-      summary: `The lock lifts at ${until.toISOString()}. An owner can lift it sooner with Unlock in Administration > Users.`,
-      actions: [{ label: "Administration", href: "/administration/users" }],
+      summary: `The lock lifts at ${until.toISOString()}. An owner can lift it sooner with Unlock in Settings > Users.`,
+      actions: [{ label: "Settings", href: "/administration/users" }],
     },
   });
 
@@ -729,8 +729,8 @@ const accountNotActive = (status: UserStatus) =>
       })
     : new ApiException("forbidden", "This account is suspended.", {
         remediation: {
-          summary: "An owner can reactivate it from Administration > Users.",
-          actions: [{ label: "Administration", href: "/administration/users" }],
+          summary: "An owner can reactivate it from Settings > Users.",
+          actions: [{ label: "Settings", href: "/administration/users" }],
         },
       });
 
@@ -793,7 +793,7 @@ const totpRequiredByPolicy = () =>
 const apiKeyHasNoSession = () =>
   new ApiException("bad_request", "API keys do not hold a browser session.", {
     remediation: {
-      summary: "Revoke the key in Administration > API instead of signing it out.",
+      summary: "Revoke the key in Settings > API instead of signing it out.",
       actions: [{ label: "API keys", href: "/administration/api" }],
     },
   });

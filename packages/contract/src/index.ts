@@ -91,14 +91,90 @@ export interface NavSection {
   icon: string;
   href?: string;
   permission: Permission;
+  /** Each leaf is a tab on the section's pages; the sidebar lists the section once. */
   children?: NavLeaf[];
+  /** Drawn under the sidebar's collapsed "More" disclosure. */
+  secondary?: boolean;
 }
 
 export const NAVIGATION: readonly NavSection[] = [
-  { label: "Command Center", icon: "LayoutDashboard", href: "/", permission: "infra.servers:read" },
-  { label: "Apps", icon: "PackageCheck", href: "/apps", permission: "apps.installs:read" },
   {
-    label: "Infrastructure",
+    label: "Projects",
+    icon: "LayoutDashboard",
+    permission: "websites.sites:read",
+    children: [
+      {
+        label: "Projects",
+        href: "/",
+        icon: "LayoutDashboard",
+        permission: "websites.sites:read",
+        shortcut: "w",
+      },
+      {
+        label: "Deployments",
+        href: "/websites/deployments",
+        icon: "Rocket",
+        permission: "websites.deployments:read",
+      },
+    ],
+  },
+  {
+    label: "Apps",
+    icon: "PackageCheck",
+    permission: "apps.installs:read",
+    children: [
+      { label: "Catalog", href: "/apps", icon: "PackageCheck", permission: "apps.installs:read" },
+      {
+        label: "Installed",
+        href: "/apps/installed",
+        icon: "ListChecks",
+        permission: "apps.installs:read",
+      },
+    ],
+  },
+  {
+    label: "Domains",
+    icon: "Link2",
+    permission: "websites.domains:read",
+    children: [
+      {
+        label: "Domains",
+        href: "/websites/domains",
+        icon: "Link2",
+        permission: "websites.domains:read",
+        shortcut: "d",
+      },
+      { label: "DNS", href: "/websites/dns", icon: "Network", permission: "websites.dns:read" },
+      {
+        label: "SSL / TLS",
+        href: "/websites/ssl",
+        icon: "ShieldCheck",
+        permission: "websites.ssl:read",
+      },
+    ],
+  },
+  {
+    label: "Databases",
+    icon: "Database",
+    permission: "databases.postgres:read",
+    children: [
+      {
+        label: "PostgreSQL",
+        href: "/databases/postgres",
+        icon: "Database",
+        permission: "databases.postgres:read",
+      },
+      {
+        label: "MySQL / MariaDB",
+        href: "/databases/mysql",
+        icon: "Database",
+        permission: "databases.mysql:read",
+        shortcut: "b",
+      },
+    ],
+  },
+  {
+    label: "Servers",
     icon: "Server",
     permission: "infra.servers:read",
     children: [
@@ -128,65 +204,69 @@ export const NAVIGATION: readonly NavSection[] = [
         permission: "infra.containers:read",
         shortcut: "c",
       },
-    ],
-  },
-  {
-    label: "Websites",
-    icon: "Globe",
-    permission: "websites.sites:read",
-    children: [
       {
-        label: "Sites",
-        href: "/websites/sites",
-        icon: "Globe",
-        permission: "websites.sites:read",
-        shortcut: "w",
-      },
-      {
-        label: "Domains",
-        href: "/websites/domains",
-        icon: "Link2",
-        permission: "websites.domains:read",
-        shortcut: "d",
-      },
-      { label: "DNS", href: "/websites/dns", icon: "Network", permission: "websites.dns:read" },
-      {
-        label: "SSL / TLS",
-        href: "/websites/ssl",
-        icon: "ShieldCheck",
-        permission: "websites.ssl:read",
-      },
-      {
-        label: "Deployments",
-        href: "/websites/deployments",
-        icon: "Rocket",
-        permission: "websites.deployments:read",
+        label: "Terminal",
+        href: "/terminal",
+        icon: "SquareTerminal",
+        permission: "terminal.session:exec",
       },
     ],
   },
   {
-    label: "Files",
-    icon: "Folder",
-    permission: "files.manager:read",
+    label: "Monitoring",
+    icon: "LineChart",
+    permission: "monitoring.metrics:read",
     children: [
       {
-        label: "File Manager",
-        href: "/files/manager",
-        icon: "Folder",
-        permission: "files.manager:read",
-        shortcut: "f",
+        label: "Monitoring",
+        href: "/monitoring",
+        icon: "LineChart",
+        permission: "monitoring.metrics:read",
+      },
+      { label: "Logs", href: "/logs", icon: "ScrollText", permission: "logs.streams:read" },
+    ],
+  },
+  { label: "Backups", icon: "Archive", href: "/backups", permission: "backups.schedules:read" },
+  {
+    label: "Settings",
+    icon: "Settings",
+    permission: "admin.settings:read",
+    children: [
+      {
+        label: "Settings",
+        href: "/administration/settings",
+        icon: "Settings",
+        permission: "admin.settings:read",
       },
       {
-        label: "FTP / SFTP",
-        href: "/files/ftp",
-        icon: "ArrowLeftRight",
-        permission: "files.ftp:read",
+        label: "Users",
+        href: "/administration/users",
+        icon: "Users",
+        permission: "admin.users:read",
       },
       {
-        label: "Storage",
-        href: "/files/storage",
-        icon: "HardDrive",
-        permission: "files.manager:read",
+        label: "Roles",
+        href: "/administration/roles",
+        icon: "UserCog",
+        permission: "admin.roles:read",
+      },
+      {
+        label: "API",
+        href: "/administration/api",
+        icon: "Webhook",
+        permission: "admin.api_keys:read",
+      },
+      {
+        label: "Updates",
+        href: "/administration/updates",
+        icon: "ArrowUpCircle",
+        permission: "admin.settings:read",
+      },
+      {
+        label: "Audit",
+        href: "/security/audit",
+        icon: "FileSearch",
+        permission: "security.audit:read",
       },
     ],
   },
@@ -194,6 +274,7 @@ export const NAVIGATION: readonly NavSection[] = [
     label: "Email",
     icon: "Mail",
     permission: "email.servers:read",
+    secondary: true,
     children: [
       {
         label: "Mail servers",
@@ -235,22 +316,29 @@ export const NAVIGATION: readonly NavSection[] = [
     ],
   },
   {
-    label: "Databases",
-    icon: "Database",
-    permission: "databases.mysql:read",
+    label: "Files",
+    icon: "Folder",
+    permission: "files.manager:read",
+    secondary: true,
     children: [
       {
-        label: "MySQL / MariaDB",
-        href: "/databases/mysql",
-        icon: "Database",
-        permission: "databases.mysql:read",
-        shortcut: "b",
+        label: "File Manager",
+        href: "/files/manager",
+        icon: "Folder",
+        permission: "files.manager:read",
+        shortcut: "f",
       },
       {
-        label: "PostgreSQL",
-        href: "/databases/postgres",
-        icon: "Database",
-        permission: "databases.postgres:read",
+        label: "FTP / SFTP",
+        href: "/files/ftp",
+        icon: "ArrowLeftRight",
+        permission: "files.ftp:read",
+      },
+      {
+        label: "Storage",
+        href: "/files/storage",
+        icon: "HardDrive",
+        permission: "files.manager:read",
       },
     ],
   },
@@ -258,6 +346,7 @@ export const NAVIGATION: readonly NavSection[] = [
     label: "Security",
     icon: "Shield",
     permission: "security.firewall:read",
+    secondary: true,
     children: [
       {
         label: "Firewall",
@@ -276,63 +365,6 @@ export const NAVIGATION: readonly NavSection[] = [
         href: "/security/ssh",
         icon: "KeyRound",
         permission: "security.ssh:read",
-      },
-      {
-        label: "Audit",
-        href: "/security/audit",
-        icon: "FileSearch",
-        permission: "security.audit:read",
-      },
-    ],
-  },
-  { label: "Backups", icon: "Archive", href: "/backups", permission: "backups.schedules:read" },
-  {
-    label: "Monitoring",
-    icon: "LineChart",
-    href: "/monitoring",
-    permission: "monitoring.metrics:read",
-  },
-  { label: "Logs", icon: "ScrollText", href: "/logs", permission: "logs.streams:read" },
-  {
-    label: "Terminal",
-    icon: "SquareTerminal",
-    href: "/terminal",
-    permission: "terminal.session:exec",
-  },
-  {
-    label: "Administration",
-    icon: "Settings",
-    permission: "admin.users:read",
-    children: [
-      {
-        label: "Users",
-        href: "/administration/users",
-        icon: "Users",
-        permission: "admin.users:read",
-      },
-      {
-        label: "Roles",
-        href: "/administration/roles",
-        icon: "UserCog",
-        permission: "admin.roles:read",
-      },
-      {
-        label: "API",
-        href: "/administration/api",
-        icon: "Webhook",
-        permission: "admin.api_keys:read",
-      },
-      {
-        label: "Updates",
-        href: "/administration/updates",
-        icon: "ArrowUpCircle",
-        permission: "admin.settings:read",
-      },
-      {
-        label: "Settings",
-        href: "/administration/settings",
-        icon: "Settings",
-        permission: "admin.settings:read",
       },
     ],
   },

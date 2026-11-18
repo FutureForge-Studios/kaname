@@ -3,11 +3,11 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LifeBuoy, PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import type { NavLeaf, NavSection, ResellerBranding } from "@kaname/contract";
-import { Dot, IconButton, Kbd, MonoLabel, Tooltip, cn } from "@kaname/ui";
+import { ChevronRight, Ellipsis, LifeBuoy, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import type { ResellerBranding } from "@kaname/contract";
+import { Dot, IconButton, MonoLabel, Tooltip, cn } from "@kaname/ui";
 import { iconFor } from "@/lib/icons";
-import { AUDIENCE_LABELS, useModes, useNavigation } from "@/lib/modes";
+import { AUDIENCE_LABELS, useModes, useNavigation, type VisibleSection } from "@/lib/modes";
 import { Wordmark } from "./Logo";
 import { useNavIndicators } from "./UpdateNotice";
 
@@ -20,9 +20,9 @@ import { useNavIndicators } from "./UpdateNotice";
  * permissions does not see a greyed-out Email group, it sees no Email
  * group — the sidebar describes the panel this account actually has.
  *
- * ffstudios treatment: flat ink with a hairline edge, groups opened by
- * a numbered mono uppercase label ("01 INFRASTRUCTURE"), and the active
- * leaf marked by a purple bar on the rail rather than a filled row.
+ * Flat: one row per section, linking to its first page this person may
+ * see; the section's other pages are the tab row on the page
+ * (SectionTabs). Occasional tools sit under "More", closed by default.
  *
  * What is listed also depends on the view mode and audience (KD-039):
  * lib/modes.tsx decides, so the palette and the sidebar agree. A
@@ -40,10 +40,32 @@ export interface SidebarProps {
   onNavigate?: () => void;
 }
 
+const MORE_KEY = "kaname.sidebar.more";
+
 /** A path is active for the deepest matching leaf, so detail routes light up their list. */
 function isActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
+  // A project page lives under /websites/sites but belongs to the Projects home.
+  if (href === "/") return pathname === "/" || pathname.startsWith("/websites/sites/");
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/** Where a section's sidebar row goes: its first page this person may see. */
+function sectionHref({ section, leaves }: VisibleSection): string {
+  return leaves[0]?.href ?? section.href ?? "/";
+}
+
+function sectionActive(pathname: string, entry: VisibleSection): boolean {
+  const hrefs =
+    entry.leaves.length > 0 ? entry.leaves.map((leaf) => leaf.href) : [sectionHref(entry)];
+  return hrefs.some((href) => isActive(pathname, href));
+}
+
+function readMore(): boolean {
+  try {
+    return window.localStorage.getItem(MORE_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 export function Sidebar({
@@ -58,6 +80,27 @@ export function Sidebar({
   const narrow = collapsed && !drawer;
   const sections = useNavigation();
   const indicators = useNavIndicators();
+  const primary = sections.filter((entry) => !entry.section.secondary);
+  const secondary = sections.filter((entry) => entry.section.secondary);
+  const secondaryActive = secondary.some((entry) => sectionActive(pathname, entry));
+
+  /* Read after mount, like the collapse preference, so the server render matches. */
+  const [moreOpen, setMoreOpen] = React.useState(false);
+  React.useEffect(() => setMoreOpen(readMore()), []);
+  // Arriving on one of its pages opens More, so the active row is not hidden; it can still be folded.
+  React.useEffect(() => {
+    if (secondaryActive) setMoreOpen(true);
+  }, [secondaryActive]);
+  const showMore = moreOpen;
+  const toggleMore = () => {
+    const next = !showMore;
+    setMoreOpen(next);
+    try {
+      window.localStorage.setItem(MORE_KEY, next ? "1" : "0");
+    } catch {
+      /* A convenience, not state the app depends on. */
+    }
+  };
 
   return (
     <div
@@ -75,7 +118,11 @@ export function Sidebar({
         >
           <Link
             href="/"
-            aria-label={branding ? `${branding.display_name} — Home` : "Kaname by FutureForge Studios — Command Center"}
+            aria-label={
+              branding
+                ? `${branding.display_name} — Home`
+                : "Kaname by FutureForge Studios — Projects"
+            }
             className="min-w-0 rounded-[var(--kn-r-sm)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
           >
             {branding ? (
@@ -97,25 +144,34 @@ export function Sidebar({
 
       <nav
         aria-label="Primary"
-        className={cn("min-h-0 flex-1 overflow-y-auto pb-4 pt-3", narrow ? "px-2" : "px-2")}
+        className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pb-4 pt-3"
       >
-        {sections.map(({ section, leaves }, index) => (
-          <SidebarSection
-            key={section.label}
-            section={section}
-            leaves={leaves}
+        {primary.map((entry) => (
+          <SidebarLink
+            key={entry.section.label}
+            entry={entry}
             pathname={pathname}
+            indicator={entry.leaves.some((leaf) => indicators.has(leaf.href))}
             narrow={narrow}
-            first={index === 0}
-            indicators={indicators}
-            number={
-              leaves.length > 0
-                ? sections.slice(0, index + 1).filter((entry) => entry.leaves.length > 0).length
-                : 0
-            }
             onNavigate={onNavigate}
           />
         ))}
+        {secondary.length > 0 && (
+          <>
+            <MoreToggle open={showMore} narrow={narrow} onToggle={toggleMore} />
+            {showMore &&
+              secondary.map((entry) => (
+                <SidebarLink
+                  key={entry.section.label}
+                  entry={entry}
+                  pathname={pathname}
+                  indicator={entry.leaves.some((leaf) => indicators.has(leaf.href))}
+                  narrow={narrow}
+                  onNavigate={onNavigate}
+                />
+              ))}
+          </>
+        )}
       </nav>
 
       {!narrow && (branding?.support_email || branding?.support_url) && (
@@ -144,111 +200,66 @@ export function Sidebar({
   );
 }
 
-interface SidebarSectionProps {
-  section: NavSection;
-  leaves: NavLeaf[];
-  pathname: string;
-  narrow: boolean;
-  first: boolean;
-  /** 1-based position among the grouped sections; shown as "01". */
-  number: number;
-  /** Leaves that carry an "attention here" dot, e.g. a Kaname update. */
-  indicators: ReadonlySet<string>;
-  onNavigate?: () => void;
-}
-
-function SidebarSection({
-  section,
-  leaves,
-  pathname,
+function MoreToggle({
+  open,
   narrow,
-  first,
-  number,
-  indicators,
-  onNavigate,
-}: SidebarSectionProps) {
-  const labelId = React.useId();
-
-  if (leaves.length === 0) {
+  onToggle,
+}: {
+  open: boolean;
+  narrow: boolean;
+  onToggle: () => void;
+}) {
+  if (narrow) {
     return (
-      <div className={cn(!first && "mt-1")}>
-        <SidebarLink
-          href={section.href ?? "/"}
-          label={section.label}
-          icon={section.icon}
-          active={isActive(pathname, section.href ?? "/")}
-          narrow={narrow}
-          onNavigate={onNavigate}
-        />
+      <div className="mt-2 flex justify-center border-t border-[var(--kn-border)] pt-2">
+        <IconButton icon={Ellipsis} label="More" aria-expanded={open} onClick={onToggle} />
       </div>
     );
   }
-
   return (
-    <div role="group" aria-labelledby={narrow ? undefined : labelId} className={cn(!first && "mt-4")}>
-      {narrow ? (
-        <div className="mx-2 mb-2 h-px bg-[var(--kn-border)]" aria-hidden />
-      ) : (
-        <div className="kn-label-sm flex items-center gap-2 px-2 pb-1.5 text-[var(--kn-text-3)]">
-          <span aria-hidden className="opacity-60">
-            {String(number).padStart(2, "0")}
-          </span>
-          <span id={labelId} className="truncate">
-            {section.label}
-          </span>
-        </div>
+    <button
+      type="button"
+      aria-expanded={open}
+      onClick={onToggle}
+      className={cn(
+        "mt-3 flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--kn-r-md)] px-2 text-[var(--kn-text-3)] outline-none",
+        "hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
       )}
-      <ul className="flex flex-col gap-px">
-        {leaves.map((leaf) => (
-          <li key={leaf.href}>
-            <SidebarLink
-              href={leaf.href}
-              label={leaf.label}
-              icon={leaf.icon}
-              shortcut={leaf.shortcut}
-              active={isActive(pathname, leaf.href)}
-              indicator={indicators.has(leaf.href)}
-              narrow={narrow}
-              onNavigate={onNavigate}
-            />
-          </li>
-        ))}
-      </ul>
-    </div>
+    >
+      <ChevronRight
+        size={14}
+        aria-hidden
+        className={cn(
+          "shrink-0 transition-transform duration-[var(--kn-dur-fast)] motion-reduce:transition-none",
+          open && "rotate-90",
+        )}
+      />
+      More
+    </button>
   );
 }
 
 interface SidebarLinkProps {
-  href: string;
-  label: string;
-  icon: string;
-  shortcut?: string;
-  active: boolean;
+  entry: VisibleSection;
+  pathname: string;
   /** A small accent dot: something new behind this link. */
   indicator?: boolean;
   narrow: boolean;
   onNavigate?: () => void;
 }
 
-function SidebarLink({
-  href,
-  label,
-  icon,
-  shortcut,
-  active,
-  indicator = false,
-  narrow,
-  onNavigate,
-}: SidebarLinkProps) {
+function SidebarLink({ entry, pathname, indicator = false, narrow, onNavigate }: SidebarLinkProps) {
+  const { label, icon } = entry.section;
   const Icon = iconFor(icon);
+  const active = sectionActive(pathname, entry);
 
   const link = (
     <Link
-      href={href}
+      href={sectionHref(entry)}
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group/nav relative flex h-7 items-center rounded-[var(--kn-r-sm)] outline-none",
+        "group/nav relative flex h-8 shrink-0 items-center rounded-[var(--kn-r-md)] outline-none",
         "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
         "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
         narrow ? "w-full justify-center px-0" : "gap-2.5 px-2",
@@ -257,15 +268,14 @@ function SidebarLink({
           : "text-[var(--kn-text-2)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)]",
       )}
     >
-      {active && (
-        <span
-          aria-hidden
-          className="absolute -left-2 top-1.5 bottom-1.5 w-0.5 rounded-r-[1px] bg-[var(--kn-accent-500)]"
-        />
-      )}
       <Icon
-        size={15}
-        className={cn("shrink-0", active ? "text-[var(--kn-accent-400)]" : "text-[var(--kn-text-3)] group-hover/nav:text-current")}
+        size={16}
+        className={cn(
+          "shrink-0",
+          active
+            ? "text-[var(--kn-accent-400)]"
+            : "text-[var(--kn-text-3)] group-hover/nav:text-current",
+        )}
         aria-hidden
       />
       {!narrow && <span className="min-w-0 flex-1 truncate">{label}</span>}
@@ -279,13 +289,6 @@ function SidebarLink({
           <span className="sr-only"> — update available</span>
         </>
       )}
-      {!narrow && shortcut && (
-        <Kbd
-          keys={`g then ${shortcut}`}
-          size="xs"
-          className="opacity-0 transition-opacity duration-[var(--kn-dur-fast)] group-hover/nav:opacity-100"
-        />
-      )}
       {narrow && <span className="sr-only">{label}</span>}
     </Link>
   );
@@ -293,7 +296,7 @@ function SidebarLink({
   if (!narrow) return link;
 
   return (
-    <Tooltip content={shortcut ? `${label} — g then ${shortcut}` : label} placement="right">
+    <Tooltip content={label} placement="right">
       {link}
     </Tooltip>
   );
@@ -306,8 +309,9 @@ function SidebarLink({
 function initialsOf(branding: ResellerBranding): string {
   if (branding.logo_text) return branding.logo_text.slice(0, 4);
   const words = branding.display_name.split(/\s+/).filter(Boolean);
-  return (words.length > 1 ? `${words[0]![0]}${words[1]![0]}` : branding.display_name.slice(0, 2))
-    .toUpperCase();
+  return (
+    words.length > 1 ? `${words[0]![0]}${words[1]![0]}` : branding.display_name.slice(0, 2)
+  ).toUpperCase();
 }
 
 /** The reseller's mark: its initials in the hairline square, then its name. */
@@ -336,7 +340,8 @@ export function BrandMark({
 }
 
 function SupportFooter({ branding }: { branding: ResellerBranding }) {
-  const href = branding.support_url ?? (branding.support_email ? `mailto:${branding.support_email}` : null);
+  const href =
+    branding.support_url ?? (branding.support_email ? `mailto:${branding.support_email}` : null);
   if (!href) return null;
   return (
     <div className="shrink-0 border-t border-[var(--kn-border)] px-4 py-3">

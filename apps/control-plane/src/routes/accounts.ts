@@ -583,7 +583,7 @@ function resellerPrincipal(req: FastifyRequest): Principal {
     throw new ApiException("forbidden", "This area is for reseller accounts.", {
       remediation: {
         summary:
-          "Clients are managed by the reseller they belong to. An operator manages resellers under Administration.",
+          "Clients are managed by the reseller they belong to. An operator manages resellers under Settings.",
         actions: [{ label: "Resellers", href: "/administration/resellers" }],
       },
     });

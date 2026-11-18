@@ -25,7 +25,7 @@ export function StandaloneFrame({
 }) {
   return (
     <GridBackdrop rails railInset={12} glow="right" fade className="flex min-h-dvh flex-col">
-      <header className="kn-crosshairs shrink-0 border-b border-[var(--kn-border)]">
+      <header className="shrink-0 border-b border-[var(--kn-border)]">
         <div className="mx-auto flex h-14 w-full max-w-7xl items-center justify-between gap-4 px-6 sm:px-10 lg:px-16">
           <Wordmark size={22} byline />
           {caption && (
@@ -65,7 +65,9 @@ export function HeroSplit({
           : "content-start items-start lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]",
       )}
     >
-      <div className={cn("flex min-w-0 flex-col gap-8", !center && "lg:sticky lg:top-12")}>{hero}</div>
+      <div className={cn("flex min-w-0 flex-col gap-8", !center && "lg:sticky lg:top-12")}>
+        {hero}
+      </div>
       <div className="min-w-0">{children}</div>
     </div>
   );

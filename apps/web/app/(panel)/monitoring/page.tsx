@@ -1604,16 +1604,14 @@ function AlertRuleDialog({ open, onOpenChange, rule = null }: AlertRuleDialogPro
             />
 
             <div className="rounded-[var(--kn-r-sm)] border border-[var(--kn-border)] bg-[var(--kn-bg-inset)] p-3">
-              <p className="text-2xs font-medium uppercase tracking-wide text-[var(--kn-text-3)]">
-                This rule reads as
-              </p>
+              <p className="text-xs font-medium text-[var(--kn-text-3)]">This rule reads as</p>
               <p className="mt-1 text-[var(--kn-text)]">
                 {describeRule(preview)} on{" "}
                 {draft.appInstallId
                   ? (rule?.app_name ?? "this app")
                   : draft.fleet
-                  ? "every server"
-                  : `${formatCount(draft.serverIds.length)} selected server${draft.serverIds.length === 1 ? "" : "s"}`}
+                    ? "every server"
+                    : `${formatCount(draft.serverIds.length)} selected server${draft.serverIds.length === 1 ? "" : "s"}`}
                 , raising a {draft.severity} alert
                 {draft.channelIds.length === 0
                   ? " to every alert channel"

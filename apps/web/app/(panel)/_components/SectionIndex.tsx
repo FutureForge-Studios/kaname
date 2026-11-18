@@ -1,10 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { MonoLabel, cn, formatIndex } from "@kaname/ui";
+import { MonoLabel, cn } from "@kaname/ui";
 
 /* ------------------------------------------------------------------ *
- * Long-form pages (Settings, Account): numbered sections down the left,
+ * Long-form pages (Settings, Account): sections down the left,
  * and on wide screens a sticky "on this page" index down the right that
  * follows the reader.
  *
@@ -59,7 +59,7 @@ export function SectionIndex({
         {label}
       </MonoLabel>
       <ol className="flex flex-col border-l border-[var(--kn-border)]">
-        {entries.map((entry, position) => {
+        {entries.map((entry) => {
           const current = entry.id === active;
           return (
             <li key={entry.id}>
@@ -68,7 +68,7 @@ export function SectionIndex({
                 aria-current={current ? "location" : undefined}
                 onClick={() => setActive(entry.id)}
                 className={cn(
-                  "-ml-px flex items-baseline gap-2.5 border-l py-1.5 pl-3 text-sm outline-none",
+                  "-ml-px flex border-l py-1.5 pl-3 text-sm outline-none",
                   "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
                   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
                   current
@@ -76,9 +76,6 @@ export function SectionIndex({
                     : "border-transparent text-[var(--kn-text-3)] hover:text-[var(--kn-text-2)]",
                 )}
               >
-                <span aria-hidden className="kn-label-sm shrink-0">
-                  {formatIndex(position + 1)}
-                </span>
                 <span className="min-w-0 truncate">{entry.title}</span>
               </a>
             </li>

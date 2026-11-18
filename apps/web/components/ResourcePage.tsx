@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { FilterX, Plus, RefreshCw, Server as ServerIcon } from "lucide-react";
 import {
@@ -199,23 +200,44 @@ export interface ResourcePrerequisite {
   secondaryAction?: React.ReactNode;
 }
 
+/*
+ * The kit's Button renders a <button> only, so navigation gets a real link
+ * (middle click, copy address) carrying the same `sm` button classes.
+ */
+const LINK_BUTTON_VARIANTS = {
+  primary:
+    "border-[var(--kn-accent-500)] bg-[var(--kn-accent-500)] text-[var(--kn-accent-fg)] hover:border-[var(--kn-accent-600)] hover:bg-[var(--kn-accent-600)]",
+  secondary:
+    "border-[var(--kn-border-strong)] bg-[var(--kn-surface)] text-[var(--kn-text)] hover:bg-[var(--kn-surface-2)]",
+  ghost:
+    "border-transparent bg-transparent text-[var(--kn-text-2)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)]",
+} as const;
+
 /** A primary or secondary button that navigates, for empty-state actions. */
 export function LinkButton({
   href,
-  icon,
+  icon: Icon,
   variant = "primary",
   children,
 }: {
   href: string;
   icon?: IconComponent;
-  variant?: "primary" | "secondary" | "ghost";
+  variant?: keyof typeof LINK_BUTTON_VARIANTS;
   children: React.ReactNode;
 }) {
-  const router = useRouter();
   return (
-    <Button variant={variant} size="sm" icon={icon} onClick={() => router.push(href)}>
+    <Link
+      href={href}
+      className={cn(
+        "inline-flex h-7 select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-[var(--kn-r-md)] border px-2.5 text-sm font-medium",
+        "transition-[background-color,border-color,color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
+        "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
+        LINK_BUTTON_VARIANTS[variant],
+      )}
+    >
+      {Icon && <Icon size={14} className="shrink-0" aria-hidden />}
       {children}
-    </Button>
+    </Link>
   );
 }
 
@@ -381,7 +403,7 @@ export function ResourcePage<T>({
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {query.dataUpdatedAt > 0 && (
-          <span className="kn-label-sm hidden items-center gap-1 tracking-[0.08em] text-[var(--kn-text-3)] md:inline-flex">
+          <span className="kn-label-sm hidden items-center gap-1 text-[var(--kn-text-3)] md:inline-flex">
             synced <RelativeTime value={query.dataUpdatedAt} />
           </span>
         )}

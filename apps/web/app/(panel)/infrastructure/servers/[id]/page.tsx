@@ -17,19 +17,23 @@ import {
   Terminal,
   Trash2,
 } from "lucide-react";
-import type { Server } from "@kaname/contract";
+import type { AgentConnection, HealthState, Server } from "@kaname/contract";
 import {
   Badge,
   Button,
+  ResourceHeader,
   DropdownMenu,
   IconButton,
   MenuItem,
   MenuSeparator,
+  RelativeTime,
   Skeleton,
+  StatusLine,
   Tab,
   TabList,
   TabPanel,
   Tabs,
+  type Tone,
 } from "@kaname/ui";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { PageError } from "@/components/PageError";
@@ -43,7 +47,6 @@ import { ServerLogsTab } from "../../_components/ServerLogsTab";
 import { ServerUpdatesTab } from "../../_components/ServerUpdatesTab";
 import { useServerOsUpdates } from "@/lib/system-updates";
 import { useServerCommands } from "../../_components/ServerCommands";
-import { DetailHeader, DetailHeaderSkeleton, HostStatusLine } from "../../_components/DetailHeader";
 import { hasContainerRuntime } from "../../_lib/infra";
 
 /* ------------------------------------------------------------------ *
@@ -103,11 +106,10 @@ export default function ServerDetailPage() {
   if (query.isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <DetailHeaderSkeleton>
-          <Skeleton className="h-5 w-40 rounded-[var(--kn-r-pill)]" label="Loading server" />
-          <Skeleton className="mt-4 h-7 w-56" />
+        <header className="shrink-0 border-b border-[var(--kn-border)] px-6 pb-5 pt-6">
+          <Skeleton label="Loading server" className="h-7 w-56" />
           <Skeleton className="mt-2 h-3 w-72" />
-        </DetailHeaderSkeleton>
+        </header>
         <div className="px-6 py-6">
           <Skeleton className="h-64" />
         </div>
@@ -118,9 +120,9 @@ export default function ServerDetailPage() {
   if (query.isError || !server) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <DetailHeaderSkeleton>
+        <header className="shrink-0 border-b border-[var(--kn-border)] px-6 pb-5 pt-6">
           <Breadcrumbs />
-        </DetailHeaderSkeleton>
+        </header>
         <div className="px-6 py-6">
           <PageError
             error={query.error ?? new Error("This server is not in the fleet.")}
@@ -138,8 +140,7 @@ export default function ServerDetailPage() {
 
   return (
     <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-1 flex-col">
-      <DetailHeader
-        eyebrow="Server"
+      <ResourceHeader
         breadcrumb={<Breadcrumbs trailing={server.name} />}
         name={server.name}
         identity={
@@ -294,5 +295,65 @@ export default function ServerDetailPage() {
 
       {commands.dialogs}
     </Tabs>
+  );
+}
+
+/* ----------------------------- HostStatusLine --------------------------- */
+
+const CONNECTION_TONE: Record<AgentConnection, Tone> = {
+  connected: "ok",
+  degraded: "warn",
+  disconnected: "danger",
+  never_enrolled: "info",
+  revoked: "danger",
+};
+
+const HEALTH_TONE: Record<HealthState, Tone> = {
+  healthy: "ok",
+  warning: "warn",
+  critical: "danger",
+  unknown: "neutral",
+};
+
+const RANK: Record<string, number> = { neutral: 0, info: 1, ok: 1, warn: 2, danger: 3 };
+
+/**
+ * The two axes read as one sentence: "Agent connected, seen 4s ago ·
+ * 2 health findings: disk / is 91% full". The dot takes the worse of the
+ * two tones; the badges beside the name keep them apart.
+ */
+function HostStatusLine({ host }: { host: Server }) {
+  const connectionTone = CONNECTION_TONE[host.connection] ?? "neutral";
+  const healthTone = HEALTH_TONE[host.health] ?? "neutral";
+  const tone = (RANK[healthTone] ?? 0) > (RANK[connectionTone] ?? 0) ? healthTone : connectionTone;
+
+  const agent =
+    host.connection === "never_enrolled" ? (
+      <>Agent never enrolled — run the enrollment command on the host</>
+    ) : host.connection === "revoked" ? (
+      <>Certificate revoked — the agent cannot reconnect until it is enrolled again</>
+    ) : (
+      <>
+        Agent {host.connection === "connected" ? "online" : host.connection}
+        {host.last_seen_at && (
+          <>
+            , last heard from <RelativeTime value={host.last_seen_at} />
+          </>
+        )}
+      </>
+    );
+
+  const first = host.health_reasons[0];
+  const health =
+    host.health === "unknown"
+      ? "health not evaluated without recent metrics"
+      : host.health === "healthy"
+        ? "every monitored threshold within range"
+        : `${host.health_reasons.length} health finding${host.health_reasons.length === 1 ? "" : "s"}${first ? `: ${first}` : ""}`;
+
+  return (
+    <StatusLine tone={tone} pulse={host.connection === "connected"} className="min-w-0">
+      {agent} · {health}
+    </StatusLine>
   );
 }

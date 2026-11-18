@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { ArrowRight, ArrowUpCircle, X } from "lucide-react";
 import type { UpdateOverview, UserPreferences } from "@kaname/contract";
-import { Spinner, cn, useToast } from "@kaname/ui";
+import { IconButton, Spinner, cn, useToast } from "@kaname/ui";
 import { api } from "@/lib/api";
 import { useModes } from "@/lib/modes";
 import { useResource, useResourceMutation, useSession } from "@/lib/queries";
@@ -45,7 +45,8 @@ export interface KanameUpdateState {
 export function useKanameUpdate(): KanameUpdateState {
   const { session, can, refresh } = useSession();
   const { audience, preview } = useModes();
-  const allowed = Boolean(session?.user) && audience === "operator" && !preview && can("admin.settings:write");
+  const allowed =
+    Boolean(session?.user) && audience === "operator" && !preview && can("admin.settings:write");
 
   // Same key as the Updates page, so both read one cache and the SSE
   // `updates` topic refreshes both.
@@ -142,13 +143,10 @@ export function UpdatePill({ className }: { className?: string }) {
 
   const pending = update.overview?.control_plane.pending;
   return (
-    <span
-      className={cn(PILL, "pr-0.5", className)}
-      data-testid="kaname-update-pill"
-    >
+    <span className={cn(PILL, "pr-0.5", className)} data-testid="kaname-update-pill">
       <Link
         href={`${UPDATES_HREF}?apply=1`}
-        className="inline-flex min-w-0 items-center gap-1.5 rounded-[var(--kn-r-pill)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+        className="inline-flex min-w-0 items-center gap-1.5 rounded-[var(--kn-r-sm)] outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
         aria-label={`Kaname ${update.version} is available — review and update`}
       >
         <ArrowUpCircle
@@ -164,19 +162,18 @@ export function UpdatePill({ className }: { className?: string }) {
           <span className="hidden sm:inline">Update</span>
         </span>
       </Link>
-      <button
-        type="button"
+      <IconButton
+        icon={X}
+        size="xs"
         onClick={update.dismiss}
-        aria-label={`Dismiss the notice for Kaname ${update.version}`}
-        className="ml-0.5 inline-flex h-6 w-6 items-center justify-center rounded-[var(--kn-r-pill)] text-[var(--kn-text-3)] outline-none transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
-      >
-        <X size={12} aria-hidden />
-      </button>
+        label={`Dismiss the notice for Kaname ${update.version}`}
+        className="ml-0.5"
+      />
     </span>
   );
 }
 
 const PILL = cn(
-  "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[var(--kn-r-pill)] border border-[var(--kn-border-strong)] pl-2.5 pr-2.5 text-sm",
+  "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[var(--kn-r-md)] border border-[var(--kn-border-strong)] pl-2.5 pr-2.5 text-sm",
   "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)] hover:border-[var(--kn-line-control)]",
 );

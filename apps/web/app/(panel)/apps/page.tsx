@@ -21,7 +21,7 @@ import {
 import { AppCard } from "@/components/installer/AppCard";
 import { AppsHeader } from "@/components/installer/AppsHeader";
 import { FeaturedAppCard } from "@/components/installer/FeaturedAppCard";
-import { useAppCatalog, useAppInstalls } from "@/components/installer/queries";
+import { useAppCatalog } from "@/components/installer/queries";
 import { pluralize } from "@/lib/format";
 import { useCan } from "@/lib/queries";
 
@@ -45,7 +45,6 @@ export default function AppsCatalogPage() {
   const router = useRouter();
   const can = useCan();
   const catalog = useAppCatalog();
-  const installs = useAppInstalls();
   const [filter, setFilter] = React.useState<Filter>("all");
 
   const apps = catalog.data?.data ?? [];
@@ -62,7 +61,6 @@ export default function AppsCatalogPage() {
   const showRecipes = !isFeaturedCategory(filter);
   const visible = apps.filter((app) => filter === "all" || app.category === filter);
   const ready = visible.filter((app) => app.availability === "available");
-  const soon = visible.filter((app) => app.availability !== "available");
   const availableCount = apps.filter((app) => app.availability === "available").length;
   const canInstall = can("apps.installs:write");
 
@@ -71,13 +69,10 @@ export default function AppsCatalogPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <AppsHeader
-        view="catalog"
-        installedCount={installs.data?.meta.total}
         status={
           catalog.data ? (
             <StatusLine tone="ok">
-              {pluralize(availableCount, "app")} ready to install · {apps.length - availableCount}{" "}
-              coming soon
+              {pluralize(availableCount, "app")} ready to install
             </StatusLine>
           ) : null
         }
@@ -146,19 +141,6 @@ export default function AppsCatalogPage() {
               </NumberedSection>
             )}
 
-            {showRecipes && soon.length > 0 && (
-              <NumberedSection
-                index={2}
-                title="Coming soon"
-                caption="Container apps, once the agent can create containers."
-              >
-                <Grid>
-                  {soon.map((app) => (
-                    <AppCard key={app.id} app={app} canInstall={false} onInstall={onInstall} />
-                  ))}
-                </Grid>
-              </NumberedSection>
-            )}
           </>
         )}
       </PageBody>

@@ -24,6 +24,7 @@ import {
   Badge,
   Button,
   Checkbox,
+  DataTable,
   Dialog,
   DialogBody,
   DialogFooter,
@@ -1131,6 +1132,49 @@ function ApplyDialog({
     (status.default_inbound !== defaultInbound || status.default_outbound !== defaultOutbound);
   const riskyWithoutWindow = rollbackSeconds === 0;
 
+  // Disabled rules stay listed, dimmed, so the preview matches the host's full rule order.
+  const dim = (rule: FirewallRule) => (rule.enabled ? undefined : "opacity-60");
+  const applyColumns: DataTableColumn<FirewallRule>[] = [
+    {
+      id: "priority",
+      header: "#",
+      width: 56,
+      mono: true,
+      cell: (rule) => <span className={dim(rule)}>{rule.priority}</span>,
+    },
+    {
+      id: "rule",
+      header: "Rule",
+      mono: true,
+      cell: (rule) => <span className={dim(rule)}>{describeRule(rule)}</span>,
+    },
+    {
+      id: "comment",
+      header: "Comment",
+      cell: (rule) => (
+        <span className={cn("text-[var(--kn-text-2)]", dim(rule))}>{rule.comment ?? "—"}</span>
+      ),
+    },
+    {
+      id: "state",
+      header: "State",
+      width: 110,
+      align: "right",
+      cell: (rule) =>
+        !rule.enabled ? (
+          <Badge tone="neutral" size="xs">
+            disabled
+          </Badge>
+        ) : isPending(rule) ? (
+          <Badge tone="warn" size="xs">
+            changed
+          </Badge>
+        ) : (
+          <span className="text-xs text-[var(--kn-text-3)]">unchanged</span>
+        ),
+    },
+  ];
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange} size="lg" dismissible={!submitting}>
       <form
@@ -1192,76 +1236,36 @@ function ApplyDialog({
               </FormField>
             </div>
 
-            <div className="overflow-hidden rounded-[var(--kn-r-lg)] border border-[var(--kn-border)]">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--kn-border)] px-3 py-2">
-                <span className="kn-title text-[var(--kn-text)]">What changes</span>
-                <span className="text-[var(--kn-text-2)]">
-                  {changed === 0
-                    ? "No rule has been edited since the last apply."
-                    : `${formatCount(changed)} of ${formatCount(rules.length)} rules edited since the last apply.`}
-                </span>
-                {policyChanged && (
-                  <Badge tone="warn" size="xs">
-                    default policy changes
-                  </Badge>
-                )}
-              </div>
-              <div className="max-h-64 overflow-y-auto">
-                <table className="w-full border-collapse">
-                  <caption className="sr-only">
-                    Rules that will be written to {serverName}, in priority order
-                  </caption>
-                  <thead className="sticky top-0 bg-[var(--kn-surface-2)]">
-                    <tr className="kn-label-sm text-left text-[var(--kn-text-3)]">
-                      <th scope="col" className="px-3 py-1.5 font-normal">
-                        #
-                      </th>
-                      <th scope="col" className="px-3 py-1.5 font-normal">
-                        Rule
-                      </th>
-                      <th scope="col" className="px-3 py-1.5 font-normal">
-                        Comment
-                      </th>
-                      <th scope="col" className="px-3 py-1.5 text-right font-normal">
-                        State
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rules.map((rule) => (
-                      <tr
-                        key={rule.id}
-                        className={cn(
-                          "border-t border-[var(--kn-border-subtle)]",
-                          !rule.enabled && "opacity-60",
-                        )}
-                      >
-                        <td className="kn-mono px-3 py-1 text-[var(--kn-text-2)]">
-                          {rule.priority}
-                        </td>
-                        <td className="kn-mono px-3 py-1 text-[var(--kn-text)]">
-                          {describeRule(rule)}
-                        </td>
-                        <td className="px-3 py-1 text-[var(--kn-text-2)]">{rule.comment ?? "—"}</td>
-                        <td className="px-3 py-1 text-right">
-                          {!rule.enabled ? (
-                            <Badge tone="neutral" size="xs">
-                              disabled
-                            </Badge>
-                          ) : isPending(rule) ? (
-                            <Badge tone="warn" size="xs">
-                              changed
-                            </Badge>
-                          ) : (
-                            <span className="text-xs text-[var(--kn-text-3)]">unchanged</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <DataTable
+              label={`Rules that will be written to ${serverName}, in priority order`}
+              columns={applyColumns}
+              rows={rules}
+              getRowId={(rule) => rule.id}
+              density="compact"
+              stickyHeader
+              columnVisibility={false}
+              className="max-h-80"
+              toolbar={
+                <>
+                  <span className="kn-title text-[var(--kn-text)]">What changes</span>
+                  <span className="text-[var(--kn-text-2)]">
+                    {changed === 0
+                      ? "No rule has been edited since the last apply."
+                      : `${formatCount(changed)} of ${formatCount(rules.length)} rules edited since the last apply.`}
+                  </span>
+                  {policyChanged && (
+                    <Badge tone="warn" size="xs">
+                      default policy changes
+                    </Badge>
+                  )}
+                </>
+              }
+              empty={
+                <p className="px-3 py-2 text-[var(--kn-text-3)]">
+                  No rules; only the default policy is written.
+                </p>
+              }
+            />
 
             {riskyWithoutWindow && (
               <Checkbox

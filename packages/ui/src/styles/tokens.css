@@ -1,13 +1,12 @@
 /* ------------------------------------------------------------------ *
- * Kaname design tokens — the FutureForge Studios (ffstudios.io) language.
+ * Kaname design tokens.
  *
- * Ink canvas, paper text, one brand purple, hairlines instead of fills,
- * pills for actions, mono uppercase tracked labels for anything that
- * annotates, a faint blueprint grid with frame rails behind the content.
- * Flat: no vibrancy, no blur, no shadow on a dark surface that is part
- * of the page. Only floating overlays (menus, dialogs, toasts) keep a
- * restrained drop. See docs/design-system.md, docs/redesign-guide.md
- * and KD-038 (supersedes KD-036's Apple UI layer).
+ * Plain ink canvas, paper text, one brand purple, hairlines instead of
+ * fills, 8px corners on controls and cards, sentence-case sans labels.
+ * Flat: no grid, no rails, no vibrancy, no shadow on anything that is
+ * part of the page. Only floating overlays (menus, dialogs, toasts) keep
+ * a restrained drop. See docs/design-system.md and KD-044 (which keeps
+ * KD-038's palette, fonts and status rules).
  *
  * Dark is the default and the design target; light is the ffstudios
  * paper palette on the same token names. The `--kn-*` names never
@@ -32,8 +31,8 @@
   --kn-border-strong: rgb(255 255 255 / 16%);
   --kn-border-subtle: rgb(255 255 255 / 5%);
   --kn-line-control: rgb(255 255 255 / 40%); /* ff line-control: ghost pill outline */
-  --kn-rail: rgb(255 255 255 / 8%); /* frame rails + crosshair marks */
-  --kn-grid-line: rgb(255 255 255 / 2.6%); /* blueprint grid */
+  --kn-rail: rgb(255 255 255 / 8%); /* hero-only frame rails (GridBackdrop) */
+  --kn-grid-line: rgb(255 255 255 / 2.6%); /* hero-only grid (GridBackdrop) */
   --kn-grid-size: 64px;
   --kn-field-bg: rgb(255 255 255 / 3%); /* inputs: a recessed hairline box */
   --kn-field-border: rgb(255 255 255 / 14%);
@@ -77,13 +76,13 @@
   --kn-chart-6: #8e8d8b;
   --kn-chart-grid: rgb(255 255 255 / 6%);
 
-  /* --- radius: chips 6, fields 8, cards 14, feature cards 18, ---- *
-   * --- and the pill for every action ----------------------------- */
+  /* --- radius: chips 6; buttons, fields, cards 8; dialogs 12. ---- *
+   * --- The pill is for dots, switches and avatars, never actions. - */
   --kn-r-xs: 4px;
   --kn-r-sm: 6px;
   --kn-r-md: 8px;
-  --kn-r-lg: 14px;
-  --kn-r-xl: 18px;
+  --kn-r-lg: 8px;
+  --kn-r-xl: 12px;
   --kn-r-pill: 9999px;
 
   /* --- depth: none on the page; a restrained drop on overlays ---- */
@@ -118,8 +117,8 @@
   --kn-font-display: var(--kn-font-sans);
   --kn-font-pixel:
     var(--font-geist-pixel-square, "Geist Pixel Square"), var(--kn-font-mono);
-  --kn-tracking-label: 0.14em; /* mono uppercase labels */
-  --kn-tracking-display: -0.035em; /* headlines */
+  --kn-tracking-label: 0; /* labels are sentence case, never tracked */
+  --kn-tracking-display: -0.02em; /* page titles */
   --kn-tracking-title: -0.015em; /* card + section titles */
 
   /* --- layout metrics ------------------------------------------- */
@@ -128,7 +127,7 @@
   --kn-topbar-h: 52px;
   --kn-row-h: 36px;
   --kn-row-h-compact: 30px;
-  --kn-gutter: 24px; /* page side padding; rails sit at half of it */
+  --kn-gutter: 24px; /* page side padding */
 }
 
 [data-theme="light"] {
@@ -186,8 +185,8 @@
   --kn-chart-6: #6b6b74;
   --kn-chart-grid: rgb(9 9 11 / 7%);
 
-  /* ff .card: one tight line plus a wide, very soft drop. */
-  --kn-shadow-sm: 0 1px 2px rgb(9 9 11 / 4%), 0 14px 32px -24px rgb(9 9 11 / 16%);
+  /* Cards are flat on paper too: the hairline carries the edge. */
+  --kn-shadow-sm: 0 0 #0000;
   --kn-shadow-md: 0 1px 2px rgb(9 9 11 / 5%), 0 18px 40px -20px rgb(9 9 11 / 22%);
   --kn-shadow-lg: 0 1px 3px rgb(9 9 11 / 6%), 0 32px 72px -24px rgb(9 9 11 / 30%);
 
@@ -241,63 +240,61 @@ samp,
 
 @layer components {
   /*
-   * Display type: the ffstudios headline. Geist Sans (standing in for the
-   * site's Satoshi, which is not licensed here), medium weight, tight
-   * tracking, tight leading. `.kn-display` is the in-panel page title;
-   * `.kn-headline` is the hero size for onboarding, login and empty
-   * canvases; `.kn-title` is a card or section title.
+   * Display type. `.kn-display` is the in-panel page title (24px, 600);
+   * `.kn-headline` is the hero size for login, setup, invite and a
+   * first-run canvas only; `.kn-title` is a card or section title.
    */
   .kn-display {
     font-family: var(--kn-font-display);
-    font-size: 28px;
+    font-size: 24px;
     line-height: 32px;
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: var(--kn-tracking-display);
   }
 
   .kn-headline {
     font-family: var(--kn-font-display);
-    font-size: clamp(36px, 5vw, 64px);
-    line-height: 1.02;
-    font-weight: 500;
-    letter-spacing: -0.045em;
+    font-size: clamp(32px, 4.5vw, 52px);
+    line-height: 1.05;
+    font-weight: 600;
+    letter-spacing: -0.035em;
     text-wrap: balance;
   }
 
   .kn-title {
-    font-weight: 500;
+    font-weight: 600;
     letter-spacing: var(--kn-tracking-title);
   }
 
   .kn-lede {
-    font-size: 15px;
-    line-height: 24px;
+    font-size: 14px;
+    line-height: 22px;
     color: var(--kn-text-2);
     text-wrap: pretty;
   }
 
   /*
-   * The mono label: JetBrains Mono, uppercase, wide-tracked. Nav items,
-   * eyebrows, table headers, axis labels, annotations. Never body copy.
+   * The label: sentence-case Geist Sans in its own case, no tracking.
+   * Nav groups, tabs, table headers, metric labels, property keys,
+   * captions, breadcrumbs. Colour comes from the caller (muted/subtle).
+   * Mono is for values (hosts, paths, ids), never for labels.
    */
   .kn-label {
-    font-family: var(--kn-font-mono);
-    font-size: 11px;
-    line-height: 16px;
+    font-family: var(--kn-font-sans);
+    font-size: 13px;
+    line-height: 18px;
     font-weight: 500;
-    letter-spacing: var(--kn-tracking-label);
-    text-transform: uppercase;
-    font-variant-ligatures: none;
+    letter-spacing: normal;
+    text-transform: none;
   }
 
   .kn-label-sm {
-    font-family: var(--kn-font-mono);
-    font-size: 10px;
-    line-height: 14px;
+    font-family: var(--kn-font-sans);
+    font-size: 12px;
+    line-height: 16px;
     font-weight: 500;
-    letter-spacing: var(--kn-tracking-label);
-    text-transform: uppercase;
-    font-variant-ligatures: none;
+    letter-spacing: normal;
+    text-transform: none;
   }
 
   /* Geist Pixel: numerals and brand moments only, never body. */
@@ -306,7 +303,7 @@ samp,
     letter-spacing: 0;
   }
 
-  /* The second line of a hero headline. Purple-soft to purple. */
+  /* The second line of a hero headline (login, setup only). */
   .kn-gradient-text {
     background-image: var(--kn-gradient-brand);
     -webkit-background-clip: text;
@@ -323,73 +320,19 @@ samp,
   }
 
   /*
-   * The blueprint: a faint square grid. `.kn-grid` paints it on any box;
-   * `.kn-canvas` is the page canvas (grid + the two vertical frame rails
-   * at half a gutter in from each edge). Both are background-only, so they
-   * never intercept a click and never affect layout.
+   * The page canvas is a plain flat background (KD-044). `.kn-crosshairs`
+   * is kept as a name so old markup keeps compiling, but draws nothing;
+   * GridBackdrop paints its own grid for hero screens.
    */
-  .kn-grid {
-    background-image:
-      linear-gradient(90deg, var(--kn-grid-line) 1px, transparent 1px),
-      linear-gradient(var(--kn-grid-line) 1px, transparent 1px);
-    background-size: var(--kn-grid-size) var(--kn-grid-size);
-  }
-
   .kn-canvas {
-    --kn-rail-inset: calc(var(--kn-gutter) / 2);
     background-color: var(--kn-bg);
-    background-image:
-      linear-gradient(var(--kn-rail), var(--kn-rail)),
-      linear-gradient(var(--kn-rail), var(--kn-rail)),
-      linear-gradient(90deg, var(--kn-grid-line) 1px, transparent 1px),
-      linear-gradient(var(--kn-grid-line) 1px, transparent 1px);
-    background-size:
-      1px 100%,
-      1px 100%,
-      var(--kn-grid-size) var(--kn-grid-size),
-      var(--kn-grid-size) var(--kn-grid-size);
-    background-position:
-      left var(--kn-rail-inset) top,
-      right var(--kn-rail-inset) top,
-      left var(--kn-rail-inset) top,
-      left var(--kn-rail-inset) top;
-    background-repeat: no-repeat, no-repeat, repeat, repeat;
   }
 
-  /*
-   * Crosshair registration marks: the small "+" where a section hairline
-   * meets the frame rails. Put `.kn-crosshairs` on any full-bleed element
-   * with a bottom hairline inside a `.kn-canvas`; the marks sit on its
-   * bottom edge at the rail positions.
-   */
   .kn-crosshairs {
     position: relative;
   }
-  .kn-crosshairs::before,
-  .kn-crosshairs::after {
-    content: "";
-    position: absolute;
-    bottom: -6px;
-    width: 11px;
-    height: 11px;
-    pointer-events: none;
-    z-index: 1;
-    background:
-      linear-gradient(var(--kn-line-control), var(--kn-line-control)) center / 1px 100% no-repeat,
-      linear-gradient(var(--kn-line-control), var(--kn-line-control)) center / 100% 1px no-repeat;
-  }
-  .kn-crosshairs::before {
-    left: calc(var(--kn-gutter) / 2 - 5px);
-  }
-  .kn-crosshairs::after {
-    right: calc(var(--kn-gutter) / 2 - 5px);
-  }
 
-  /*
-   * Chrome (sidebar, top bar): flat ink with a hairline — the ffstudios
-   * header. The class name is kept from the previous system; there is no
-   * translucency or blur any more.
-   */
+  /* Chrome (sidebar, top bar): flat ink with a hairline, no blur. */
   .kn-material {
     background-color: var(--kn-material);
   }

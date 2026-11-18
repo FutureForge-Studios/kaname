@@ -233,9 +233,9 @@ function LoginFrame({ children }: { children: React.ReactNode }) {
           <Hero
             as="p"
             eyebrow="Kaname"
-            title="The control plane"
-            accent="for your infrastructure."
-            lede="Servers, websites, email, databases and backups, run from one place."
+            title="Deploy to your"
+            accent="own servers."
+            lede="Projects from git or one-click apps, with domains, HTTPS, databases and backups, on machines you own."
           >
             <StatusLine tone="neutral" className="mt-6">
               Every sign-in attempt, successful or not, is written to the audit trail.

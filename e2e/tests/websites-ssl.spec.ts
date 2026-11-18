@@ -31,7 +31,7 @@ import {
  * asserted is the certificate's own state after the job — status, the
  * challenge that was used, an expiry pushed out — and, when a renewal
  * fails, that the failure is recorded on the certificate where the SSL
- * page and the Command Center can see it, instead of the row sitting
+ * page and the home page can see it, instead of the row sitting
  * on "pending" with the reason buried in a job log.
  *
  * A certificate issued elsewhere is installed from the same page: the
@@ -110,8 +110,8 @@ test("an http-01 certificate is issued from the site and served from its webroot
 }) => {
   const { siteId, webroot, domain } = await siteWithDomain();
   await page.goto(`/websites/sites/${siteId}`);
-  await page.getByRole("button", { name: "More actions" }).click();
-  await page.getByRole("menuitem", { name: "Issue certificate" }).click();
+  await page.getByRole("tab", { name: /Domains/ }).click();
+  await page.getByRole("button", { name: "Issue certificate", exact: true }).click();
 
   const dialog = page.getByRole("dialog", { name: `Issue a certificate for ${domain.name}` });
   await expect(dialog).toBeVisible();
@@ -134,8 +134,7 @@ test("an http-01 certificate is issued from the site and served from its webroot
   );
   await page.keyboard.press("Escape");
 
-  await page.getByRole("tab", { name: /SSL/ }).click();
-  const table = page.getByRole("table", { name: "Site certificates" });
+  const table = page.getByRole("table", { name: "Project certificates" });
   await expect(rowWith(table, domain.name)).toContainText("Active");
 
   const cert = await certificateFor(domain.name);
@@ -349,28 +348,26 @@ test("turning auto-renew off is saved and the renewal filter finds it", async ({
   await expect(rowWith(table, domain.name)).toHaveCount(0);
 });
 
-/* ----------------------- the Command Center view --------------------- */
+/* ------------------------ expiry on the home page ------------------------ */
 
 /*
  * The seed ships shop.futureforge.dev three days from expiry and
- * docs.forgebase.dev eleven days out. Both belong in "Certificates
- * expiring"; only the three-day one is the operator's problem today,
+ * docs.forgebase.dev eleven days out. The SSL list shows both with their
+ * days left; only the three-day one is the operator's problem today,
  * because the other is still inside an auto-renew window that has not
- * failed. Following the attention item has to land on that certificate.
+ * failed. The home page's attention item has to land on that certificate.
  */
-test("expiring certificates surface on the Command Center and link to themselves", async ({
+test("expiring certificates show their days on the SSL list, and the home links to one", async ({
   page,
 }) => {
+  await page.goto("/websites/ssl?q=shop.futureforge.dev");
+  const table = page.getByRole("table", { name: "Certificates" });
+  await expect(rowWith(table, "shop.futureforge.dev")).toContainText(/[23] days/);
+  await page.goto("/websites/ssl?q=docs.forgebase.dev");
+  await expect(rowWith(table, "docs.forgebase.dev")).toContainText(/1[01] days/);
+
   await page.goto("/");
-  await expect(page.getByRole("heading", { level: 1, name: "Command Center" })).toBeVisible();
-
-  const expiring = sectionNamed(page, "Certificates expiring");
-  const shop = expiring.getByRole("listitem").filter({ hasText: "shop.futureforge.dev" });
-  await expect(shop).toContainText(/[23] days/);
-  await expect(
-    expiring.getByRole("listitem").filter({ hasText: "docs.forgebase.dev" }),
-  ).toContainText(/1[01] days/);
-
+  await expect(page.getByRole("heading", { level: 1, name: "Projects" })).toBeVisible();
   const attention = sectionNamed(page, "Needs attention");
   const item = attention.getByRole("link", {
     name: /Certificate for shop\.futureforge\.dev expires in [23] days/,
@@ -384,16 +381,16 @@ test("expiring certificates surface on the Command Center and link to themselves
   const shopCert = await certificateFor("shop.futureforge.dev");
   await expect(page).toHaveURL(new RegExp(`/websites/ssl/${shopCert.id}$`));
   await expect(page.getByRole("heading", { level: 1, name: "shop.futureforge.dev" })).toBeVisible();
-  /* Replaced, not pushed: Back is the Command Center, not a bounce. */
+  /* Replaced, not pushed: Back is the home page, not a bounce. */
   await page.goBack();
-  await expect(page.getByRole("heading", { level: 1, name: "Command Center" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Projects" })).toBeVisible();
 });
 
 /*
  * The seeded certificates have no files on the simulated host, which is
  * what a certificate deleted behind Kaname's back looks like. Renewing
  * one fails on the host; the failure must reach the certificate and the
- * Command Center's attention item, which is how an operator learns that
+ * home page's attention item, which is how an operator learns that
  * "auto-renew" is not going to save it.
  */
 test("a failed renewal of an expiring certificate is visible where it is triaged", async ({
@@ -545,7 +542,7 @@ test("the API applies the same certificate checks without the dialog", async () 
   expect(res.error?.fields?.["key_pem"]).toMatch(/^Not a PEM private key\./);
 });
 
-/* The Command Center's attention items link with ?certificate_id=; the
+/* The home page's attention items link with ?certificate_id=; the
  * list must forward that to the certificate itself. */
 test("a ?certificate_id= link opens that certificate", async ({ page }) => {
   const shop = await certificateFor("shop.futureforge.dev");

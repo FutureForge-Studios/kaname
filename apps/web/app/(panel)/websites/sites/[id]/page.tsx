@@ -5,8 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowRight,
-  Folder,
+  ExternalLink,
   LayoutDashboard,
   Link2,
   MoreHorizontal,
@@ -16,36 +15,28 @@ import {
   Plus,
   RefreshCw,
   Rocket,
+  RotateCw,
   ScrollText,
+  Settings,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
-import type {
-  Certificate,
-  Deployment,
-  Domain,
-  FileEntry,
-  LogSourceRow,
-  Site,
-} from "@kaname/contract";
+import type { Certificate, Deployment, Domain, LogSourceRow, Site } from "@kaname/contract";
 import {
   Badge,
   Button,
-  ByteSize,
-  CardInset,
   Checkbox,
   ConfirmDialog,
   DataTable,
   DetailLayout,
   DropdownMenu,
   EmptyState,
-  FileTree,
+  FormField,
   IconButton,
+  Input,
   LogViewer,
   MenuItem,
   MenuSeparator,
-  MetricTile,
-  MonoLabel,
   MonoText,
   PropertyList,
   PropertyRow,
@@ -58,18 +49,18 @@ import {
   TabPanel,
   Tabs,
   type DataTableColumn,
-  type FileTreeNode,
 } from "@kaname/ui";
 import { PageError } from "@/components/PageError";
 import { formatCount, formatDuration } from "@/lib/format";
-import { useCan } from "@/lib/queries";
+import { useAudience } from "@/lib/modes";
+import { invalidateFamilies, useCan } from "@/lib/queries";
+import { fieldErrors } from "../../../_components/FormDialog";
 import { CertificateDialog } from "../../_components/CertificateDialog";
 import { DeployDialog } from "../../_components/DeployDialog";
 import { DomainDialog } from "../../_components/DomainDialog";
 import { SiteDialog } from "../../_components/SiteDialog";
 import {
   DetailBody,
-  DetailEyebrow,
   DetailFailed,
   DetailIdentity,
   DetailLoading,
@@ -79,11 +70,9 @@ import {
   type DetailTabSpec,
 } from "../../_components/detail";
 import {
-  directoryQuery,
   useCertificates,
   useDeleteSite,
   useDeployments,
-  useDirectory,
   useDomains,
   useLogSearch,
   useLogSources,
@@ -91,51 +80,51 @@ import {
   useResumeSite,
   useSite,
   useSuspendSite,
+  useTriggerDeployment,
+  useUpdateSite,
 } from "../../_components/queries";
 import {
   CertificateStatusBadge,
   CommitCell,
+  DEPLOYMENT_IN_FLIGHT,
   DeploymentStatusBadge,
   DnsProviderBadge,
   DomainStatusBadge,
   Expiry,
-  HostAxes,
   ProxiedBadge,
   RUNTIME_LABELS,
   SiteStatusBadge,
   VerificationBadge,
-  certificateStatusLabel,
-  certificateStatusTone,
   lineTone,
   siteStatusTone,
   useServerById,
 } from "../../_components/status";
 
 /* ------------------------------------------------------------------ *
- * Site detail.
+ * Project page.
  *
- * Six tabs, one subject. The header keeps identity and both host status
- * axes on screen whichever tab is open, because "this site is fine" and
- * "the box serving it is unreachable" answer different questions, and
- * the second one changes what every tab below means.
+ * Shaped like a Vercel project: the header says what it is and where it
+ * answers, with Visit and Redeploy one click away; Overview opens on the
+ * production deployment. The header keeps both host status axes on
+ * screen whichever tab is open, because "this site is fine" and "the box
+ * serving it is unreachable" answer different questions.
  *
- * Panels mount only while selected, so an unopened Files tab never asks
- * the agent to read a directory and an unopened Logs tab never polls.
+ * Panels mount only while selected, so an unopened Logs tab never polls.
  * ------------------------------------------------------------------ */
 
 const TAB_VALUES: DetailTabSpec[] = [
   { value: "overview", label: "Overview", icon: LayoutDashboard },
-  { value: "domains", label: "Domains", icon: Link2 },
-  { value: "ssl", label: "SSL", icon: ShieldCheck },
   { value: "deployments", label: "Deployments", icon: Rocket },
-  { value: "files", label: "Files", icon: Folder },
+  { value: "domains", label: "Domains", icon: Link2 },
   { value: "logs", label: "Logs", icon: ScrollText },
+  { value: "settings", label: "Settings", icon: Settings },
 ];
 
 export default function SiteDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = React.use(params);
   const router = useRouter();
   const can = useCan();
+  const operator = useAudience().audience === "operator";
 
   const query = useSite(id);
   const site = query.data ?? null;
@@ -145,11 +134,13 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
   const remove = useDeleteSite();
   const suspend = useSuspendSite();
   const resume = useResumeSite();
+  const redeploy = useTriggerDeployment();
   const [confirmingSuspend, setConfirmingSuspend] = React.useState(false);
 
   const [editing, setEditing] = React.useState(false);
   const [deploying, setDeploying] = React.useState(false);
-  const [issuing, setIssuing] = React.useState(false);
+  /* undefined: closed; null: issue without a domain picked. */
+  const [issuingFor, setIssuingFor] = React.useState<string | null | undefined>(undefined);
   const [attaching, setAttaching] = React.useState(false);
   const [confirmingDelete, setConfirmingDelete] = React.useState(false);
   const [deleteWebroot, setDeleteWebroot] = React.useState(false);
@@ -169,13 +160,28 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
       <DetailFailed
         error={query.error}
         onRetry={() => void query.refetch()}
-        context="Site"
-        title="Site"
+        context="Project"
+        title="Project"
       />
     );
   }
 
   const writable = can("websites.sites:write", site.server_id);
+  const canDeploy = can("websites.deployments:exec", site.server_id);
+  const inFlight = deploymentInFlight(site);
+  // Scoped accounts may not set a repository, so they deploy through the dialog.
+  const gitDeploy = site.repo_url !== null && operator;
+
+  /* With a repository on the site, one click deploys its branch head;
+   * without one, the dialog asks for a repository or an upload. */
+  const deploy = () => {
+    if (gitDeploy) redeploy.mutate({ site_id: site.id, source: "git", force: false });
+    else setDeploying(true);
+  };
+  const confirmDelete = () => {
+    setDeleteWebroot(false);
+    setConfirmingDelete(true);
+  };
 
   return (
     <>
@@ -186,46 +192,61 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
         className="flex min-h-0 flex-1 flex-col"
       >
         <ResourceHeader
-          breadcrumb={<DetailEyebrow kind="Site" />}
+          breadcrumb={
+            <Link href="/" className="hover:text-[var(--kn-text)] hover:underline">
+              Projects
+            </Link>
+          }
           name={site.name}
           identity={
             <DetailIdentity status={<SiteStatusLine site={site} />}>
-              {site.primary_domain ?? site.webroot}
+              {site.primary_domain ? (
+                <a
+                  href={siteUrl(site, site.primary_domain)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="hover:underline"
+                >
+                  {site.primary_domain}
+                </a>
+              ) : (
+                "No domain yet"
+              )}
             </DetailIdentity>
           }
           connection={server?.connection}
           lastSeenAt={server?.last_seen_at}
           health={server?.health}
           healthReasons={server?.health_reasons}
-          badges={
-            <>
-              <SiteStatusBadge status={site.status} />
-              <Badge tone="neutral" size="xs">
-                {RUNTIME_LABELS[site.runtime]}
-                {site.runtime_version ? ` ${site.runtime_version}` : ""}
-              </Badge>
-            </>
-          }
+          badges={<SiteStatusBadge status={site.status} />}
           actions={
             <>
-              <Button
-                variant="secondary"
-                size="sm"
-                icon={RefreshCw}
-                loading={reload.isPending}
-                disabled={!writable}
-                onClick={() => reload.mutate([site.id])}
-              >
-                Reload
-              </Button>
+              {site.primary_domain && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={ExternalLink}
+                  onClick={() =>
+                    window.open(
+                      siteUrl(site, site.primary_domain!),
+                      "_blank",
+                      "noopener,noreferrer",
+                    )
+                  }
+                >
+                  Visit
+                </Button>
+              )}
               <Button
                 variant="primary"
                 size="sm"
-                icon={Rocket}
-                disabled={!can("websites.deployments:exec", site.server_id)}
-                onClick={() => setDeploying(true)}
+                icon={site.last_deployment ? RotateCw : Rocket}
+                loading={redeploy.isPending}
+                disabled={!canDeploy || inFlight}
+                title={inFlight ? IN_FLIGHT_REASON : undefined}
+                onClick={deploy}
               >
-                Deploy
+                {site.last_deployment ? "Redeploy" : "Deploy"}
               </Button>
             </>
           }
@@ -235,25 +256,12 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
               placement="bottom-end"
               label={`${site.name} actions`}
             >
-              <MenuItem icon={Pencil} disabled={!writable} onSelect={() => setEditing(true)}>
-                Edit site
-              </MenuItem>
               <MenuItem
-                icon={ShieldCheck}
-                disabled={!can("websites.ssl:write", site.server_id)}
-                onSelect={() => setIssuing(true)}
+                icon={RefreshCw}
+                disabled={!writable || reload.isPending}
+                onSelect={() => reload.mutate([site.id])}
               >
-                Issue certificate
-              </MenuItem>
-              <MenuItem
-                icon={Folder}
-                onSelect={() =>
-                  router.push(
-                    `/files/manager?server_id=${site.server_id}&path=${encodeURIComponent(site.webroot)}`,
-                  )
-                }
-              >
-                Open in File Manager
+                Reload
               </MenuItem>
               <MenuSeparator />
               {site.status === "suspended" ? (
@@ -262,7 +270,7 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
                   disabled={!writable || resume.isPending}
                   onSelect={() => resume.mutate({ id: site.id, name: site.name })}
                 >
-                  Resume site
+                  Resume project
                 </MenuItem>
               ) : (
                 <MenuItem
@@ -270,19 +278,16 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
                   disabled={!writable || site.status === "provisioning"}
                   onSelect={() => setConfirmingSuspend(true)}
                 >
-                  Suspend site
+                  Suspend project
                 </MenuItem>
               )}
               <MenuItem
                 icon={Trash2}
                 destructive
                 disabled={!can("websites.sites:delete", site.server_id)}
-                onSelect={() => {
-                  setDeleteWebroot(false);
-                  setConfirmingDelete(true);
-                }}
+                onSelect={confirmDelete}
               >
-                Delete site
+                Delete project
               </MenuItem>
             </DropdownMenu>
           }
@@ -291,22 +296,28 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
 
         <DetailBody>
           <Panel value="overview">
-            <OverviewTab site={site} onIssue={() => setIssuing(true)} />
-          </Panel>
-          <Panel value="domains">
-            <DomainsTab site={site} onAttach={() => setAttaching(true)} />
-          </Panel>
-          <Panel value="ssl">
-            <SslTab site={site} onIssue={() => setIssuing(true)} />
+            <OverviewTab site={site} canDeploy={canDeploy && !inFlight} onDeploy={deploy} />
           </Panel>
           <Panel value="deployments">
-            <DeploymentsTab site={site} onDeploy={() => setDeploying(true)} />
+            <DeploymentsTab site={site} inFlight={inFlight} onDeploy={() => setDeploying(true)} />
           </Panel>
-          <Panel value="files">
-            <FilesTab site={site} />
+          <Panel value="domains">
+            <DomainsTab site={site} onAttach={() => setAttaching(true)} onIssue={setIssuingFor} />
+            <CertificatesSection site={site} onIssue={() => setIssuingFor(null)} />
           </Panel>
           <Panel value="logs">
             <LogsTab site={site} />
+          </Panel>
+          <Panel value="settings">
+            <SettingsTab
+              site={site}
+              operator={operator}
+              onEdit={() => setEditing(true)}
+              onSuspend={() => setConfirmingSuspend(true)}
+              onResume={() => resume.mutate({ id: site.id, name: site.name })}
+              resuming={resume.isPending}
+              onDelete={confirmDelete}
+            />
           </Panel>
         </DetailBody>
       </Tabs>
@@ -314,9 +325,11 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
       <SiteDialog open={editing} onOpenChange={setEditing} site={site} />
       <DeployDialog open={deploying} onOpenChange={setDeploying} site={site} />
       <CertificateDialog
-        open={issuing}
-        onOpenChange={setIssuing}
-        defaultDomainId={site.domains[0]?.id ?? null}
+        open={issuingFor !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setIssuingFor(undefined);
+        }}
+        defaultDomainId={issuingFor ?? site.domains[0]?.id ?? null}
         defaultServerId={site.server_id}
       />
       <DomainDialog
@@ -330,8 +343,8 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
         open={confirmingSuspend}
         onOpenChange={setConfirmingSuspend}
         title={`Suspend ${site.name}?`}
-        description={`The vhost is disabled on ${site.server_name} and the web server reloaded, so ${site.primary_domain ?? "the site"} stops answering. Files, domains and certificates are kept, and Resume brings it back as it was.`}
-        confirmLabel="Suspend site"
+        description={`${site.primary_domain ?? "The project"} stops answering until you resume it. Files, domains and certificates are kept.`}
+        confirmLabel="Suspend project"
         destructive
         loading={suspend.isPending}
         onConfirm={() =>
@@ -346,9 +359,9 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
         open={confirmingDelete}
         onOpenChange={setConfirmingDelete}
         title={`Delete ${site.name}?`}
-        description="The vhost is removed and the web server reloaded as a job. Domains stay in Kaname so their DNS records and certificate history survive."
+        description={`${site.primary_domain ?? "The project"} stops answering and its server config is removed. Its files stay unless you tick the box below. Domains stay in Kaname with their DNS records and certificates.`}
         confirmText={site.name}
-        confirmLabel="Delete site"
+        confirmLabel="Delete project"
         loading={remove.isPending}
         onConfirm={() =>
           remove.mutate(
@@ -356,7 +369,7 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
             {
               onSuccess: () => {
                 setConfirmingDelete(false);
-                router.push("/websites/sites");
+                router.push("/");
               },
             },
           )
@@ -365,7 +378,7 @@ export default function SiteDetailPage({ params }: { params: Promise<{ id: strin
         <Checkbox
           checked={deleteWebroot}
           onChange={(event) => setDeleteWebroot(event.target.checked)}
-          label="Also delete the webroot"
+          label="Also delete its files"
           description={`Removes ${site.webroot} and everything in it. There is no undo.`}
         />
       </ConfirmDialog>
@@ -381,24 +394,37 @@ function Panel({ value, children }: { value: string; children: React.ReactNode }
   );
 }
 
+const IN_FLIGHT_REASON = "A deployment is already running";
+
+function deploymentInFlight(site: Site): boolean {
+  return (
+    site.last_deployment !== null && DEPLOYMENT_IN_FLIGHT.includes(site.last_deployment.status)
+  );
+}
+
+/** https only when the host can answer on it. */
+function siteUrl(site: Site, host: string): string {
+  const https = site.force_https || site.ssl?.status === "active";
+  return `${https ? "https" : "http"}://${host}`;
+}
+
 /* ------------------------------ overview ---------------------------- */
 
 /** One sentence under the name: what this site is doing right now. */
 function SiteStatusLine({ site }: { site: Site }) {
   const tone = lineTone(siteStatusTone(site.status));
   const name = site.primary_domain ?? site.name;
-  const deployed = site.last_deployment?.finished_at ?? null;
 
-  let sentence: React.ReactNode;
+  let sentence: string;
   switch (site.status) {
     case "provisioning":
-      sentence = `Writing the vhost for ${name} on ${site.server_name}`;
+      sentence = `Setting up ${name} on ${site.server_name}`;
       break;
     case "suspended":
       sentence = `Suspended on ${site.server_name} · ${name} is not answering`;
       break;
     case "error":
-      sentence = `The last change to this vhost failed on ${site.server_name}`;
+      sentence = `The last change to this project failed on ${site.server_name}`;
       break;
     default:
       sentence = `Serving ${name} from ${site.server_name}`;
@@ -407,17 +433,19 @@ function SiteStatusLine({ site }: { site: Site }) {
   return (
     <StatusLine tone={tone} pulse={site.status === "provisioning"}>
       {sentence}
-      {deployed && (
-        <>
-          {" · last deploy "}
-          <RelativeTime value={deployed} />
-        </>
-      )}
     </StatusLine>
   );
 }
 
-function OverviewTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
+function OverviewTab({
+  site,
+  canDeploy,
+  onDeploy,
+}: {
+  site: Site;
+  canDeploy: boolean;
+  onDeploy: () => void;
+}) {
   const deployments = useDeployments({
     site_id: site.id,
     per_page: 5,
@@ -428,7 +456,7 @@ function OverviewTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
   return (
     <DetailLayout
       rail={
-        <SectionCard title="Configuration" headingLevel={3}>
+        <SectionCard title="Project" headingLevel={2}>
           <PropertyList dense labelWidth="sm">
             <PropertyRow label="Server">
               <Link
@@ -442,102 +470,25 @@ function OverviewTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
               {RUNTIME_LABELS[site.runtime]}
               {site.runtime_version ? ` ${site.runtime_version}` : ""}
             </PropertyRow>
-            {site.php_version && (
-              <PropertyRow label="PHP pool" mono>
-                {site.php_version}
-              </PropertyRow>
-            )}
-            <PropertyRow label="Webroot" mono copyValue={site.webroot}>
-              {site.webroot}
+            <PropertyRow label="HTTPS">
+              {site.ssl ? (
+                <Expiry days={site.ssl.days_remaining} at={site.ssl.expires_at} />
+              ) : (
+                "None"
+              )}
             </PropertyRow>
-            {site.config_path && (
-              <PropertyRow label="Vhost" mono copyValue={site.config_path}>
-                {site.config_path}
-              </PropertyRow>
-            )}
-            {site.upstream && (
-              <PropertyRow label="Upstream" mono copyValue={site.upstream}>
-                {site.upstream}
-              </PropertyRow>
-            )}
-            <PropertyRow label="Owner" mono>
-              {site.owner}
-            </PropertyRow>
-            <PropertyRow label="Force HTTPS">{site.force_https ? "Yes" : "No"}</PropertyRow>
             <PropertyRow label="Created">
               <RelativeTime value={site.created_at} />
-            </PropertyRow>
-            <PropertyRow label="Synced" hint="When the host last reconciled this vhost.">
-              <RelativeTime value={site.last_synced_at} fallback="never" />
             </PropertyRow>
           </PropertyList>
         </SectionCard>
       }
     >
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <MetricTile size="sm" label="Disk usage" value={<ByteSize bytes={site.disk_usage} />} />
-        <MetricTile size="sm" label="Domains" value={formatCount(site.domains.length)} />
-        <MetricTile
-          size="sm"
-          label="Certificate"
-          value={
-            site.ssl ? <Expiry days={site.ssl.days_remaining} at={site.ssl.expires_at} /> : "None"
-          }
-          tone={site.ssl ? "neutral" : "warn"}
-        />
-        <MetricTile
-          size="sm"
-          label="Deployments"
-          value={formatCount(deployments.data?.meta.total ?? 0)}
-        />
-      </div>
+      <ProductionDeployment site={site} canDeploy={canDeploy} onDeploy={onDeploy} />
 
       <SectionCard
-        index={1}
-        title="Request path"
-        caption="How a request reaches this site."
-        headingLevel={3}
-      >
-        <RequestPath site={site} />
-      </SectionCard>
-
-      <SectionCard
-        index={2}
-        title="Certificate"
-        caption={site.ssl ? undefined : "HTTPS needs one."}
-        headingLevel={3}
-        actions={
-          site.ssl ? (
-            <PillLink href={`/websites/ssl/${site.ssl.certificate_id}`}>Open certificate</PillLink>
-          ) : undefined
-        }
-      >
-        {site.ssl ? (
-          <StatusLine tone={lineTone(certificateStatusTone(site.ssl.status))}>
-            <span className="text-[var(--kn-text)]">{certificateStatusLabel(site.ssl.status)}</span>
-            {" · "}
-            <Expiry days={site.ssl.days_remaining} at={site.ssl.expires_at} /> left · covering{" "}
-            <MonoText>{site.primary_domain ?? site.name}</MonoText>
-          </StatusLine>
-        ) : (
-          <EmptyState
-            icon={ShieldCheck}
-            title="No certificate on this site"
-            description="HTTPS will not answer until one is issued and installed."
-            size="sm"
-            action={
-              <Button variant="primary" size="sm" icon={ShieldCheck} arrow onClick={onIssue}>
-                Issue a certificate
-              </Button>
-            }
-          />
-        )}
-      </SectionCard>
-
-      <SectionCard
-        index={3}
         title="Recent deployments"
-        headingLevel={3}
+        headingLevel={2}
         padded={false}
         actions={
           <PillLink href={`/websites/deployments?site_id=${site.id}`}>All deployments</PillLink>
@@ -549,74 +500,113 @@ function OverviewTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
   );
 }
 
-/**
- * Domain → host → runtime → webroot, drawn in the inset blueprint well.
- * Each stop is real configuration, so the picture doubles as the answer
- * to "where does this name end up".
- */
-function RequestPath({ site }: { site: Site }) {
-  const server = useServerById(site.server_id);
-  const extra = site.domains.length - 1;
-  const runtime = `${RUNTIME_LABELS[site.runtime]}${site.runtime_version ? ` ${site.runtime_version}` : ""}`;
-
-  const stops: { label: string; value: React.ReactNode; detail?: React.ReactNode }[] = [
-    {
-      label: "Answers on",
-      value: site.primary_domain ? (
-        <MonoText truncate>{site.primary_domain}</MonoText>
-      ) : (
-        <span className="text-[var(--kn-text-3)]">No domain attached</span>
-      ),
-      detail: extra > 0 ? `+${formatCount(extra)} more name${extra === 1 ? "" : "s"}` : undefined,
-    },
-    {
-      label: "Host",
-      value: <HostAxes server={server} fallbackName={site.server_name} />,
-      detail: site.force_https ? "HTTP redirects to HTTPS" : "Answers on plain HTTP too",
-    },
-    {
-      label: "Runtime",
-      value: <span className="text-[var(--kn-text)]">{runtime}</span>,
-      detail: site.upstream ? <MonoText muted>{site.upstream}</MonoText> : undefined,
-    },
-    {
-      label: "Serves from",
-      value: <MonoText truncate>{site.webroot}</MonoText>,
-      detail: site.owner ? (
-        <>
-          owned by <MonoText muted>{site.owner}</MonoText>
-        </>
-      ) : undefined,
-    },
-  ];
+/** What is live now: the newest deployment that succeeded, and where it answers. */
+function ProductionDeployment({
+  site,
+  canDeploy,
+  onDeploy,
+}: {
+  site: Site;
+  canDeploy: boolean;
+  onDeploy: () => void;
+}) {
+  const query = useDeployments({
+    site_id: site.id,
+    status: "succeeded",
+    per_page: 1,
+    sort: "created_at",
+    order: "desc",
+  });
+  const live: Deployment | null = query.data?.data[0] ?? null;
 
   return (
-    <CardInset grid padding="sm">
-      <ol className="m-0 grid list-none grid-cols-1 gap-2 p-0 md:grid-cols-[repeat(4,minmax(0,1fr))]">
-        {stops.map((stop, index) => (
-          <li key={stop.label} className="relative flex min-w-0">
-            <div className="flex min-w-0 flex-1 flex-col gap-1 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] px-3 py-2.5">
-              <MonoLabel size="xs" tone="muted">
-                <span className="text-[var(--kn-accent-400)]">{`0${index + 1}`}</span> {stop.label}
-              </MonoLabel>
-              <div className="flex min-w-0 items-center">{stop.value}</div>
-              {stop.detail && (
-                <div className="min-w-0 truncate text-xs text-[var(--kn-text-3)]">
-                  {stop.detail}
-                </div>
-              )}
-            </div>
-            {index < stops.length - 1 && (
-              <ArrowRight
-                size={12}
-                aria-hidden
-                className="absolute -right-[11px] top-1/2 z-[1] hidden -translate-y-1/2 text-[var(--kn-text-3)] md:block"
-              />
+    <SectionCard
+      title="Production deployment"
+      headingLevel={2}
+      actions={
+        live ? (
+          <PillLink href={`/websites/deployments/${live.id}`}>Open deployment</PillLink>
+        ) : undefined
+      }
+    >
+      {query.isLoading ? (
+        <Skeleton className="h-16 w-full" label="Loading the production deployment" />
+      ) : query.isError ? (
+        <PageError
+          error={query.error}
+          onRetry={() => void query.refetch()}
+          context="Production deployment"
+        />
+      ) : (
+        <div className="flex flex-col gap-3">
+          <PropertyList dense labelWidth="sm">
+            {live && (
+              <>
+                <PropertyRow label="Status">
+                  <DeploymentStatusBadge status={live.status} />
+                </PropertyRow>
+                <PropertyRow label="Commit">
+                  <CommitCell sha={live.commit_sha} message={live.commit_message} />
+                </PropertyRow>
+                <PropertyRow label="Branch" mono>
+                  {live.branch ?? (live.source === "upload" ? "uploaded build" : "—")}
+                </PropertyRow>
+                <PropertyRow label="Deployed">
+                  <RelativeTime value={live.finished_at ?? live.created_at} />
+                  {` by ${live.triggered_by_name ?? live.commit_author ?? "automation"}`}
+                </PropertyRow>
+              </>
             )}
-          </li>
-        ))}
-      </ol>
-    </CardInset>
+            <PropertyRow label="Domains">
+              {site.domains.length > 0 ? (
+                <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
+                  {site.domains.map((domain) => (
+                    <a
+                      key={domain.id}
+                      href={siteUrl(site, domain.name)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="kn-mono text-[var(--kn-accent-400)] hover:underline"
+                    >
+                      {domain.name}
+                    </a>
+                  ))}
+                </span>
+              ) : (
+                "None yet"
+              )}
+            </PropertyRow>
+            <PropertyRow label="Git">
+              {site.repo_url ? (
+                <MonoText truncate>{`${site.repo_url} · ${site.branch ?? "main"}`}</MonoText>
+              ) : (
+                "No repository connected"
+              )}
+            </PropertyRow>
+          </PropertyList>
+
+          {!live && (
+            <EmptyState
+              icon={Rocket}
+              title="Not deployed yet"
+              description={
+                site.repo_url
+                  ? `Deploy ${site.branch ?? "main"} to put it live.`
+                  : "Connect a git repository in Settings, or deploy an uploaded build."
+              }
+              size="sm"
+              action={
+                canDeploy ? (
+                  <Button variant="primary" size="sm" icon={Rocket} onClick={onDeploy}>
+                    Deploy
+                  </Button>
+                ) : undefined
+              }
+            />
+          )}
+        </div>
+      )}
+    </SectionCard>
   );
 }
 
@@ -674,13 +664,7 @@ function DeploymentMiniTable({ query }: { query: ReturnType<typeof useDeployment
           />
         ) : undefined
       }
-      empty={
-        <EmptyState
-          title="Never deployed"
-          description="Trigger a deployment to build this site from its repository."
-          size="sm"
-        />
-      }
+      empty={<EmptyState title="Never deployed" description="No deployments yet." size="sm" />}
       className="rounded-none border-0"
     />
   );
@@ -688,10 +672,37 @@ function DeploymentMiniTable({ query }: { query: ReturnType<typeof useDeployment
 
 /* ------------------------------- domains ---------------------------- */
 
-function DomainsTab({ site, onAttach }: { site: Site; onAttach: () => void }) {
+function DomainsTab({
+  site,
+  onAttach,
+  onIssue,
+}: {
+  site: Site;
+  onAttach: () => void;
+  onIssue: (domainId: string) => void;
+}) {
   const router = useRouter();
   const can = useCan();
+  const canIssue = can("websites.ssl:write", site.server_id);
   const query = useDomains({ site_id: site.id, per_page: 100, sort: "name", order: "asc" });
+  // Same query as CertificatesSection below, so it is fetched once.
+  const certificates = useCertificates({
+    server_id: site.server_id,
+    per_page: 200,
+    sort: "expires_at",
+    order: "asc",
+  });
+  // Names any certificate on the host covers, so a www alias on the SANs counts.
+  const certified = React.useMemo(
+    () =>
+      new Set(
+        (certificates.data?.data ?? []).flatMap((certificate) => [
+          certificate.subject,
+          ...certificate.sans,
+        ]),
+      ),
+    [certificates.data],
+  );
 
   const columns = React.useMemo<DataTableColumn<Domain>[]>(
     () => [
@@ -744,17 +755,37 @@ function DomainsTab({ site, onAttach }: { site: Site; onAttach: () => void }) {
         hideBelow: "md",
         accessor: (domain) => formatCount(domain.record_count),
       },
+      {
+        id: "https",
+        header: "HTTPS",
+        width: 148,
+        align: "right",
+        cell: (domain) =>
+          certified.has(domain.name) ? (
+            "On"
+          ) : certificates.isLoading ? null : (
+            <Button
+              variant="secondary"
+              size="xs"
+              icon={ShieldCheck}
+              disabled={!canIssue}
+              aria-label={`Issue certificate for ${domain.name}`}
+              onClick={() => onIssue(domain.id)}
+            >
+              Issue certificate
+            </Button>
+          ),
+      },
     ],
-    [site.primary_domain],
+    [site.primary_domain, certified, certificates.isLoading, canIssue, onIssue],
   );
 
   return (
     <SectionCard
-      index={1}
-      title="Domains answering on this site"
-      caption="Every server_name on the vhost."
+      title="Domains"
+      caption="The addresses this project answers on."
       padded={false}
-      headingLevel={3}
+      headingLevel={2}
       actions={
         <Button
           variant="secondary"
@@ -771,7 +802,7 @@ function DomainsTab({ site, onAttach }: { site: Site; onAttach: () => void }) {
         columns={columns}
         rows={query.data?.data ?? []}
         getRowId={(domain) => domain.id}
-        label="Site domains"
+        label="Project domains"
         density="compact"
         columnVisibility={false}
         loading={query.isLoading}
@@ -786,7 +817,7 @@ function DomainsTab({ site, onAttach }: { site: Site; onAttach: () => void }) {
           <EmptyState
             icon={Link2}
             title="No domains attached"
-            description="A site with no server_name answers on nothing. Attach a domain to route traffic to it."
+            description="Add a domain so people can reach this project."
             size="sm"
             action={
               <Button variant="primary" size="sm" icon={Plus} arrow onClick={onAttach}>
@@ -801,9 +832,9 @@ function DomainsTab({ site, onAttach }: { site: Site; onAttach: () => void }) {
   );
 }
 
-/* --------------------------------- ssl ------------------------------ */
+/* ---------------------------- certificates -------------------------- */
 
-function SslTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
+function CertificatesSection({ site, onIssue }: { site: Site; onIssue: () => void }) {
   const router = useRouter();
   const can = useCan();
   const query = useCertificates({
@@ -876,11 +907,10 @@ function SslTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
 
   return (
     <SectionCard
-      index={1}
-      title="Certificates covering this site"
-      caption="Issued for its domains on this host."
+      title="Certificates"
+      caption="Issued for this project's domains."
       padded={false}
-      headingLevel={3}
+      headingLevel={2}
       actions={
         <Button
           variant="secondary"
@@ -897,7 +927,7 @@ function SslTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
         columns={columns}
         rows={rows}
         getRowId={(certificate) => certificate.id}
-        label="Site certificates"
+        label="Project certificates"
         density="compact"
         columnVisibility={false}
         loading={query.isLoading}
@@ -916,7 +946,7 @@ function SslTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
           <EmptyState
             icon={ShieldCheck}
             title="No certificate for these domains"
-            description="HTTPS will not answer until one is issued and installed on the host."
+            description="HTTPS will not work until one is issued."
             size="sm"
             action={
               <Button variant="primary" size="sm" icon={ShieldCheck} arrow onClick={onIssue}>
@@ -933,9 +963,19 @@ function SslTab({ site, onIssue }: { site: Site; onIssue: () => void }) {
 
 /* ----------------------------- deployments -------------------------- */
 
-function DeploymentsTab({ site, onDeploy }: { site: Site; onDeploy: () => void }) {
+function DeploymentsTab({
+  site,
+  inFlight,
+  onDeploy,
+}: {
+  site: Site;
+  inFlight: boolean;
+  onDeploy: () => void;
+}) {
   const router = useRouter();
   const can = useCan();
+  const canDeploy = can("websites.deployments:exec", site.server_id) && !inFlight;
+  const reason = inFlight ? IN_FLIGHT_REASON : undefined;
   const query = useDeployments({
     site_id: site.id,
     per_page: 50,
@@ -993,17 +1033,17 @@ function DeploymentsTab({ site, onDeploy }: { site: Site; onDeploy: () => void }
 
   return (
     <SectionCard
-      index={1}
       title="Deployment history"
       caption="Newest first."
       padded={false}
-      headingLevel={3}
+      headingLevel={2}
       actions={
         <Button
           variant="secondary"
           size="xs"
           icon={Rocket}
-          disabled={!can("websites.deployments:exec", site.server_id)}
+          disabled={!canDeploy}
+          title={reason}
           onClick={onDeploy}
         >
           Deploy
@@ -1033,139 +1073,25 @@ function DeploymentsTab({ site, onDeploy }: { site: Site; onDeploy: () => void }
           <EmptyState
             icon={Rocket}
             title="Never deployed"
-            description="Kaname builds from a git repository and swaps the release directory on success."
+            description="Each deploy pulls your branch and goes live when it succeeds."
             size="sm"
             action={
-              <Button variant="primary" size="sm" icon={Rocket} arrow onClick={onDeploy}>
-                Deploy this site
+              <Button
+                variant="primary"
+                size="sm"
+                icon={Rocket}
+                arrow
+                disabled={!canDeploy}
+                title={reason}
+                onClick={onDeploy}
+              >
+                Deploy this project
               </Button>
             }
           />
         }
         className="rounded-none border-0"
       />
-    </SectionCard>
-  );
-}
-
-/* -------------------------------- files ----------------------------- */
-
-function toNode(entry: FileEntry): FileTreeNode {
-  return { path: entry.path, name: entry.name, kind: entry.kind, size: entry.size };
-}
-
-/**
- * Read-only, rooted at the webroot and loaded a level at a time. The
- * full manager — uploads, editing, permissions — stays in its own
- * module; this is the view that answers "is the build actually there".
- */
-function FilesTab({ site }: { site: Site }) {
-  const client = useQueryClient();
-  const root = useDirectory(site.server_id, site.webroot);
-  const [children, setChildren] = React.useState<Record<string, FileTreeNode[]>>({});
-  const [expanded, setExpanded] = React.useState<string[]>([]);
-  const [failedPath, setFailedPath] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    setChildren({});
-    setExpanded([]);
-  }, [site.server_id, site.webroot]);
-
-  const loadChildren = React.useCallback(
-    async (node: FileTreeNode) => {
-      if (children[node.path]) return;
-      try {
-        const listing = await client.fetchQuery(directoryQuery(site.server_id, node.path));
-        setChildren((previous) => ({ ...previous, [node.path]: listing.entries.map(toNode) }));
-        setFailedPath(null);
-      } catch {
-        setFailedPath(node.path);
-      }
-    },
-    [children, client, site.server_id],
-  );
-
-  const nodes = React.useMemo<FileTreeNode[]>(() => {
-    const build = (path: string): FileTreeNode[] | undefined =>
-      children[path]?.map((node) =>
-        node.kind === "directory" ? { ...node, children: build(node.path) } : node,
-      );
-
-    return (root.data?.entries ?? []).map((entry) => {
-      const node = toNode(entry);
-      return node.kind === "directory" ? { ...node, children: build(node.path) } : node;
-    });
-  }, [children, root.data]);
-
-  return (
-    <SectionCard
-      index={1}
-      title="Webroot"
-      description={<MonoText muted>{site.webroot}</MonoText>}
-      padded={false}
-      headingLevel={3}
-      actions={
-        <>
-          <IconButton
-            icon={RefreshCw}
-            label="Refresh listing"
-            size="sm"
-            disabled={root.isFetching}
-            onClick={() => {
-              setChildren({});
-              void root.refetch();
-            }}
-          />
-          <PillLink
-            href={`/files/manager?server_id=${site.server_id}&path=${encodeURIComponent(site.webroot)}`}
-          >
-            Open in File Manager
-          </PillLink>
-        </>
-      }
-    >
-      {root.isLoading && (
-        <div className="flex flex-col gap-1.5 p-4">
-          {[0, 1, 2, 3, 4].map((index) => (
-            <Skeleton
-              key={index}
-              className="h-4 w-full"
-              label={index === 0 ? "Loading webroot" : undefined}
-            />
-          ))}
-        </div>
-      )}
-
-      {root.isError && (
-        <div className="p-4">
-          <PageError
-            error={root.error}
-            onRetry={() => void root.refetch()}
-            context={site.webroot}
-          />
-        </div>
-      )}
-
-      {failedPath && (
-        <p
-          role="alert"
-          className="border-b border-[var(--kn-border)] px-4 py-2 text-xs text-[var(--kn-danger)]"
-        >
-          Could not read <MonoText>{failedPath}</MonoText> from {site.server_name}.
-        </p>
-      )}
-
-      {root.data && (
-        <FileTree
-          nodes={nodes}
-          expandedPaths={expanded}
-          onExpandedChange={setExpanded}
-          onLoadChildren={loadChildren}
-          label={`Contents of ${site.webroot}`}
-          emptyLabel="The webroot is empty — nothing has been deployed here yet."
-          className="max-h-[520px] overflow-auto p-2"
-        />
-      )}
     </SectionCard>
   );
 }
@@ -1221,10 +1147,9 @@ function LogsTab({ site }: { site: Site }) {
 
   return (
     <SectionCard
-      index={1}
       title="Web server logs"
       padded={false}
-      headingLevel={3}
+      headingLevel={2}
       actions={
         <PillLink
           href={`/logs?server_id=${site.server_id}${selected ? `&source=${encodeURIComponent(selected)}` : ""}`}
@@ -1252,8 +1177,8 @@ function LogsTab({ site }: { site: Site }) {
       {!sources.isLoading && !sources.isError && relevant.length === 0 && (
         <EmptyState
           icon={ScrollText}
-          title="No log sources on this host"
-          description="The agent found no journal unit or log file it could tail for the web server."
+          title="No logs found"
+          description="This server has no web server log Kaname can read yet."
           size="sm"
         />
       )}
@@ -1279,6 +1204,255 @@ function LogsTab({ site }: { site: Site }) {
           }
         />
       )}
+    </SectionCard>
+  );
+}
+
+/* ------------------------------- settings --------------------------- */
+
+interface SettingsTabProps {
+  site: Site;
+  /** Scoped accounts cannot set a repository, so they get no Git section. */
+  operator: boolean;
+  onEdit: () => void;
+  onSuspend: () => void;
+  onResume: () => void;
+  resuming: boolean;
+  onDelete: () => void;
+}
+
+function SettingsTab({
+  site,
+  operator,
+  onEdit,
+  onSuspend,
+  onResume,
+  resuming,
+  onDelete,
+}: SettingsTabProps) {
+  const can = useCan();
+  const writable = can("websites.sites:write", site.server_id);
+  const suspended = site.status === "suspended";
+
+  return (
+    <div className="flex min-w-0 max-w-3xl flex-col gap-4">
+      {operator && <GitSettings site={site} writable={writable} />}
+
+      <SectionCard
+        title="General"
+        headingLevel={2}
+        actions={
+          <Button variant="secondary" size="xs" icon={Pencil} disabled={!writable} onClick={onEdit}>
+            Edit
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <PropertyList dense labelWidth="sm">
+            <PropertyRow label="Name" mono>
+              {site.name}
+            </PropertyRow>
+            <PropertyRow label="Primary domain" mono>
+              {site.primary_domain}
+            </PropertyRow>
+            <PropertyRow label="Runtime">
+              {RUNTIME_LABELS[site.runtime]}
+              {site.runtime_version ? ` ${site.runtime_version}` : ""}
+            </PropertyRow>
+            <PropertyRow label="Folder" mono copyValue={site.webroot}>
+              {site.webroot}
+            </PropertyRow>
+            {site.upstream && (
+              <PropertyRow label="Proxies to" mono copyValue={site.upstream}>
+                {site.upstream}
+              </PropertyRow>
+            )}
+            {site.php_version && (
+              <PropertyRow label="PHP version" mono>
+                {site.php_version}
+              </PropertyRow>
+            )}
+            <PropertyRow label="Runs as" mono>
+              {site.owner}
+            </PropertyRow>
+            <PropertyRow label="Redirect to HTTPS">{site.force_https ? "Yes" : "No"}</PropertyRow>
+            {site.config_path && (
+              <PropertyRow label="Config file" mono copyValue={site.config_path}>
+                {site.config_path}
+              </PropertyRow>
+            )}
+            <PropertyRow label="Last checked">
+              <RelativeTime value={site.last_synced_at} fallback="never" />
+            </PropertyRow>
+          </PropertyList>
+          <div>
+            <PillLink
+              href={`/files/manager?server_id=${site.server_id}&path=${encodeURIComponent(site.webroot)}`}
+            >
+              Open in File Manager
+            </PillLink>
+          </div>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Danger zone" headingLevel={2}>
+        <div className="flex flex-col divide-y divide-[var(--kn-border-subtle)]">
+          <DangerRow
+            title={suspended ? "Resume this project" : "Suspend this project"}
+            description={
+              suspended
+                ? "Puts it back online as it was."
+                : "Takes it offline. Files, domains and certificates are kept."
+            }
+          >
+            {suspended ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={PlayCircle}
+                loading={resuming}
+                disabled={!writable}
+                onClick={onResume}
+              >
+                Resume
+              </Button>
+            ) : (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={PauseCircle}
+                disabled={!writable || site.status === "provisioning"}
+                onClick={onSuspend}
+              >
+                Suspend
+              </Button>
+            )}
+          </DangerRow>
+          <DangerRow
+            title="Delete this project"
+            description="Removes its server config. You can also delete its files."
+          >
+            <Button
+              variant="danger"
+              size="sm"
+              icon={Trash2}
+              disabled={!can("websites.sites:delete", site.server_id)}
+              onClick={onDelete}
+            >
+              Delete
+            </Button>
+          </DangerRow>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
+function DangerRow({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+      <div className="min-w-0">
+        <p className="font-medium text-[var(--kn-text)]">{title}</p>
+        <p className="text-sm text-[var(--kn-text-3)]">{description}</p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** Repository and branch, saved with PATCH; an empty field clears it. */
+function GitSettings({ site, writable }: { site: Site; writable: boolean }) {
+  const client = useQueryClient();
+  const update = useUpdateSite(site.id);
+  const [saved, setSaved] = React.useState({
+    repoUrl: site.repo_url ?? "",
+    branch: site.branch ?? "",
+  });
+  const [repoUrl, setRepoUrl] = React.useState(site.repo_url ?? "");
+  const [branch, setBranch] = React.useState(site.branch ?? "");
+
+  React.useEffect(() => {
+    setSaved({ repoUrl: site.repo_url ?? "", branch: site.branch ?? "" });
+    setRepoUrl(site.repo_url ?? "");
+    setBranch(site.branch ?? "");
+  }, [site.repo_url, site.branch]);
+
+  const errors = fieldErrors(update.error);
+  const dirty = repoUrl.trim() !== saved.repoUrl || branch.trim() !== saved.branch;
+
+  return (
+    <SectionCard
+      title="Git"
+      description="Each deploy pulls this branch. Build steps are not run yet."
+      headingLevel={2}
+    >
+      <form
+        noValidate
+        className="flex flex-col gap-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const next = { repoUrl: repoUrl.trim(), branch: branch.trim() };
+          update.mutate(
+            { repo_url: next.repoUrl || null, branch: next.branch || null },
+            {
+              onSuccess: () => {
+                setSaved(next);
+                setRepoUrl(next.repoUrl);
+                setBranch(next.branch);
+                // The row is written before the job runs, so refetch now.
+                invalidateFamilies(client, ["sites"]);
+              },
+            },
+          );
+        }}
+      >
+        {update.error != null && !errors["repo_url"] && !errors["branch"] && (
+          <PageError error={update.error} />
+        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <FormField label="Repository URL" error={errors["repo_url"]}>
+            <Input
+              value={repoUrl}
+              onChange={(event) => setRepoUrl(event.target.value)}
+              placeholder="https://github.com/you/site.git"
+              disabled={!writable}
+              mono
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </FormField>
+          <FormField label="Branch" error={errors["branch"]}>
+            <Input
+              value={branch}
+              onChange={(event) => setBranch(event.target.value)}
+              placeholder="main"
+              disabled={!writable}
+              mono
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </FormField>
+        </div>
+        <div className="flex justify-end">
+          <Button
+            type="submit"
+            variant="primary"
+            size="sm"
+            loading={update.isPending}
+            disabled={!writable || !dirty}
+          >
+            Save
+          </Button>
+        </div>
+      </form>
     </SectionCard>
   );
 }

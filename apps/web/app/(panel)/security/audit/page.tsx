@@ -532,13 +532,14 @@ function EventDrawer({
               </PropertyRow>
               <PropertyRow label="Job">
                 {event.job_id ? (
-                  <button
-                    type="button"
+                  <Button
+                    variant="link"
+                    size="xs"
                     onClick={() => onOpenJob(event.job_id!)}
-                    className="kn-mono rounded-[var(--kn-r-xs)] text-[var(--kn-accent-400)] outline-none hover:underline"
+                    className="kn-mono"
                   >
                     {event.job_id}
-                  </button>
+                  </Button>
                 ) : null}
               </PropertyRow>
             </PropertyList>

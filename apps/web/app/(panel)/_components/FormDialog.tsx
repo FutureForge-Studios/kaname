@@ -13,8 +13,7 @@ import { isApiError } from "@/lib/api";
 import { PageError } from "@/components/PageError";
 
 /* ------------------------------------------------------------------ *
- * FormDialog — the one create/edit surface for the Files and Email
- * modules.
+ * FormDialog — the one create/edit surface for every module.
  *
  * Creating an FTP account, a mail domain, a mailbox and an alias are four
  * different operations that have to feel like one gesture: same header,
@@ -70,7 +69,13 @@ export function FormDialog({
       dismissible={!submitting}
       aria-busy={submitting || undefined}
     >
+      {/*
+       * noValidate: FormField marks its control `required`, and the
+       * browser's own check would block the submit with a generic bubble
+       * before the dialog's field-specific message could show.
+       */}
       <form
+        noValidate
         className="flex min-h-0 flex-1 flex-col"
         onSubmit={(event) => {
           event.preventDefault();
@@ -79,7 +84,7 @@ export function FormDialog({
       >
         <DialogHeader title={title} description={description} />
         <DialogBody>
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4">
             {error != null && <PageError error={error} />}
             {children}
           </div>
@@ -105,6 +110,21 @@ export function FormDialog({
         </DialogFooter>
       </form>
     </Dialog>
+  );
+}
+
+/**
+ * A titled group of fields. The title is a caption, not the fields'
+ * accessible name; each control keeps its own FormField label.
+ */
+export function FormSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      <p aria-hidden className="text-sm font-medium text-[var(--kn-text-2)]">
+        {title}
+      </p>
+      {children}
+    </div>
   );
 }
 

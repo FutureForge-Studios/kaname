@@ -4,5 +4,5 @@
   "security": false,
   "adds_config": [],
   "min_upgrade_from": null,
-  "summary": ""
+  "summary": "Kaname 1.0. The dashboard is rebuilt around projects, the Vercel and Render way: a Projects home, a project page with deployments, domains, logs and one-click redeploy from git, and a short sidebar whose sections show their pages as tabs. One consistent look on every page. A site can now store its git repository and branch. No database migrations."
 }

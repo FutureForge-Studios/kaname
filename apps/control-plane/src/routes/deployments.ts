@@ -260,7 +260,7 @@ export async function deploymentRoutes(app: FastifyInstance): Promise<void> {
           remediation: {
             summary:
               "Set a repository URL and branch on the site, or pass repo_url with this request. An upload deployment needs no repository.",
-            actions: [{ label: "Site settings", href: `/websites/sites/${site.id}` }],
+            actions: [{ label: "Site settings", href: `/websites/sites/${site.id}?tab=settings` }],
           },
         },
       );
@@ -398,7 +398,7 @@ export async function deploymentRoutes(app: FastifyInstance): Promise<void> {
               "Kaname keeps a bounded number of releases on the host; this one has been pruned. Deploy the revision again from git to reproduce it.",
             actions: [
               { label: "Deploy this revision", action: "deployments.trigger" },
-              { label: "Site settings", href: `/websites/sites/${site.id}` },
+              { label: "Site settings", href: `/websites/sites/${site.id}?tab=settings` },
             ],
           },
         },

@@ -27,7 +27,7 @@ export const metadata: Metadata = {
     default: "Kaname by FutureForge Studios",
     template: "%s · Kaname",
   },
-  description: "The control plane for your infrastructure.",
+  description: "Deploy to your own servers.",
   applicationName: "Kaname",
   authors: [{ name: "FutureForge Studios", url: "https://ffstudios.io" }],
   creator: "FutureForge Studios",

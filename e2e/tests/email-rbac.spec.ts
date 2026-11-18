@@ -237,11 +237,11 @@ async function signedInPage(browser: Browser, role: SystemRoleSlug): Promise<Pag
 for (const role of ["owner", "operator"] as const) {
   test(`${role}: the panel offers every Email action`, async ({ browser }) => {
     const page = await signedInPage(browser, role);
-    await expect(
-      page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Mail servers" }),
-    ).toBeVisible();
 
     await page.goto("/email");
+    await expect(
+      page.getByRole("navigation", { name: "Email pages" }).getByRole("link", { name: "Mail servers" }),
+    ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Deploy Yunori Mail Server" }).first(),
     ).toBeEnabled();
@@ -313,9 +313,10 @@ for (const role of ["developer", "viewer"] as const) {
   }) => {
     const page = await signedInPage(browser, role);
     const nav = page.getByRole("navigation", { name: "Primary" });
-    await expect(nav.getByRole("link", { name: "Command Center" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Mail servers" })).toHaveCount(0);
-    await expect(nav.getByRole("link", { name: /^Mailboxes/ })).toHaveCount(0);
+    await expect(nav.getByRole("link", { name: "Servers" })).toBeVisible();
+    const more = nav.getByRole("button", { name: "More", expanded: false });
+    if ((await more.count()) > 0) await more.click();
+    await expect(nav.getByRole("link", { name: "Email", exact: true })).toHaveCount(0);
 
     await page.goto("/email/mailboxes");
     const table = page.getByRole("table", { name: "Mailboxes" });

@@ -234,8 +234,8 @@ export const EXPERT_HREFS: ReadonlySet<string> = new Set([
 
 /** What a client or reseller is shown of the operator's navigation. */
 export const CLIENT_HREFS: ReadonlySet<string> = new Set([
+  "/",
   "/apps",
-  "/websites/sites",
   "/websites/domains",
   "/files/manager",
   "/email/mailboxes",
@@ -252,13 +252,12 @@ export interface VisibleSection {
 /* A leaf that is always drawn for its audience; the page itself decides. */
 const SELF: Permission = "websites.sites:read";
 
-const HOME_LEAF: NavSection = { label: "Home", icon: "LayoutDashboard", href: "/", permission: SELF };
-
 const RESELLER_SECTION: NavSection = {
   label: "Reseller",
   icon: "Users",
   permission: SELF,
   children: [
+    { label: "Overview", href: "/reseller", icon: "LayoutDashboard", permission: SELF },
     { label: "Clients", href: "/reseller/clients", icon: "Users", permission: SELF },
     { label: "Quotas", href: "/reseller/quotas", icon: "HardDrive", permission: SELF },
     { label: "Branding", href: "/reseller/branding", icon: "BadgeCheck", permission: SELF },
@@ -293,7 +292,6 @@ export function navigationFor({ audience, viewMode, can }: NavigationInput): Vis
   const out: VisibleSection[] = [];
 
   if (audience !== "operator") {
-    out.push({ section: HOME_LEAF, leaves: [] });
     for (const section of NAVIGATION) {
       if (!section.children) {
         if (section.href && CLIENT_HREFS.has(section.href) && can(section.permission)) {
@@ -301,8 +299,9 @@ export function navigationFor({ audience, viewMode, can }: NavigationInput): Vis
         }
         continue;
       }
+      // Home is always drawn for a client; the page itself decides what they see.
       const leaves = section.children.filter(
-        (leaf) => CLIENT_HREFS.has(leaf.href) && can(leaf.permission),
+        (leaf) => CLIENT_HREFS.has(leaf.href) && (leaf.href === "/" || can(leaf.permission)),
       );
       if (leaves.length > 0) out.push({ section, leaves });
     }
@@ -318,14 +317,11 @@ export function navigationFor({ audience, viewMode, can }: NavigationInput): Vis
     if (!section.children) {
       if (!can(section.permission)) continue;
       if (simplified && section.href && EXPERT_HREFS.has(section.href)) continue;
-      out.push({
-        section: simplified && section.href === "/" ? { ...section, label: "Home" } : section,
-        leaves: [],
-      });
+      out.push({ section, leaves: [] });
       continue;
     }
     let children = section.children;
-    if (section.label === "Administration" && !children.some((l) => l.href === RESELLERS_LEAF.href)) {
+    if (section.label === "Settings" && !children.some((l) => l.href === RESELLERS_LEAF.href)) {
       const at = children.findIndex((leaf) => leaf.href === "/administration/users");
       children = [...children.slice(0, at + 1), RESELLERS_LEAF, ...children.slice(at + 1)];
     }

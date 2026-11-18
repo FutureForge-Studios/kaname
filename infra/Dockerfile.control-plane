@@ -28,7 +28,7 @@ RUN pnpm --filter @kaname/control-plane build
 # carried only an arm64 agent would be wrong; both are cross-compiled
 # here whatever the image itself ends up running on.
 FROM --platform=$BUILDPLATFORM ghcr.io/rust-cross/cargo-zigbuild:0.24.1 AS agent
-ARG KANAME_VERSION=0.1.0
+ARG KANAME_VERSION=1.0.0
 WORKDIR /agent
 COPY agent/Cargo.toml agent/Cargo.lock agent/rust-toolchain.toml ./
 # After the toolchain file: it pins the compiler, and the targets have to
@@ -48,7 +48,7 @@ RUN cargo zigbuild --release --locked --target x86_64-unknown-linux-musl \
  && cp target/aarch64-unknown-linux-musl/release/kanamed /out/kanamed-linux-arm64
 
 FROM base AS runtime
-ARG KANAME_VERSION=0.1.0
+ARG KANAME_VERSION=1.0.0
 ENV NODE_ENV=production
 ENV KANAME_VERSION=${KANAME_VERSION}
 

@@ -384,7 +384,7 @@ export default function TerminalPage() {
                 className="h-full"
               />
             ) : (
-              <div className="kn-grid flex h-full items-center justify-center [--kn-grid-size:24px]">
+              <div className="flex h-full items-center justify-center">
                 <EmptyState
                   icon={SquareTerminal}
                   title={selection.serverId ? "Not connected" : "Pick a server"}

@@ -6,7 +6,6 @@ import {
   drawerJob,
   expectJobStatus,
   get,
-  rowWith,
   startAgent,
   stopAgent,
   unique,
@@ -54,7 +53,8 @@ test("work queued against a disconnected host waits for it and then runs", async
   await expect(page.getByText("Disconnected").first()).toBeVisible();
 
   /* A reload needs `nginx -t` from the host first, so it is refused now. */
-  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Reload", exact: true }).click();
   await expect(page.getByRole("alert").filter({ hasText: "is not connected" })).toContainText(
     `The agent on ${HOST} is not connected.`,
   );
@@ -72,13 +72,14 @@ test("work queued against a disconnected host waits for it and then runs", async
 
   /* A create is a job, so it is accepted — and waits, saying why. */
   const name = unique("e2e-dark");
-  await page.goto("/websites/sites");
-  await page.getByRole("button", { name: "New site" }).first().click();
-  const dialog = page.getByRole("dialog", { name: "New site" });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Add new" }).first().click();
+  await page.getByRole("menuitem", { name: "Deploy from Git" }).click();
+  const dialog = page.getByRole("dialog", { name: "New project" });
   await choose(page, dialog.getByLabel("Server"), HOST);
-  await dialog.getByLabel("Site name").fill(name);
-  await dialog.getByLabel("Primary domain").fill(`${name}.e2e.test`);
-  await dialog.getByRole("button", { name: "Create site" }).click();
+  await dialog.getByLabel("Project name").fill(name);
+  await dialog.getByLabel("Domain", { exact: true }).fill(`${name}.e2e.test`);
+  await dialog.getByRole("button", { name: "Create project" }).click();
   await expect(dialog).toBeHidden();
 
   const job = drawerJob(page, "Create site", name);
@@ -87,11 +88,11 @@ test("work queued against a disconnected host waits for it and then runs", async
     timeout: 30_000,
   });
   await page.keyboard.press("Escape");
-  /* Search rather than scan: the suite has made more sites than a page holds. */
-  await page.getByRole("searchbox", { name: "Search sites" }).fill(name);
-  const row = rowWith(page.getByRole("table", { name: "Sites" }), name);
-  await expect(row).toContainText("Provisioning");
-  await expect(row).toContainText("Disconnected");
+  /* The project page carries the state: provisioning, on a host that is dark. */
+  const created = (await get<{ id: string; name: string }[]>(`/sites?q=${name}`))[0]!;
+  await page.goto(`/websites/sites/${created.id}`);
+  await expect(page.getByText("Provisioning").first()).toBeVisible();
+  await expect(page.getByText("Disconnected").first()).toBeVisible();
 
   /* The host comes back; nobody presses anything; the job runs. */
   startAgent(HOST);
@@ -105,8 +106,9 @@ test("work queued against a disconnected host waits for it and then runs", async
     .click();
   await expectJobStatus(drawerJob(page, "Create site", name), "Succeeded", 90_000);
   await page.keyboard.press("Escape");
-  await expect(row).toContainText("Active");
-  await expect(row).not.toContainText("Provisioning");
+  await page.reload();
+  await expect(page.getByText("Active").first()).toBeVisible();
+  await expect(page.getByText("Provisioning")).toHaveCount(0);
 
   /* And the vhost really is on the host that was dark. */
   const read = await api<{ content: string }>(

@@ -218,7 +218,7 @@ test("an agent that dies reads as disconnected everywhere, and recovers on its o
   await expect(table.locator("tbody tr")).toHaveCount(1);
   await expect(tableRow(table, CRASH_HOST)).toBeVisible();
 
-  /* The Command Center puts it at the top of what needs attention. */
+  /* The Projects home puts it at the top of what needs attention. */
   await page.goto("/");
   const attention = sectionNamed(page, "Needs attention");
   const item = attention.getByRole("link").filter({ hasText: `${CRASH_HOST} is disconnected` });
@@ -226,7 +226,6 @@ test("an agent that dies reads as disconnected everywhere, and recovers on its o
   const fleet = await ownerCall<ServerRow[]>("GET", "/servers?per_page=100");
   const up = fleet.filter((s) => s.connection === "connected").length;
   expect(up).toBe(fleet.length - 1);
-  await expect(page.getByText(`${up}/${fleet.length} agents connected`)).toBeVisible();
 
   /* And it links to the host, not to a list. */
   await item.click();
@@ -363,7 +362,7 @@ test("a host whose heartbeats run late reads as degraded, not disconnected", asy
     await expect(table.locator("tbody tr")).toHaveCount(1);
     await expect(tableRow(table, LATE_HOST)).toBeVisible();
 
-    /* ...and the Command Center flags it as a warning to look at. */
+    /* ...and the Projects home flags it as a warning to look at. */
     await page.goto("/");
     const item = sectionNamed(page, "Needs attention")
       .getByRole("link")

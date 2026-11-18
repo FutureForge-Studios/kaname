@@ -304,13 +304,3 @@ export function PreviewNotice({
     </Card>
   );
 }
-
-/** Two-column property row used in detail rails. */
-export function Fact({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-4 py-2">
-      <MonoLabel tone="muted">{label}</MonoLabel>
-      <span className="min-w-0 truncate text-right text-[var(--kn-text)]">{children}</span>
-    </div>
-  );
-}

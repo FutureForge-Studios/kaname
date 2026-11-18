@@ -260,7 +260,7 @@ describe("unlocking a locked account", () => {
     const locked = await login("unlock@accounts.test", STRONG);
     expect(locked.statusCode).toBe(429);
     expect(JSON.parse(locked.body).error.remediation.summary).toMatch(
-      /An owner can lift it sooner with Unlock in Administration > Users\./,
+      /An owner can lift it sooner with Unlock in Settings > Users\./,
     );
 
     // Listed as active and locked, which is what the panel keys Unlock on.

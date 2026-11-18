@@ -11,16 +11,7 @@ import {
   type MailServer,
   type UserPreferences,
 } from "@kaname/contract";
-import {
-  Button,
-  Card,
-  CardInset,
-  CheckItem,
-  CheckList,
-  Eyebrow,
-  IconButton,
-  StatusLine,
-} from "@kaname/ui";
+import { Button, Card, CardInset, CheckItem, CheckList, IconButton, StatusLine } from "@kaname/ui";
 import { AppMark } from "@/components/installer/AppMark";
 import { api } from "@/lib/api";
 import { useCan, useDashboard, useList, useResourceMutation, useSession } from "@/lib/queries";
@@ -144,8 +135,7 @@ export function YunoriSuggestion() {
         <AppMark appId={YUNORI.id} size={36} />
       </CardInset>
       <div className="min-w-0 flex-1">
-        <Eyebrow>Host your own mail</Eyebrow>
-        <p id="yunori-suggestion-title" className="kn-title m-0 mt-2 text-md text-[var(--kn-text)]">
+        <p id="yunori-suggestion-title" className="kn-title m-0 text-md text-[var(--kn-text)]">
           {YUNORI.name} runs on a host you already manage.
         </p>
         <p className="m-0 mt-0.5 text-sm text-[var(--kn-text-2)]">

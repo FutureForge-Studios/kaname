@@ -29,7 +29,6 @@ import {
   MenuSeparator,
   Card,
   CardInset,
-  Eyebrow,
   MonoLabel,
   MonoText,
   NumberedSection,
@@ -340,8 +339,7 @@ function HostYourOwnMail({
       aria-labelledby="host-your-own-mail"
     >
       <div className="flex min-w-0 flex-col items-start">
-        <Eyebrow>Host your own mail</Eyebrow>
-        <div className="mt-5 flex items-center gap-4">
+        <div className="flex items-center gap-4">
           <CardInset
             grid
             className="flex h-16 w-16 shrink-0 items-center justify-center text-[var(--kn-accent-400)]"
@@ -357,8 +355,8 @@ function HostYourOwnMail({
         </div>
         <p className="m-0 mt-5 max-w-prose text-sm text-[var(--kn-text-2)]">{YUNORI.description}</p>
         <p className="m-0 mt-2 max-w-prose text-sm text-[var(--kn-text-2)]">
-          It needs an A record for <MonoText>mail.&lt;your domain&gt;</MonoText> pointed at the host,
-          and outbound port 25 open or a sending relay.
+          It needs an A record for <MonoText>mail.&lt;your domain&gt;</MonoText> pointed at the
+          host, and outbound port 25 open or a sending relay.
         </p>
         {canWrite ? (
           <div className="mt-6 flex flex-wrap items-center gap-3">

@@ -23,7 +23,7 @@ import {
  * invitation and signs in through the form. Three things are then
  * checked from that account's own browser and cookie:
  *
- *   1. the sidebar lists exactly the sections the role may read —
+ *   1. the navigation reaches exactly the pages the role may read —
  *      written out here by hand from the role definitions, so a drift
  *      in either the roles or the navigation is caught rather than
  *      re-derived;
@@ -36,41 +36,42 @@ import {
 test.use({ storageState: { cookies: [], origins: [] } });
 
 const EVERYTHING = [
-  "Command Center",
-  "Apps",
-  "Infrastructure › Servers",
-  "Infrastructure › Services",
-  "Infrastructure › Processes",
-  "Infrastructure › Containers",
-  "Websites › Sites",
-  "Websites › Domains",
-  "Websites › DNS",
-  "Websites › SSL / TLS",
-  "Websites › Deployments",
-  "Files › File Manager",
-  "Files › FTP / SFTP",
-  "Files › Storage",
+  "Projects › Projects",
+  "Projects › Deployments",
+  "Apps › Catalog",
+  "Apps › Installed",
+  "Domains › Domains",
+  "Domains › DNS",
+  "Domains › SSL / TLS",
+  "Databases › PostgreSQL",
+  "Databases › MySQL / MariaDB",
+  "Servers › Servers",
+  "Servers › Services",
+  "Servers › Processes",
+  "Servers › Containers",
+  "Servers › Terminal",
+  "Monitoring › Monitoring",
+  "Monitoring › Logs",
+  "Backups",
+  "Settings › Settings",
+  "Settings › Users",
+  "Settings › Resellers",
+  "Settings › Roles",
+  "Settings › API",
+  "Settings › Updates",
+  "Settings › Audit",
   "Email › Mail servers",
   "Email › Domains",
   "Email › Mailboxes",
   "Email › Aliases",
   "Email › Health",
   "Email › Mail Logs",
-  "Databases › MySQL / MariaDB",
-  "Databases › PostgreSQL",
+  "Files › File Manager",
+  "Files › FTP / SFTP",
+  "Files › Storage",
   "Security › Firewall",
   "Security › Threat Protection",
   "Security › SSH Security",
-  "Security › Audit",
-  "Backups",
-  "Monitoring",
-  "Logs",
-  "Terminal",
-  "Administration › Users",
-  "Administration › Roles",
-  "Administration › API",
-  "Administration › Updates",
-  "Administration › Settings",
 ];
 
 interface RoleCase {
@@ -102,7 +103,10 @@ const CASES: RoleCase[] = [
   },
   {
     slug: "operator",
-    sidebar: EVERYTHING.filter((entry) => !entry.startsWith("Administration")),
+    // No admin.* grants: Settings keeps only the audit log.
+    sidebar: EVERYTHING.filter(
+      (entry) => !entry.startsWith("Settings ›") || entry === "Settings › Audit",
+    ),
     forbiddenPage: { path: "/administration/users", permission: "admin.users:read" },
     allowedPage: { path: "/security/firewall", heading: "Firewall" },
     forbiddenCall: {
@@ -115,25 +119,24 @@ const CASES: RoleCase[] = [
   {
     slug: "developer",
     sidebar: [
-      "Command Center",
-      "Infrastructure › Servers",
-      "Infrastructure › Services",
-      "Infrastructure › Processes",
-      "Infrastructure › Containers",
-      "Websites › Sites",
-      "Websites › Domains",
-      "Websites › DNS",
-      "Websites › SSL / TLS",
-      "Websites › Deployments",
+      "Projects › Projects",
+      "Projects › Deployments",
+      "Domains › Domains",
+      "Domains › DNS",
+      "Domains › SSL / TLS",
+      "Databases › PostgreSQL",
+      "Databases › MySQL / MariaDB",
+      "Servers › Servers",
+      "Servers › Services",
+      "Servers › Processes",
+      "Servers › Containers",
+      "Monitoring › Monitoring",
+      "Monitoring › Logs",
       "Files › File Manager",
       "Files › Storage",
-      "Databases › MySQL / MariaDB",
-      "Databases › PostgreSQL",
-      "Monitoring",
-      "Logs",
     ],
     forbiddenPage: { path: "/security/audit", permission: "security.audit:read" },
-    allowedPage: { path: "/websites/sites", heading: "Sites" },
+    allowedPage: { path: "/websites/domains", heading: "Domains" },
     forbiddenCall: {
       method: "POST",
       path: (ids) => `/servers/${ids.server}/enroll-token`,
@@ -143,7 +146,7 @@ const CASES: RoleCase[] = [
   },
   {
     slug: "auditor",
-    sidebar: EVERYTHING.filter((entry) => entry !== "Terminal"),
+    sidebar: EVERYTHING.filter((entry) => entry !== "Servers › Terminal"),
     allowedPage: { path: "/security/audit", heading: "Audit" },
     forbiddenCall: {
       method: "PATCH",
@@ -154,14 +157,8 @@ const CASES: RoleCase[] = [
   },
   {
     slug: "viewer",
-    sidebar: [
-      "Command Center",
-      "Infrastructure › Servers",
-      "Infrastructure › Services",
-      "Infrastructure › Containers",
-      "Monitoring",
-    ],
-    forbiddenPage: { path: "/websites/sites", permission: "websites.sites:read" },
+    sidebar: ["Servers › Servers", "Servers › Services", "Servers › Containers", "Monitoring"],
+    forbiddenPage: { path: "/websites/domains", permission: "websites.domains:read" },
     allowedPage: { path: "/monitoring", heading: "Monitoring" },
     forbiddenCall: {
       method: "POST",
@@ -283,11 +280,7 @@ test("a role scoped to one server sees that server and is refused the rest", asy
   const table = page.getByRole("table", { name: "Servers" });
   await expect(table.locator("tbody tr").filter({ hasText: "forge-01" })).toHaveCount(1);
   await expect(table.locator("tbody tr")).toHaveCount(1);
-  expect(await sidebarEntries(page)).toEqual([
-    "Command Center",
-    "Infrastructure › Servers",
-    "Infrastructure › Services",
-  ]);
+  expect(await sidebarEntries(page)).toEqual(["Servers › Servers", "Servers › Services"]);
 
   const listed = data<{ name: string }[]>(
     await call("GET", "/servers?per_page=100", { cookie }),

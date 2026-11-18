@@ -257,7 +257,7 @@ export async function setupRoutes(app: FastifyInstance): Promise<void> {
       .limit(1);
     if (clash[0]) {
       throw conflict(`A server called "${name}" is already registered.`, {
-        summary: "Pick another name, or pair the existing one from Infrastructure > Servers.",
+        summary: "Pick another name, or pair the existing one from Servers.",
         actions: [{ label: "Servers", href: "/infrastructure/servers" }],
       });
     }

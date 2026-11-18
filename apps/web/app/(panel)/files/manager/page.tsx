@@ -1092,7 +1092,7 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
         </Button>
         <a
           href={downloadUrl(serverId, open.path)}
-          className="inline-flex h-6 items-center gap-1 rounded-[var(--kn-r-pill)] border border-transparent px-2.5 text-xs text-[var(--kn-text-2)] outline-none transition-colors duration-[var(--kn-dur-fast)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+          className="inline-flex h-6 items-center gap-1 rounded-[var(--kn-r-sm)] border border-transparent px-2.5 text-xs text-[var(--kn-text-2)] outline-none transition-colors duration-[var(--kn-dur-fast)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
         >
           <Download size={12} aria-hidden />
           Download
@@ -1163,7 +1163,7 @@ function FilePane({ serverId, open, canWrite, onClose, onReveal }: FilePaneProps
           action={
             <a
               href={downloadUrl(serverId, open.path)}
-              className="inline-flex h-7 items-center gap-1.5 rounded-[var(--kn-r-pill)] border border-[var(--kn-accent-500)] bg-[var(--kn-accent-500)] px-3 text-sm font-medium text-[var(--kn-accent-fg)] outline-none hover:bg-[var(--kn-accent-600)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
+              className="inline-flex h-7 items-center gap-1.5 rounded-[var(--kn-r-md)] border border-[var(--kn-accent-500)] bg-[var(--kn-accent-500)] px-3 text-sm font-medium text-[var(--kn-accent-fg)] outline-none hover:bg-[var(--kn-accent-600)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]"
             >
               <Download size={14} aria-hidden />
               Download

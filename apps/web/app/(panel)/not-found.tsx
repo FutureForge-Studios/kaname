@@ -22,7 +22,7 @@ export default function PanelNotFound() {
           description="The resource may have been removed, or it belongs to a server this account is not scoped to."
           action={
             <Button variant="primary" size="sm" arrow onClick={() => router.push("/")}>
-              Go to the Command Center
+              Go to Projects
             </Button>
           }
         >

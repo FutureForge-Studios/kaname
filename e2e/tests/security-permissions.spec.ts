@@ -165,9 +165,11 @@ test.describe("security and operations permissions", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Monitoring" })).toBeVisible();
     const nav = page.getByRole("navigation", { name: "Primary" }).first();
     await expect(nav.getByRole("link", { name: "Monitoring" })).toBeVisible();
-    for (const hidden of ["Firewall", "Audit", "Backups", "Logs"]) {
+    for (const hidden of ["Security", "Settings", "Backups"]) {
       await expect(nav.getByRole("link", { name: hidden, exact: true })).toHaveCount(0);
     }
+    /* Monitoring is its only page there, so no tab row offers Logs. */
+    await expect(page.getByRole("navigation", { name: "Monitoring pages" })).toHaveCount(0);
 
     await page.goto("/security/audit");
     const error = page.getByRole("alert").filter({ hasText: "Chain verification" });
