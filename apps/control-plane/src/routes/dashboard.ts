@@ -736,7 +736,13 @@ export async function onboardingSteps(
         db
           .select({ id: sites.id })
           .from(sites)
-          .where(combine(scopeFilter(req, "websites.sites:read", sites.serverId)))
+          .where(
+            combine(
+              // A site the host could not set up (status "error") is not done.
+              inArray(sites.status, ["active", "suspended"]),
+              scopeFilter(req, "websites.sites:read", sites.serverId),
+            ),
+          )
           .limit(1),
       ),
     });

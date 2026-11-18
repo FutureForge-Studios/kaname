@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import pino from "pino";
 import { createDb, eq, type DbHandle } from "@kaname/db";
 import { migrateHandle } from "@kaname/db/migrate";
-import { domains, mailServers, servers, users } from "@kaname/db/schema";
+import { domains, mailServers, servers, sites, users } from "@kaname/db/schema";
 import type { OnboardingStep } from "@kaname/contract";
 import { loadConfig, resetConfigForTests } from "./config.js";
 import { createContext, type AppContext } from "./context.js";
@@ -138,5 +138,25 @@ describe("Getting Started", () => {
     // An agent that dropped is no longer "all connected", even though it was paired.
     expect(state.get("server_paired")).toBe(true);
     expect(state.get("agents_connected")).toBe(false);
+  });
+
+  it("does not count a site the host could not set up", async () => {
+    const [server] = await ctx.db
+      .insert(servers)
+      .values({ name: "web-02", hostname: "web-02.example.test" })
+      .returning({ id: servers.id });
+    const [site] = await ctx.db
+      .insert(sites)
+      .values({
+        serverId: server!.id,
+        name: "failed.example.test",
+        webroot: "/srv/failed",
+        status: "error",
+      })
+      .returning({ id: sites.id });
+    expect((await steps()).get("site_created")).toBe(false);
+
+    await ctx.db.update(sites).set({ status: "active" }).where(eq(sites.id, site!.id));
+    expect((await steps()).get("site_created")).toBe(true);
   });
 });
