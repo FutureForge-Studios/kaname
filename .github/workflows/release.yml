@@ -47,6 +47,9 @@ jobs:
   images:
     needs: version
     runs-on: ubuntu-latest
+    # A QEMU crash in the arm64 build can hang it until the 6-hour job limit;
+    # a normal build takes 10-16 minutes.
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
