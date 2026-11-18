@@ -525,7 +525,10 @@ wait_for_apt() {
   command -v apt-get >/dev/null 2>&1 || return 0
   command -v pgrep >/dev/null 2>&1 || return 0
   _w=0
-  while pgrep '^(apt|apt-get|dpkg|unattended-upgr|apt.systemd.dai)$' >/dev/null 2>&1; do
+  # unattended-upgrades by full command line: its idle shutdown helper,
+  # always running, shares the short name "unattended-upgr" and never exits.
+  while pgrep '^(apt|apt-get|dpkg|apt.systemd.dai)$' >/dev/null 2>&1 ||
+    pgrep -f 'bin/unattended-upgrade( |$)' >/dev/null 2>&1; do
     [ "$_w" -gt 0 ] || { detail "waiting for apt (unattended-upgrades)"; log "    apt is busy; waiting for it"; }
     _w=$((_w + 2))
     [ "$_w" -lt 300 ] || die "apt has been busy for five minutes (most likely unattended-upgrades).
