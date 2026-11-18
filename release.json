@@ -4,5 +4,5 @@
   "security": false,
   "adds_config": [],
   "min_upgrade_from": null,
-  "summary": "Container apps (Ghost, Nextcloud, Uptime Kuma, n8n, Gitea, Plausible, Jellyfin), app backup and restore, S3 presets, app health alerts and OS updates. `sudo kaname update` updates from the server, with a database dump and automatic rollback. A new terminal installer. Ubuntu: waits for unattended-upgrades and refuses snap Docker. Kaname by FutureForge Studios. Migrations 0010-0012 are additive."
+  "summary": ""
 }

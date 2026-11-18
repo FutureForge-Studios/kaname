@@ -2,6 +2,33 @@
   "schema": 1,
   "releases": [
     {
+      "version": "0.3.0",
+      "channel": "stable",
+      "released_at": "2026-11-18T04:52:14.259Z",
+      "breaking": false,
+      "security": false,
+      "summary": "Container apps (Ghost, Nextcloud, Uptime Kuma, n8n, Gitea, Plausible, Jellyfin), app backup and restore, S3 presets, app health alerts and OS updates. `sudo kaname update` updates from the server, with a database dump and automatic rollback. A new terminal installer. Ubuntu: waits for unattended-upgrades and refuses snap Docker. Kaname by FutureForge Studios. Migrations 0010-0012 are additive.",
+      "notes_url": "https://github.com/FutureForge-Studios/kaname/releases/tag/v0.3.0",
+      "migrations": {
+        "destructive": false,
+        "adds_config": []
+      },
+      "artifacts": {
+        "control_plane": "ghcr.io/futureforge-studios/kaname-control-plane:0.3.0",
+        "web": "ghcr.io/futureforge-studios/kaname-web:0.3.0",
+        "agent": {
+          "linux-amd64": {
+            "url": "https://github.com/FutureForge-Studios/kaname/releases/download/v0.3.0/kanamed-linux-amd64",
+            "sha256": "2bd8111a05a96b4253099093372cf3650097c93735ca1f3a01be4bef5eefdc4e"
+          },
+          "linux-arm64": {
+            "url": "https://github.com/FutureForge-Studios/kaname/releases/download/v0.3.0/kanamed-linux-arm64",
+            "sha256": "5c979eac899b1be13a4426ca0f4fe9a0d5fac952e94875c23891dc7056562cb1"
+          }
+        }
+      }
+    },
+    {
       "version": "0.2.0",
       "channel": "stable",
       "released_at": "2026-11-11T07:28:45.160Z",
