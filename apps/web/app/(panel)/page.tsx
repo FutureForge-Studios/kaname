@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
+  Boxes,
   Database,
   GitBranch,
   PackageCheck,
@@ -36,6 +37,7 @@ import { PageError } from "@/components/PageError";
 import { YunoriSuggestion } from "@/components/YunoriMail";
 import { ATTENTION_ICONS } from "@/lib/icons";
 import { useCan, useDashboard, type DashboardSummary } from "@/lib/queries";
+import { ComposeDialog } from "./_components/ComposeDialog";
 import { SiteDialog } from "./websites/_components/SiteDialog";
 import { useSites } from "./websites/_components/queries";
 import {
@@ -85,6 +87,7 @@ export default function ProjectsPage() {
   const rows = sites.data?.data ?? [];
 
   const [creating, setCreating] = React.useState(false);
+  const [composing, setComposing] = React.useState(false);
   const canCreate = can("websites.sites:write");
   useOpenFromQuery("new", () => setCreating(true), canCreate);
 
@@ -113,6 +116,13 @@ export default function ProjectsPage() {
               onSelect={() => router.push("/apps")}
             >
               Install an app
+            </MenuItem>
+            <MenuItem
+              icon={Boxes}
+              disabled={!can("apps.installs:write") || !can("infra.containers:exec")}
+              onSelect={() => setComposing(true)}
+            >
+              Docker Compose
             </MenuItem>
             <MenuItem
               icon={Database}
@@ -225,6 +235,7 @@ export default function ProjectsPage() {
       </PageBody>
 
       <SiteDialog open={creating} onOpenChange={setCreating} />
+      <ComposeDialog open={composing} onOpenChange={setComposing} />
     </div>
   );
 }

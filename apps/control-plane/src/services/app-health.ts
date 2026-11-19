@@ -11,6 +11,7 @@ import {
   type ContainerInfo,
 } from "@kaname/contract";
 import type { AppContext } from "../context.js";
+import { installRecipe, webRole } from "./app-installer.js";
 
 /* ------------------------------------------------------------------ *
  * The app monitor (KD-042).
@@ -74,6 +75,7 @@ interface Target {
 
 export function isImageInstall(install: Pick<InstallRow, "appId" | "appPort">): boolean {
   const recipe = findApp(install.appId);
+  // Compose projects are not in the catalog; like any container install they hold a loopback port.
   return recipe ? recipe.source.kind === "image" : install.appPort !== null;
 }
 
@@ -284,7 +286,8 @@ export class AppHealthMonitor {
   /** A simulated host: answer from its app container's state; see the header. */
   private async simulatedProbe(target: Target): Promise<ProbeResult> {
     if (target.image && target.monitor.containersSampledAt) {
-      const app = target.monitor.containers.find((c) => c.role === "app");
+      const recipe = installRecipe(target.install);
+      const app = target.monitor.containers.find((c) => c.role === (recipe ? webRole(recipe) : "app"));
       if (app && app.state !== "running") {
         return { ok: false, statusCode: 502, latencyMs: null, error: `HTTP 502 (app container ${app.state})` };
       }

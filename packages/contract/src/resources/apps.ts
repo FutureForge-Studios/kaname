@@ -2,6 +2,8 @@ import { z } from "zod";
 import { domainName, emailAddress, identifier, isoDate, listQuery, slug, uuid } from "../primitives.js";
 import { dbEngine, siteRuntime } from "../enums.js";
 import { permission } from "../rbac.js";
+import { containerImageRef } from "../agent/methods.js";
+import { COMPOSE_APP_ID } from "./compose.js";
 
 /* ------------------------------------------------------------------ *
  * App catalog — the one-click installer.
@@ -134,8 +136,36 @@ export const appSource = z.discriminatedUnion("kind", [
       .array(z.array(z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9._:=+-]{0,127}$/)).min(1).max(8))
       .max(4),
   }),
+  z.object({
+    /**
+     * A project imported from a docker-compose file (KD-045): each service
+     * a managed container on the install's network. Environment values are
+     * sealed in `secrets`, never kept here.
+     */
+    kind: z.literal("compose"),
+    services: z
+      .array(
+        z.object({
+          name: z.string().regex(/^[a-z][a-z0-9]{0,15}$/),
+          image: containerImageRef,
+          env_keys: z.array(z.string().max(128)).max(64),
+          volumes: z
+            .array(z.object({ name: z.string().max(64), target: z.string().max(4096), read_only: z.boolean() }))
+            .max(8),
+          command: z.array(z.string().regex(/^[A-Za-z0-9_][A-Za-z0-9._:=+-]{0,127}$/)).max(16),
+        }),
+      )
+      .min(1)
+      .max(12),
+    web: z.object({ service: z.string(), port: z.number().int().min(1).max(65535) }),
+  }),
 ]);
 export type AppSource = z.infer<typeof appSource>;
+
+/** Sources that run as managed containers: catalog images and compose projects. */
+export function isContainerSource(source: AppSource): source is Exclude<AppSource, { kind: "git" }> {
+  return source.kind === "image" || source.kind === "compose";
+}
 
 export const appRequirements = z.object({
   runtime: siteRuntime,
@@ -615,7 +645,36 @@ export function appInstallSteps(
 ): AppInstallStepSpec[] {
   const steps: AppInstallStepSpec[] = [];
   const source = recipe.source;
-  if (source.kind === "image") {
+  if (source.kind === "compose") {
+    // The stored order is the start order; services that depend on web start after it.
+    const webAt = source.services.findIndex((s) => s.name === source.web.service);
+    const before = source.services.slice(0, webAt).map((s) => s.name);
+    const after = source.services.slice(webAt + 1).map((s) => s.name);
+    steps.push({
+      id: "pull",
+      title: "Pull the images",
+      description: `Download ${[...new Set(source.services.map((s) => s.image))].join(", ")} onto the server.`,
+    });
+    steps.push({
+      id: "network",
+      title: "Create a private network",
+      description: "A network of its own, so the services reach each other by name and nothing else.",
+    });
+    if (before.length > 0) {
+      steps.push({
+        id: "db_container",
+        title: "Start the services",
+        description: `${before.join(", ")}, in dependency order on the private network. They are never published.`,
+      });
+    }
+    steps.push({
+      id: "app_container",
+      title: `Start ${source.web.service}`,
+      description:
+        `The web service, with port ${source.web.port} open on this server's loopback address only.` +
+        (after.length > 0 ? ` Then what depends on it: ${after.join(", ")}, on the private network and never published.` : ""),
+    });
+  } else if (source.kind === "image") {
     const images = [source.image, ...source.companions.map((c) => c.image)].join(", ");
     steps.push({
       id: "pull",
@@ -649,6 +708,8 @@ export function appInstallSteps(
       description:
         "The app container, with its data kept on the server and its port open on this server's loopback address only.",
     });
+  }
+  if (isContainerSource(source)) {
     steps.push({
       id: "site",
       title: "Create the website",
@@ -678,10 +739,8 @@ export function appInstallSteps(
   steps.push({
     id: "files",
     title: `Download ${recipe.name}`,
-    description:
-      recipe.source.kind === "git"
-        ? `Release ${recipe.version}, checked out from the project's repository.`
-        : `Image ${recipe.source.image}.`,
+    // Container sources returned above, so only git recipes reach this step.
+    description: `Release ${recipe.version}, checked out from the project's repository.`,
   });
   steps.push({
     id: "configure",
@@ -735,6 +794,14 @@ export const installAppInput = z.object({
    * names that plan showed, since they are derived from it.
    */
   plan_id: uuid.optional(),
+  /** A docker-compose file (KD-045); only with `app_id: "docker-compose"`. Never stored. */
+  compose: z.string().max(65536).optional(),
+  /** Compose only: the service and container port the site proxies to. */
+  web_service: z.string().max(64).optional(),
+  web_port: z.number().int().min(1).max(65535).optional(),
+}).refine((input) => (input.app_id === COMPOSE_APP_ID) === (input.compose !== undefined), {
+  message: `a compose file goes with app_id "${COMPOSE_APP_ID}", and only with it`,
+  path: ["compose"],
 });
 export type InstallAppInput = z.infer<typeof installAppInput>;
 

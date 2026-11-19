@@ -1072,3 +1072,51 @@ rather than removed from about 120 call sites. Some list pages show two tab rows
 pages, then the page's own views, e.g. Databases and Monitoring). Git deploys still clone
 without a build step, and a private repository needs the host's own SSH access to it, since
 per-site deploy keys are not wired yet.
+
+## KD-045 — Docker Compose import: a safe subset, translated into KD-040's typed specs
+
+**Decision.** A project can be created from a `docker-compose.yml`, pasted or read from a GitHub
+repository by the browser. Compose is never run: one pure translator in the contract
+(`translateCompose`, using the `yaml` package) turns each service into a `ManagedContainerSpec`.
+The web dialog runs it for a live preview; `POST /apps/installs[/plan]` runs it again as the gate
+and answers 400 with every refusal as `line N: message` before a row or job exists. The install is
+an ordinary app install (`app_id: "docker-compose"`, source kind `compose`) through the KD-040
+steps and verbs; the Rust agent is unchanged and stays the final gate.
+
+- **Mapped.** `image` (tag or digest required), `environment` (`${X:-default}`, `$$`; a variable
+  with no value is refused, nothing is read from `.env` or the shell), named volumes (folders under
+  `/var/lib/kaname-apps/<install>/volumes/<name>`, created empty and owned by root, so an image
+  that runs as another user and doesn't set up its own data folder may fail to write; the
+  preview says so), `depends_on` (start order only, and a service that depends on the web entry
+  starts after it; conditions are ignored and say so), `command` (argument tokens under the
+  agent's rule), `ports`/`expose` (TCP container ports only; UDP is never published). Exactly one service is the web entry, published on `127.0.0.1` from the
+  port pool and proxied by nginx with HTTPS; the others are reachable only by service name.
+- **Refused.** `build`, `privileged`, `cap_add`/`cap_drop`, `devices`, `network_mode`,
+  `pid`/`ipc`/`uts`/`userns_mode` host namespaces, host-path and bind mounts (the Docker socket
+  included), `tmpfs`, `entrypoint`, `user`, `env_file`, `extends`, `secrets`, `configs`, external
+  volumes and networks, and any unknown key. Ignored with a notice: `restart`, `healthcheck`,
+  `labels`, `logging`, resource limits and per-service `networks`. Caps: 64 KiB, 12 services,
+  and the agent's 64 env / 8 mounts / 16 args, with values and mount targets counted in bytes
+  (4096) as the agent counts them. At most 50 refusals are listed, then a count.
+- **Secrets.** The YAML is never stored, logged, audited or put in a job. Every environment
+  value is sealed as one secret, `app_install:<id>:compose_env`, removed with the install (and
+  with an earlier failed install of the same domain that a new attempt replaces). The row keeps
+  the rest of the translation as written (`inputs.compose`): images, volume names, targets and
+  command arguments are stored and shown in the clear, so a secret belongs in `environment`,
+  never in `command`. Refusal and notice messages never quote an environment value, an
+  interpolation default or a command argument.
+- **Not yet in the dialog.** The plan's own notices (RAM headroom, the certificate) are shown by
+  the API's dry run but not by the compose dialog yet.
+- **Permission.** Beyond `apps.installs:write`, compose needs `infra.containers:exec` on the
+  server: an arbitrary image is a bigger grant than a curated recipe, and scoped accounts lack it.
+- **Backups.** Compose projects are refused by app backups for now.
+
+**Why.** Coolify-style compose import is the most asked-for way in, but a compose file can say
+`privileged: true` or mount `/var/run/docker.sock`, which is root on the host. Translating into
+the closed spec the agent already validates keeps PLAN.md §0: no verb takes a raw Docker body and
+no compose CLI runs on the host, so what the translator misses the agent still refuses.
+
+**Cost accepted.** Many real compose files need edits: no image builds, no host ports, no bind
+mounts, no health-gated start order, and arguments that start with `-` are refused by the
+agent's token rule. A file copy of a running database can be corrupt, so compose projects are
+not backed up until per-service stop/dump logic exists.

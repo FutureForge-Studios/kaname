@@ -28,6 +28,7 @@ export * from "./resources/platform.js";
 export * from "./resources/accounts.js";
 export * from "./resources/updates.js";
 export * from "./resources/apps.js";
+export * from "./resources/compose.js";
 export * from "./resources/app-health.js";
 export * from "./resources/setup.js";
 

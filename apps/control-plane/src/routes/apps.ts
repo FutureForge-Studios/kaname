@@ -5,6 +5,7 @@ import {
   certificates,
   dbInstances,
   domains,
+  secrets,
   servers,
   sites,
   type AppInstallStepState,
@@ -14,10 +15,17 @@ import {
   TERMINAL_JOB_STATUSES,
   appInstallListQuery,
   appInstallSteps,
+  composeEnvironment,
+  composeRecipe,
+  composeSource,
   findApp,
   idParam,
   installAppInput,
+  isContainerSource,
+  translateCompose,
   type AppInstall,
+  type ComposeIssue,
+  type ComposeTranslation,
   type AppInstallPlan,
   type AppRecipe,
   type DbEngine,
@@ -36,8 +44,16 @@ import {
   parseParams,
   parseQuery,
 } from "../http/plugin.js";
-import { ApiException, conflict, notFound } from "../lib/errors.js";
-import { allocatePort, buildPlan, chooseEngine, installNames } from "../services/app-installer.js";
+import { ApiException, badRequest, conflict, notFound } from "../lib/errors.js";
+import { storeSecret } from "../jobs/apps.js";
+import {
+  allocatePort,
+  buildPlan,
+  chooseEngine,
+  composeEnvRef,
+  installNames,
+  installRecipe,
+} from "../services/app-installer.js";
 import { combine, enqueueServerJob, loadServer, scopeFilter, type ServerRow } from "./_shared.js";
 import { isOwnedBy, ownership } from "./_ownership.js";
 
@@ -106,16 +122,23 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/apps/installs", async (req, reply) => {
     const body = parseBody(req, installAppInput);
-    const { recipe, server, engine, plan } = await preflight(req, body);
+    const { recipe, server, engine, plan, compose } = await preflight(req, body);
     const h = helpers(req);
     const principal = h.requirePrincipal();
 
     // A failed install of the same domain that left nothing behind is
     // history, not an obstacle: the new attempt replaces it.
     // (Preflight has already refused if one of them left anything behind.)
-    await req.ctx.db
+    const replaced = await req.ctx.db
       .delete(appInstalls)
-      .where(and(eq(appInstalls.domain, body.domain), eq(appInstalls.status, "failed")));
+      .where(and(eq(appInstalls.domain, body.domain), eq(appInstalls.status, "failed")))
+      .returning({ id: appInstalls.id });
+    if (replaced.length > 0) {
+      // Their sealed secrets (a compose environment) go with them, as teardown does.
+      await req.ctx.db.delete(secrets).where(
+        and(eq(secrets.ownerType, "app_install"), inArray(secrets.ownerId, replaced.map((r) => r.id))),
+      );
+    }
 
     const steps: AppInstallStepState[] = appInstallSteps(recipe, { ssl: body.ssl }).map((step) => ({
       id: step.id,
@@ -146,6 +169,8 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
           admin_email: body.admin_email,
           system_user: body.system_user,
           php_version: body.php_version ?? null,
+          // The translated recipe only; environment values are sealed below.
+          ...(compose ? { compose: composeSource(compose) } : {}),
         },
         steps,
         createdBy: principal.kind === "user" ? principal.id : null,
@@ -154,7 +179,7 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
       .returning();
 
     let row: InstallRow | undefined;
-    if (recipe.source.kind === "image") {
+    if (isContainerSource(recipe.source)) {
       for (let attempt = 0; !row; attempt += 1) {
         const port = allocatePort(await portsInUse(req, server.id));
         if (port === null) {
@@ -173,8 +198,12 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
       [row] = await insertRow(null);
     }
 
+    const envRef = composeEnvRef(row!.id);
     let job;
     try {
+      if (compose) {
+        await storeSecret(req.ctx, envRef, "app_install", row!.id, JSON.stringify(composeEnvironment(compose)));
+      }
       job = await enqueueServerJob(req, {
         type: "app.install",
         server,
@@ -186,6 +215,7 @@ export async function appRoutes(app: FastifyInstance): Promise<void> {
         params: { install_id: row!.id, app_id: recipe.id, domain: body.domain },
       });
     } catch (err) {
+      await req.ctx.db.delete(secrets).where(eq(secrets.ref, envRef));
       await req.ctx.db.delete(appInstalls).where(eq(appInstalls.id, row!.id));
       throw err;
     }
@@ -348,7 +378,11 @@ interface Preflight {
   server: ServerRow;
   engine: DbEngine | null;
   plan: AppInstallPlan;
+  /** Compose installs: the translation, environment values included. Never stored as is. */
+  compose: ComposeTranslation | null;
 }
+
+const issueText = (issue: ComposeIssue) => (issue.line ? `line ${issue.line}: ${issue.message}` : issue.message);
 
 function formatMb(mb: number): string {
   return mb >= 1024 ? `${Math.round((mb / 1024) * 10) / 10} GB` : `${mb} MB`;
@@ -373,7 +407,23 @@ function precondition(
  */
 async function preflight(req: FastifyRequest, body: InstallAppInput): Promise<Preflight> {
   const own = ownership(req);
-  const recipe = findApp(body.app_id);
+  let compose: ComposeTranslation | null = null;
+  let recipe: AppRecipe | undefined;
+  if (body.compose !== undefined) {
+    // Arbitrary images are a bigger grant than curated recipes (KD-045).
+    helpers(req).authorize("infra.containers:exec", body.server_id);
+    compose = translateCompose(body.compose, { web_service: body.web_service, web_port: body.web_port });
+    if (compose.refused.length > 0 || !compose.web) {
+      const lines =
+        compose.refused.length > 0
+          ? compose.refused.map(issueText)
+          : ["Choose the service and port that serve the website (web_service, web_port)."];
+      throw badRequest(["This compose file can't be installed:", ...lines].join("\n"), { compose: lines[0]! });
+    }
+    recipe = composeRecipe(composeSource(compose));
+  } else {
+    recipe = findApp(body.app_id);
+  }
   if (!recipe) throw notFound("App", body.app_id);
 
   const server = await loadServer(req, body.server_id, "apps.installs:write");
@@ -510,8 +560,9 @@ async function preflight(req: FastifyRequest, body: InstallAppInput): Promise<Pr
   if (choice.engine) await own.reserve("database");
 
   const names = installNames(recipe, body, installId);
+  if (compose) notices.push(...compose.notices.map(issueText));
   let appPort: number | null = null;
-  if (recipe.source.kind === "image") {
+  if (isContainerSource(recipe.source)) {
     appPort = allocatePort(await portsInUse(req, server.id));
     notices.push(
       `Its data is kept in ${names.dataDir} on ${server.name}. The app listens on 127.0.0.1${appPort ? `:${appPort}` : ""} only; the site is the way in.`,
@@ -524,6 +575,7 @@ async function preflight(req: FastifyRequest, body: InstallAppInput): Promise<Pr
     recipe,
     server,
     engine: choice.engine,
+    compose,
     plan: buildPlan(recipe, body, {
       installId,
       serverName: server.name,
@@ -640,7 +692,7 @@ function nothingLeft(row: InstallRow): boolean {
 }
 
 export function installToApi(row: InstallRow, serverName: string): AppInstall {
-  const recipe = findApp(row.appId);
+  const recipe = installRecipe(row);
   const specs = recipe ? appInstallSteps(recipe, { ssl: row.ssl }) : [];
   const byId = new Map(specs.map((s) => [s.id, s]));
 
