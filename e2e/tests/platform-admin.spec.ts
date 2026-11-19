@@ -280,10 +280,10 @@ test.describe("users", () => {
 
     await page.getByLabel("Confirm password").fill(STRONG_PASSWORD);
     await submit.click();
-    /* Signed straight in, as a viewer: the Command Center, not admin. */
-    await expect(page).toHaveURL(`${webUrl}/`);
-    await expect(page.getByRole("heading", { level: 1, name: "Command Center" })).toBeVisible();
-    expect(await sidebarEntries(page)).not.toContain("Administration › Users");
+    /* Signed straight in, as a viewer: no projects in the role, so the first page it can see (Servers), not admin. */
+    await expect(page).toHaveURL(`${webUrl}/infrastructure/servers`);
+    await expect(page.getByRole("heading", { level: 1, name: "Servers" })).toBeVisible();
+    expect(await sidebarEntries(page)).not.toContain("Settings › Users");
 
     /* The same link a second time is spent, and says so. */
     const again = await (await browser.newContext({ storageState: { cookies: [], origins: [] } })).newPage();
@@ -326,8 +326,8 @@ test.describe("users", () => {
     await member.page.reload();
     const entries = await sidebarEntries(member.page);
     expect(entries).toContain("Security › Firewall");
-    expect(entries).toContain("Terminal");
-    expect(entries.some((entry) => entry.startsWith("Administration"))).toBe(false);
+    expect(entries).toContain("Servers › Terminal");
+    expect(entries.filter((entry) => entry.startsWith("Settings"))).toEqual(["Settings › Audit"]);
 
     /* A role list cannot be emptied: every account has to hold one. */
     await row.click();

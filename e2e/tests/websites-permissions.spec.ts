@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import {
   api,
   choose,
@@ -70,17 +70,15 @@ test.beforeAll(async () => {
   forgeSiteId = sites.find((s) => s.name === "futureforge-www")!.id;
 });
 
-async function sitesPage(page: Page) {
-  await page.goto("/websites/sites");
-  await expect(page.getByRole("heading", { level: 1, name: "Sites" })).toBeVisible();
-  const table = page.getByRole("table", { name: "Sites" });
-  await expect(table).toBeVisible();
-  return table;
+/** The Projects home, searched down to the project a journey needs ("" for all). */
+async function projectsPage(page: Page, search = "") {
+  await page.goto(`/?q=${encodeURIComponent(search)}`);
+  await expect(page.getByRole("heading", { level: 1, name: "Projects" })).toBeVisible();
 }
 
-async function rowActionsOf(page: Page, table: ReturnType<Page["getByRole"]>, name: string) {
-  await rowWith(table, name).getByRole("button", { name: "Row actions" }).click();
-  return (label: string) => page.getByRole("menuitem", { name: label });
+/** A card on the Projects home grid, found by the name of its project. */
+function projectCard(page: Page, name: string): Locator {
+  return page.getByRole("list", { name: "Projects" }).getByRole("listitem").filter({ hasText: name });
 }
 
 /* ------------------------------- viewer ------------------------------ */
@@ -90,12 +88,12 @@ test("a viewer is not shown Websites and is refused at the URL", async ({ page, 
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Primary" }).first();
   await expect(nav.getByRole("link", { name: "Servers" })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Sites" })).toHaveCount(0);
-  await expect(nav.getByRole("link", { name: "SSL / TLS" })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "Projects" })).toHaveCount(0);
+  await expect(nav.getByRole("link", { name: "Domains" })).toHaveCount(0);
 
-  await page.goto("/websites/sites");
+  await page.goto("/websites/ssl");
   await expect(page.getByRole("alert").filter({ hasText: "forbidden" })).toContainText(
-    "You do not have websites.sites:read",
+    "You do not have websites.ssl:read",
   );
 
   const res = await api("GET", "/certificates", undefined, people["viewer"]!.cookie);
@@ -106,26 +104,24 @@ test("a viewer is not shown Websites and is refused at the URL", async ({ page, 
 
 test("an auditor reads every Websites page and is offered no change", async ({ page, context }) => {
   await signInAs(context, people["auditor"]!);
-  const table = await sitesPage(page);
-  await expect(rowWith(table, "futureforge-www")).toBeVisible();
-  await expect(page.getByRole("button", { name: "New site" }).first()).toBeDisabled();
-
-  const item = await rowActionsOf(page, table, "futureforge-www");
-  await expect(item("Open")).toBeEnabled();
-  for (const label of [
-    "Deploy",
-    "Reload web server",
-    "Issue certificate",
-    "Edit site",
-    "Delete site",
-  ]) {
-    await expect(item(label)).toBeDisabled();
-  }
+  await projectsPage(page, "futureforge-www");
+  await expect(projectCard(page, "futureforge-www")).toBeVisible();
+  /* Add new is open to them; the Deploy from Git item inside it is not. */
+  await page.getByRole("button", { name: "Add new" }).first().click();
+  await expect(page.getByRole("menuitem", { name: "Deploy from Git" })).toBeDisabled();
   await page.keyboard.press("Escape");
 
   await page.goto(`/websites/sites/${forgeSiteId}`);
-  await expect(page.getByRole("button", { name: "Reload", exact: true })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Deploy", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Redeploy", exact: true })).toBeDisabled();
+  await page.getByRole("tab", { name: /Settings/ }).click();
+  await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeDisabled();
+  await page.getByRole("tab", { name: /Domains/ }).click();
+  await expect(page.getByRole("button", { name: "Issue certificate", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "More actions" }).click();
+  for (const label of ["Reload", "Delete project"]) {
+    await expect(page.getByRole("menuitem", { name: label })).toBeDisabled();
+  }
+  await page.keyboard.press("Escape");
 
   for (const [path, heading, action] of [
     ["/websites/domains", "Domains", "Add domain"],
@@ -159,32 +155,38 @@ test("a developer ships sites but does not delete them or touch domains and TLS"
 }) => {
   const dev = people["developer"]!;
   await signInAs(context, dev);
-  const table = await sitesPage(page);
+  await projectsPage(page);
 
   /* Creating is theirs. */
   const name = unique("e2e-dev");
-  await page.getByRole("button", { name: "New site" }).first().click();
-  const dialog = page.getByRole("dialog", { name: "New site" });
+  await page.getByRole("button", { name: "Add new" }).first().click();
+  await page.getByRole("menuitem", { name: "Deploy from Git" }).click();
+  const dialog = page.getByRole("dialog", { name: "New project" });
   await choose(page, dialog.getByLabel("Server"), "forge-01");
-  await dialog.getByLabel("Site name").fill(name);
-  await dialog.getByLabel("Primary domain").fill(`${name}.e2e.test`);
-  await dialog.getByRole("button", { name: "Create site" }).click();
+  await dialog.getByLabel("Project name").fill(name);
+  await dialog.getByLabel("Domain", { exact: true }).fill(`${name}.e2e.test`);
+  await dialog.getByRole("button", { name: "Create project" }).click();
   await expectJobStatus(drawerJob(page, "Create site", name), "Succeeded");
   await page.keyboard.press("Escape");
-  await expect(rowWith(table, name)).toContainText("Active");
 
-  /* Deleting, issuing and DNS are not. */
-  const item = await rowActionsOf(page, table, name);
-  await expect(item("Edit site")).toBeEnabled();
-  await expect(item("Deploy")).toBeEnabled();
-  await expect(item("Delete site")).toBeDisabled();
-  await expect(item("Issue certificate")).toBeDisabled();
+  const created = (await get<{ id: string; name: string }[]>(`/sites?q=${name}`))[0]!;
+  await page.goto(`/websites/sites/${created.id}`);
+  await expect(page.getByText("Active").first()).toBeVisible();
+
+  /* Editing and deploying are theirs; deleting and TLS are not. */
+  await page.getByRole("tab", { name: /Settings/ }).click();
+  await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeEnabled();
+  await page.getByRole("tab", { name: /Deployments/ }).click();
+  await expect(page.getByRole("button", { name: "Deploy", exact: true }).last()).toBeEnabled();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await expect(page.getByRole("menuitem", { name: "Delete project" })).toBeDisabled();
   await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: /Domains/ }).click();
+  await expect(page.getByRole("button", { name: "Issue certificate", exact: true })).toBeDisabled();
 
   await page.goto("/websites/domains");
   await expect(page.getByRole("button", { name: "Add domain" }).first()).toBeDisabled();
 
-  const created = (await get<{ id: string; name: string }[]>(`/sites?q=${name}`))[0]!;
   const del = await api("DELETE", `/sites/${created.id}`, undefined, dev.cookie);
   expect(del.status).toBe(403);
   const domain = await api("POST", "/domains", { name: `${unique("dev")}.e2e.test` }, dev.cookie);
@@ -196,18 +198,17 @@ test("a developer ships sites but does not delete them or touch domains and TLS"
 test("an operator holds every Websites action", async ({ page, context }) => {
   const op = people["operator"]!;
   await signInAs(context, op);
-  const table = await sitesPage(page);
-  const item = await rowActionsOf(page, table, "futureforge-www");
-  for (const label of [
-    "Deploy",
-    "Reload web server",
-    "Issue certificate",
-    "Edit site",
-    "Delete site",
-  ]) {
-    await expect(item(label)).toBeEnabled();
+  await page.goto(`/websites/sites/${forgeSiteId}`);
+  await expect(page.getByRole("button", { name: "Redeploy", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "More actions" }).click();
+  for (const label of ["Reload", "Delete project"]) {
+    await expect(page.getByRole("menuitem", { name: label })).toBeEnabled();
   }
   await page.keyboard.press("Escape");
+  await page.getByRole("tab", { name: /Domains/ }).click();
+  await expect(page.getByRole("button", { name: "Issue certificate", exact: true })).toBeEnabled();
+  await page.getByRole("tab", { name: /Settings/ }).click();
+  await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeEnabled();
 
   /* And uses one: a domain added by an operator lands. */
   await page.goto("/websites/domains");
@@ -231,10 +232,10 @@ test("a role scoped to forge-01 sees and changes only forge-01's sites", async (
 }) => {
   const scoped = people["scoped"]!;
   await signInAs(context, scoped);
-  const table = await sitesPage(page);
-
-  await expect(rowWith(table, "futureforge-www")).toBeVisible();
-  await expect(rowWith(table, "kaname-panel")).toHaveCount(0);
+  await projectsPage(page, "futureforge-www");
+  await expect(projectCard(page, "futureforge-www")).toBeVisible();
+  await projectsPage(page, "kaname-panel");
+  await expect(projectCard(page, "kaname-panel")).toHaveCount(0);
   const listed = await get<{ server_name: string }[]>("/sites?per_page=200");
   const own = await api<{ server_name: string }[]>(
     "GET",
@@ -246,8 +247,9 @@ test("a role scoped to forge-01 sees and changes only forge-01's sites", async (
   expect(new Set(own.data.map((s) => s.server_name))).toEqual(new Set(["forge-01"]));
 
   /* The create form only offers the host they can write to. */
-  await page.getByRole("button", { name: "New site" }).first().click();
-  const dialog = page.getByRole("dialog", { name: "New site" });
+  await page.getByRole("button", { name: "Add new" }).first().click();
+  await page.getByRole("menuitem", { name: "Deploy from Git" }).click();
+  const dialog = page.getByRole("dialog", { name: "New project" });
   await dialog.getByLabel("Server").click();
   const options = page.getByRole("listbox").getByRole("option");
   await expect(options).toHaveCount(1);

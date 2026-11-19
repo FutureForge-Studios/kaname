@@ -4,7 +4,7 @@ import * as React from "react";
 import type { CertKeyType, Domain, IssueCertificateInput } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, Tag, type ComboboxOption } from "@kaname/ui";
 import { useCan, useServers, useSession } from "@/lib/queries";
-import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "../../_components/FormDialog";
 import { useDomains, useIssueCertificate } from "./queries";
 
 /* ------------------------------------------------------------------ *
@@ -185,7 +185,7 @@ export function CertificateDialog({
       onSubmit={submit}
       size="lg"
     >
-      <FormSection index={1} title="Placement">
+      <FormSection title="Placement">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <FormField label="Domain" error={errorFor("domain_id")} required>
             {domain ? (
@@ -233,7 +233,7 @@ export function CertificateDialog({
         </div>
       </FormSection>
 
-      <FormSection index={2} title="Covered names">
+      <FormSection title="Covered names">
         <FormField
           label="Additional names"
           description="Comma or space separated. The domain itself is always the subject."
@@ -261,7 +261,7 @@ export function CertificateDialog({
         )}
       </FormSection>
 
-      <FormSection index={3} title="Order">
+      <FormSection title="Order">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <FormField
             label="Challenge"
@@ -307,7 +307,7 @@ export function CertificateDialog({
         </FormField>
       </FormSection>
 
-      <FormSection index={4} title="Renewal">
+      <FormSection title="Renewal">
         <Switch
           checked={form.autoRenew}
           onChange={(event) => set("autoRenew", event.target.checked)}

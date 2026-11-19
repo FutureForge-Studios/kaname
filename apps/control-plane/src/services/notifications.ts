@@ -403,7 +403,7 @@ export class NotificationService {
   private mailerFor(smtp: ResolvedSmtp): Mailer {
     if (!smtp.host) {
       throw new Error(
-        "No outgoing mail server is configured. Set one under Administration > Settings > Notifications.",
+        "No outgoing mail server is configured. Set one under Settings > Notifications.",
       );
     }
     if (!smtp.from_address) {
@@ -772,7 +772,7 @@ export class NotificationService {
     this.notify({
       event: "service_failed",
       title: `${data.unit} failed${name ? ` on ${name}` : ""}`,
-      body: `systemd reports the unit as failed. Restart it from Infrastructure > Services, or read its log first.`,
+      body: `systemd reports the unit as failed. Restart it from Servers > Services, or read its log first.`,
       serverId,
       serverName: name,
       href: `/infrastructure/services?server_id=${serverId}`,
@@ -910,8 +910,8 @@ export class NotificationService {
         event: "update_available",
         title: `Kaname ${data.version} is available${flags ? ` (${flags})` : ""}`,
         body: data.requires_confirmation
-          ? "This release needs an explicit confirmation before it is applied. Review it under Administration > Updates."
-          : "Apply it under Administration > Updates, or let the update cadence handle it.",
+          ? "This release needs an explicit confirmation before it is applied. Review it under Settings > Updates."
+          : "Apply it under Settings > Updates, or let the update cadence handle it.",
         href: "/administration/updates",
         key: `update-available:${data.version}`,
         windowMs: 24 * HOUR,
@@ -948,7 +948,7 @@ export class NotificationService {
       "update.needs_attention": {
         event: "update_failed",
         title: `Update to ${data.version ?? "the new version"} needs attention`,
-        body: "The update did not finish cleanly and may have left migrations applied. Read the run under Administration > Updates before doing anything else.",
+        body: "The update did not finish cleanly and may have left migrations applied. Read the run under Settings > Updates before doing anything else.",
       },
     };
     const text = outcome[event.type];
@@ -991,8 +991,8 @@ export class NotificationService {
           event: "certificate_expiring",
           title: `Certificate for ${row.subject} expires ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}`,
           body: row.autoRenew
-            ? `Automatic renewal has not produced a new certificate yet. Check Websites > SSL / TLS for the last renewal error.`
-            : `Automatic renewal is off for this certificate. Renew it from Websites > SSL / TLS.`,
+            ? `Automatic renewal has not produced a new certificate yet. Check Domains > SSL / TLS for the last renewal error.`
+            : `Automatic renewal is off for this certificate. Renew it from Domains > SSL / TLS.`,
           serverId: row.serverId,
           serverName: name,
           href: `/websites/ssl/${row.id}`,
@@ -1290,7 +1290,7 @@ function composeMail(
       ? `<p style="margin:0 0 12px;color:#6b7280">Server: ${escapeHtml(message.serverName)}</p>`
       : "",
     `<p style="margin:0 0 16px"><a href="${escapeHtml(link)}">Open in ${escapeHtml(panel.name)}</a></p>`,
-    `<p style="margin:0;color:#9ba3ae;font-size:12px">Sent by ${escapeHtml(panel.name)}. Change what it sends under Administration &gt; Settings &gt; Notifications.</p>`,
+    `<p style="margin:0;color:#9ba3ae;font-size:12px">Sent by ${escapeHtml(panel.name)}. Change what it sends under Settings &gt; Notifications.</p>`,
     `</div>`,
   ].join("");
 

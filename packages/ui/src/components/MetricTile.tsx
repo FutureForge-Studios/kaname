@@ -6,7 +6,7 @@ import { cn, variant } from "../lib/cn.js";
 import type { Tone } from "./Badge.js";
 
 /* ------------------------------------------------------------------ *
- * MetricTile — a dense readout, not a dashboard card. A mono uppercase
+ * MetricTile — a dense readout, not a dashboard card. A muted sans
  * label over one large tight-tracked numeral, in a hairline box.
  *
  * Eight of these sit across a Command Center row, so the tile is sized
@@ -104,7 +104,7 @@ export const MetricTile = React.forwardRef<HTMLDivElement, MetricTileProps>(func
       <div className="flex items-center gap-1.5">
         {Icon && <Icon size={12} className="shrink-0 text-[var(--kn-text-3)]" aria-hidden />}
         <span
-          className="kn-label-sm truncate tracking-[0.08em] text-[var(--kn-text-3)]"
+          className="kn-label-sm truncate text-[var(--kn-text-2)]"
           title={typeof label === "string" ? label : undefined}
         >
           {label}
@@ -114,7 +114,7 @@ export const MetricTile = React.forwardRef<HTMLDivElement, MetricTileProps>(func
       <div className="mt-2 flex items-baseline gap-1">
         <span
           className={cn(
-            "kn-num font-medium leading-none tracking-[var(--kn-tracking-display)]",
+            "kn-num font-semibold leading-none tracking-[var(--kn-tracking-display)]",
             variant(VALUE_SIZES, size, "md"),
             variant(VALUE_TONES, tone, "neutral"),
           )}

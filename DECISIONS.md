@@ -1018,3 +1018,105 @@ dumped. A copy restored onto a new domain keeps whatever address the app stores 
 to be present on the host under the agent's `backup-secrets` directory, as before; the S3
 path-style choice reaches restic as `KANAME_S3_BUCKET_LOOKUP` in that file. Migration 0012 adds
 the nullable `restore_points.manifest`.
+
+## KD-044 — A plain, flat panel for 1.0; KD-038's decoration is retired
+
+**Decision.** For the 1.0 release the panel drops the ffstudios.io decoration and reads like
+Vercel or Render: a plain product UI, not a branded marketing surface. In the kit and the
+global styles, so every page changes without being edited:
+
+- **Canvas.** Plain flat background. No blueprint grid, frame rails or "+" crosshair marks in
+  the panel (`.kn-canvas` is a flat colour; `.kn-grid`, `.kn-crosshairs` and `Crosshair` draw
+  nothing). `GridBackdrop` stays for login, setup and invite, kept calm.
+- **Labels.** Nav groups, tabs, table headers, metric labels, property keys, captions and
+  breadcrumbs are sentence-case Geist Sans, 12–13px, muted, normal letter-spacing (changed at
+  the source in `.kn-label` / `.kn-label-sm`; `--kn-tracking-label` is 0). JetBrains Mono is
+  for greppable values only, in their own case.
+- **Structure.** No numbered sections or leader dots: `NumberedSection`, `SectionHeader`,
+  `SectionCard` and `LeaderLabel` render a plain title (14px semibold) and ignore `index`. No
+  eyebrow chips on routine pages: `PageHeader` and `ResourceHeader` accept `eyebrow` and do
+  not render it. `PageHero`, `GradientText` and the hero scale are for login, setup, invite and
+  first run only.
+- **Shape.** Buttons and icon buttons have 8px corners like inputs, heights matching them (24 /
+  28 / 32, `lg` 36); primary stays filled brand purple, secondary is a hairline on the surface,
+  ghost is text. `arrow` renders nothing. Badges 6px; cards, tables, menus 8px, flat in both
+  themes; dialogs and drawers 12px with 16px semibold titles. Tabs are underline tabs with a
+  foreground indicator. Page titles are 24px, weight 600, tracking −0.02em.
+- **API.** `ResourceHeader` gains `status` and replaces the infrastructure `DetailHeader`.
+  The unused `Crosshair` export is gone; every other prop is kept.
+- **Information architecture.** The product is project-first. The sidebar is eight sections
+  (Projects, Apps, Domains, Databases, Servers, Monitoring, Backups, Settings) plus a folded
+  "More" (Email, Files, Security); a section's pages show as one tab row at the top of its list
+  pages, so the 33 old leaves keep their URLs and permissions without 33 sidebar links. "/" is
+  the Projects grid for every audience (a role without `websites.sites:read` is sent to the
+  first page it can see); `/websites/sites` redirects to it; a site's page is the project page
+  (Overview, Deployments, Domains, Logs, Settings) with one-click deploy from the git
+  repository and branch now stored on the site. Resellers keep their overview at `/reseller`.
+- **Git safety.** A stored repository URL may not carry credentials or start an scp host with
+  "-"; deploy triggers use the same validators; scoped accounts cannot set a repository (an
+  operator's next deploy would clone it); the agent clones with `core.symlinks=false`, so a
+  repository cannot link the public folder to files outside it.
+
+Kept from KD-038: the palette (ink/paper, brand purple, teal/yellow/red/blue status), Geist Sans
+and JetBrains Mono, every `--kn-*` token name, the motion curves, and the status rules (status
+colour means status; the two status axes never merge).
+
+**Why.** The owner asked for a massive, simpler revamp before leaving beta, positioned against
+Vercel and Render rather than traditional panels, and the UI elements were inconsistent. The grid, numbered rows,
+uppercase mono labels and pills read as a studio site, and every page mixed them differently.
+Changing them at the kit means one consistent language on all pages at once.
+
+**Cost accepted.** `--kn-r-lg` now equals `--kn-r-md` (8px), so the two names no longer
+differ. Props such as `index`, `eyebrow` (on `PageHeader`) and `arrow` are accepted and ignored
+rather than removed from about 120 call sites. Some list pages show two tab rows (the section's
+pages, then the page's own views, e.g. Databases and Monitoring). Git deploys still clone
+without a build step, and a private repository needs the host's own SSH access to it, since
+per-site deploy keys are not wired yet.
+
+## KD-045 — Docker Compose import: a safe subset, translated into KD-040's typed specs
+
+**Decision.** A project can be created from a `docker-compose.yml`, pasted or read from a GitHub
+repository by the browser. Compose is never run: one pure translator in the contract
+(`translateCompose`, using the `yaml` package) turns each service into a `ManagedContainerSpec`.
+The web dialog runs it for a live preview; `POST /apps/installs[/plan]` runs it again as the gate
+and answers 400 with every refusal as `line N: message` before a row or job exists. The install is
+an ordinary app install (`app_id: "docker-compose"`, source kind `compose`) through the KD-040
+steps and verbs; the Rust agent is unchanged and stays the final gate.
+
+- **Mapped.** `image` (tag or digest required), `environment` (`${X:-default}`, `$$`; a variable
+  with no value is refused, nothing is read from `.env` or the shell), named volumes (folders under
+  `/var/lib/kaname-apps/<install>/volumes/<name>`, created empty and owned by root, so an image
+  that runs as another user and doesn't set up its own data folder may fail to write; the
+  preview says so), `depends_on` (start order only, and a service that depends on the web entry
+  starts after it; conditions are ignored and say so), `command` (argument tokens under the
+  agent's rule), `ports`/`expose` (TCP container ports only; UDP is never published). Exactly one service is the web entry, published on `127.0.0.1` from the
+  port pool and proxied by nginx with HTTPS; the others are reachable only by service name.
+- **Refused.** `build`, `privileged`, `cap_add`/`cap_drop`, `devices`, `network_mode`,
+  `pid`/`ipc`/`uts`/`userns_mode` host namespaces, host-path and bind mounts (the Docker socket
+  included), `tmpfs`, `entrypoint`, `user`, `env_file`, `extends`, `secrets`, `configs`, external
+  volumes and networks, and any unknown key. Ignored with a notice: `restart`, `healthcheck`,
+  `labels`, `logging`, resource limits and per-service `networks`. Caps: 64 KiB, 12 services,
+  and the agent's 64 env / 8 mounts / 16 args, with values and mount targets counted in bytes
+  (4096) as the agent counts them. At most 50 refusals are listed, then a count.
+- **Secrets.** The YAML is never stored, logged, audited or put in a job. Every environment
+  value is sealed as one secret, `app_install:<id>:compose_env`, removed with the install (and
+  with an earlier failed install of the same domain that a new attempt replaces). The row keeps
+  the rest of the translation as written (`inputs.compose`): images, volume names, targets and
+  command arguments are stored and shown in the clear, so a secret belongs in `environment`,
+  never in `command`. Refusal and notice messages never quote an environment value, an
+  interpolation default or a command argument.
+- **Not yet in the dialog.** The plan's own notices (RAM headroom, the certificate) are shown by
+  the API's dry run but not by the compose dialog yet.
+- **Permission.** Beyond `apps.installs:write`, compose needs `infra.containers:exec` on the
+  server: an arbitrary image is a bigger grant than a curated recipe, and scoped accounts lack it.
+- **Backups.** Compose projects are refused by app backups for now.
+
+**Why.** Coolify-style compose import is the most asked-for way in, but a compose file can say
+`privileged: true` or mount `/var/run/docker.sock`, which is root on the host. Translating into
+the closed spec the agent already validates keeps PLAN.md §0: no verb takes a raw Docker body and
+no compose CLI runs on the host, so what the translator misses the agent still refuses.
+
+**Cost accepted.** Many real compose files need edits: no image builds, no host ports, no bind
+mounts, no health-gated start order, and arguments that start with `-` are refused by the
+agent's token rule. A file copy of a running database can be corrupt, so compose projects are
+not backed up until per-service stop/dump logic exists.

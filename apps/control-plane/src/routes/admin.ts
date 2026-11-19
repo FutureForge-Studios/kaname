@@ -1293,7 +1293,7 @@ function serializeSession(row: typeof sessions.$inferSelect, currentId: string |
 const sessionsAreUserOnly = () =>
   new ApiException("bad_request", "API keys do not have sessions.", {
     remediation: {
-      summary: "Revoke the key in Administration > API to cut off its access.",
+      summary: "Revoke the key in Settings > API to cut off its access.",
       actions: [{ label: "API keys", href: "/administration/api" }],
     },
   });

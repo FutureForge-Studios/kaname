@@ -292,7 +292,7 @@ test.describe("account lockout", () => {
 
     /* The way out it names is one that exists: Unlock, not "reactivate". */
     await expect(
-      page.getByText(/An owner can lift it sooner with Unlock in Administration > Users\./),
+      page.getByText(/An owner can lift it sooner with Unlock in Settings > Users\./),
     ).toBeVisible();
 
     /*
@@ -370,7 +370,7 @@ test("a suspended account is refused at the door and cut off mid-session", async
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByText("This account is suspended.")).toBeVisible();
   await expect(
-    page.getByText("An owner can reactivate it from Administration > Users."),
+    page.getByText("An owner can reactivate it from Settings > Users."),
   ).toBeVisible();
 
   /* Reactivated, the same password works and lands where it was going. */

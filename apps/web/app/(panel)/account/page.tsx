@@ -188,7 +188,7 @@ function ProfileCard({ user, loading }: { user: User | null; loading: boolean })
         </PropertyList>
       )}
       <p className="mt-3 border-t border-[var(--kn-border-subtle)] pt-3 text-sm text-[var(--kn-text-3)]">
-        Name, email and roles are changed by an administrator in Administration → Users, so an
+        Name, email and roles are changed by an administrator in Settings → Users, so an
         account can never quietly rename itself in the audit trail.
       </p>
     </AccountSection>

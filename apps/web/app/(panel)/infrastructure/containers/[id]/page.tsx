@@ -8,6 +8,7 @@ import type { Server } from "@kaname/contract";
 import {
   Badge,
   Button,
+  ResourceHeader,
   ByteSize,
   DetailLayout,
   DropdownMenu,
@@ -32,7 +33,6 @@ import {
 } from "@kaname/ui";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { PageError } from "@/components/PageError";
-import { DetailHeader, DetailHeaderSkeleton } from "../../_components/DetailHeader";
 import { useCan, useResource } from "@/lib/queries";
 import { formatCount, formatDuration, formatPercent } from "@/lib/format";
 import { ContainerExec } from "../../_components/ContainerExec";
@@ -150,10 +150,9 @@ export default function ContainerDetailPage() {
   if (query.isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <DetailHeaderSkeleton>
-          <Skeleton className="h-5 w-40 rounded-[var(--kn-r-pill)]" label="Loading container" />
-          <Skeleton className="mt-4 h-7 w-64" />
-        </DetailHeaderSkeleton>
+        <header className="shrink-0 border-b border-[var(--kn-border)] px-6 pb-5 pt-6">
+          <Skeleton label="Loading container" className="h-7 w-64" />
+        </header>
         <div className="px-6 py-6">
           <Skeleton className="h-64" />
         </div>
@@ -164,9 +163,9 @@ export default function ContainerDetailPage() {
   if (query.isError || !container) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <DetailHeaderSkeleton>
+        <header className="shrink-0 border-b border-[var(--kn-border)] px-6 pb-5 pt-6">
           <Breadcrumbs />
-        </DetailHeaderSkeleton>
+        </header>
         <div className="px-6 py-6">
           <PageError
             error={query.error ?? new Error("This container is no longer in the cached list.")}
@@ -262,8 +261,7 @@ export default function ContainerDetailPage() {
 
   return (
     <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-1 flex-col">
-      <DetailHeader
-        eyebrow="Container"
+      <ResourceHeader
         breadcrumb={<Breadcrumbs trailing={container.name} />}
         name={container.name}
         identity={`${container.server_name} · ${container.image}`}

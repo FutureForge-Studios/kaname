@@ -3,7 +3,7 @@
 import * as React from "react";
 import type { DnsRecord, DnsRecordType, Domain } from "@kaname/contract";
 import { CopyableCode, FormField, Input, Select, Switch, Textarea } from "@kaname/ui";
-import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "../../_components/FormDialog";
 import {
   DNS_RECORD_TYPES,
   DNS_TYPE_SPECS,
@@ -166,7 +166,7 @@ export function DnsRecordDialog({
       onSubmit={submit}
       size="lg"
     >
-      <FormSection index={1} title="Record">
+      <FormSection title="Record">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-[104px_minmax(0,1fr)]">
           <FormField label="Type" required>
             <Select
@@ -223,7 +223,7 @@ export function DnsRecordDialog({
         </FormField>
       </FormSection>
 
-      <FormSection index={2} title="Caching and edge">
+      <FormSection title="Caching and edge">
         <div
           className={
             spec.priority === "required"
@@ -291,7 +291,7 @@ export function DnsRecordDialog({
         )}
       </FormSection>
 
-      <FormSection index={3} title="Preview">
+      <FormSection title="Preview">
         <CopyableCode value={preview} label="Zone line" block />
       </FormSection>
     </FormDialog>

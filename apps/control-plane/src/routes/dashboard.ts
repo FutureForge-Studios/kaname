@@ -553,7 +553,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
      * already holds, and a stale agent is the one that actually blocks
      * new panel features.
      */
-    const panelVersion = process.env.npm_package_version ?? "0.1.0";
+    const panelVersion = req.ctx.config.KANAME_VERSION;
     for (const server of liveRows) {
       if (!server.agentVersion || !isOlder(server.agentVersion, panelVersion)) continue;
       attention.push({

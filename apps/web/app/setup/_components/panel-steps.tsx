@@ -266,7 +266,7 @@ export function AddressStep({ state, onAdvance, onStale }: StepProps) {
       {panel !== null && panel !== "unavailable" && panel.domain && (
         <Note>
           The panel already answers on <MonoText>{panel.public_url}</MonoText>
-          {panel.tls ? " with a certificate." : "."} Change it later in Administration → Settings →
+          {panel.tls ? " with a certificate." : "."} Change it later in Settings →
           Address.
         </Note>
       )}

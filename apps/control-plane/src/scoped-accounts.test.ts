@@ -667,6 +667,18 @@ describe("app installs", () => {
     expect((await call(alice, "GET", `/apps/installs/${mine!.id}`)).statusCode).toBe(404);
     expect((await call(bob, "GET", "/apps/catalog")).statusCode).toBe(200);
   });
+
+  it("keeps compose installs from scoped accounts: arbitrary images need infra.containers:exec", async () => {
+    const res = await call(bob, "POST", "/apps/installs/plan", {
+      app_id: "docker-compose",
+      compose: "services:\n  web:\n    image: nginx:1.27\n    ports: [80]\n",
+      server_id: forgeId,
+      domain: "bob-compose.scoped.test",
+      admin_email: "bob@scoped.test",
+    });
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.body).error.message).toContain("infra.containers:exec");
+  });
 });
 
 describe("a reseller's standing", () => {

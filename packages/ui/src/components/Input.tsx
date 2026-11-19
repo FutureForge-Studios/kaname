@@ -35,7 +35,7 @@ export const FIELD_MIN_HEIGHTS: Record<FieldSize, string> = {
 const FIELD_TEXT: Record<FieldSize, string> = { xs: "text-xs", sm: "text-sm", md: "text-base" };
 const FIELD_RADIUS: Record<FieldSize, string> = {
   xs: "rounded-[var(--kn-r-sm)]",
-  sm: "rounded-[var(--kn-r-sm)]",
+  sm: "rounded-[var(--kn-r-md)]",
   md: "rounded-[var(--kn-r-md)]",
 };
 const FIELD_GAP: Record<FieldSize, string> = { xs: "gap-1.5", sm: "gap-1.5", md: "gap-2" };

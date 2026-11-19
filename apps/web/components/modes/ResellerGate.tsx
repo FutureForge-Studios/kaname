@@ -30,7 +30,7 @@ export function useResellerArea(what: string): { real: boolean; gate: React.Reac
         <EmptyState
           icon={Users}
           title="This area is for reseller accounts"
-          description="Resellers manage their own clients here. As an operator, you manage resellers from Administration."
+          description="Resellers manage their own clients here. As an operator, you manage resellers from Settings."
           action={<LinkButton href="/administration/resellers">Open resellers</LinkButton>}
         />
       </Card>

@@ -2,26 +2,27 @@
 
 # Kaname
 
-**要** — the keystone. The control plane for your infrastructure.
+**要** — the keystone. Deploy to your own servers.
 
 by [FutureForge Studios](https://ffstudios.io)
 
 </div>
 
-Kaname is a self-hosted control panel for a small fleet of Linux servers: infrastructure,
-websites, files, email, databases, security, backups, monitoring, logs and a terminal, in one
-place, owned entirely by the person running it.
+Kaname is a self-hosted deploy platform for your own Linux servers. Create a project from a git
+repository or a one-click app, give it a domain, and Kaname serves it with HTTPS, keeps its
+releases for rollback, and shows its deployments and logs — the Vercel and Render way of
+working, on machines you own. Databases, email, files, backups, monitoring and a terminal are
+there when a project needs them.
 
 It is built for an owner-operator, not for a shared-hosting reseller. That shapes every
 decision in it — see [PLAN.md](PLAN.md) for the architecture and [DECISIONS.md](DECISIONS.md)
 for why each call was made.
 
 > [!IMPORTANT]
-> **Beta, and not published yet.** The install below works once this repository has been pushed and
-> a `v*` tag has built the images — `.github/workflows/release.yml` publishes them to GHCR and
-> writes `versions.json`. Until that first tag exists, the one-liner has nothing to fetch. The
-> installer has also never been run end to end on a real server; it is reviewed and
-> shellcheck-gated in CI, not proven. See [Status](#status) for the rest.
+> **Not yet proven on a real server.** The installer and the Linux provider have run against the
+> simulated fleet and CI checks (shellcheck, unit and end-to-end tests), not end to end on a real
+> host. Git deploys clone a branch and switch to it atomically; there is no build step yet. See
+> [Status](#status) for the rest.
 >
 > What works today is [running it from source](#running-it-from-source) against a simulated fleet.
 
@@ -151,10 +152,10 @@ Eight, and none of them required.
 | ----------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
 | `--control-plane-only`  | off      | Install the control plane; pair no agent here.                                                           |
 | `--agent-only`          | off      | Install only the agent. Requires `--token` and `--control-plane`.                                        |
-| `--token=<token>`       | —        | Pairing token from **Infrastructure → Servers → Add server**. Also re-pairs an all-in-one host.          |
+| `--token=<token>`       | —        | Pairing token from **Servers → Add server**. Also re-pairs an all-in-one host.          |
 | `--control-plane=<url>` | —        | Where the agent dials.                                                                                   |
 | `--public-url=<url>`    | detected | Where the panel is reached, e.g. `http://203.0.113.10`, for hosts whose interface has a private address. |
-| `--version=<version>`   | `0.1.0`  | Release to install.                                                                                      |
+| `--version=<version>`   | `1.0.0`  | Release to install.                                                                                      |
 | `--force`               | off      | Destroy an existing install first, after listing what it will destroy.                                   |
 | `--help`                |          | Usage. `-h` also works.                                                                                  |
 
@@ -233,7 +234,7 @@ so closing the tab resumes in place:
    update policy.
 10. **Invite a teammate** — an invitation link with a role.
 11. **Done** — what was set up, read back from each module, with a link to each area, then into
-    the Command Center.
+    the Projects home.
 
 Steps 5–10 are each skippable ("later" records a skip, so the wizard moves on and does not ask
 again). Each does its work through the same route the module's own page uses, and "done" is only
@@ -253,7 +254,7 @@ login form.
 
 ### Adding more servers
 
-**Infrastructure → Servers → Add server** generates a single-use pairing token that expires in
+**Servers → Add server** generates a single-use pairing token that expires in
 15 minutes, and the one-liner to run on the new host. The agent generates an EC P-256 keypair
 **on that machine**, sends a CSR, and receives a client certificate with `CN = <server id>`; the
 private key never leaves the box. It then dials back out over `wss://` and appears as connected.
@@ -274,7 +275,7 @@ A fresh install answers on its IP over plain HTTP. There is no certificate, and
 `SECURE_COOKIES` is off — a `__Host-` prefixed cookie is never stored over plain HTTP, so the
 alternative would be an install nobody can sign in to.
 
-Point an A record at the server, then set the domain from **Administration → Settings → Address**,
+Point an A record at the server, then set the domain from **Settings → Address**,
 or on the **Panel address** step of onboarding (applied when you finish). Ports 80 and 443 both have to be reachable for the certificate
 to be issued.
 
@@ -292,7 +293,7 @@ panel blinks for a few seconds while that happens.
 
 ## Getting notified
 
-Nothing in the panel needs to be watched to be noticed. **Administration → Settings →
+Nothing in the panel needs to be watched to be noticed. **Settings →
 Notifications** holds the channels — an email address, a webhook URL, or a Slack incoming
 webhook — and the events each one wants: a failed job, a server going offline (and coming back),
 a failed unit, a certificate inside its last two weeks, a failed backup, a threat from one
@@ -319,9 +320,9 @@ release), and a channel that fails records the error rather than retrying into a
 
 ## Keeping it current
 
-**Administration → Updates** shows what the control plane is running, what every agent is
+**Settings → Updates** shows what the control plane is running, what every agent is
 running, and every past update run with its full output. Cadence is set in
-**Administration → Settings**:
+**Settings**:
 
 | Tier                  |                                                                                       |
 | --------------------- | ------------------------------------------------------------------------------------- |
@@ -460,8 +461,8 @@ them or only the security ones as an ordinary job. The list is cached by the con
 refreshed every six hours in the background or on **Check now**, so no page ever runs a package
 manager across the fleet. An upgrade that leaves a reboot pending marks the server until it has
 booted; Kaname never reboots it on its own. A server can opt in to applying security updates
-automatically (at most once a day). **Administration → Updates → System updates** lists every
-server with something waiting, with bulk upgrade, and the Command Center flags pending security
+automatically (at most once a day). **Settings → Updates → System updates** lists every
+server with something waiting, with bulk upgrade, and the Projects home flags pending security
 updates and reboots. Reading needs `infra.servers:read`, upgrading `infra.servers:write`; reseller
 and client accounts never see it.
 
@@ -590,7 +591,7 @@ Further reading: [`docs/agent-protocol.md`](docs/agent-protocol.md) for the wire
   paths, container ids, engine names, package names.
 - **The audit trail is insert-only and hash-chained.** Rewrite rules turn any `UPDATE` or `DELETE`
   on `audit_events` into a no-op — note that the statement _succeeds_ and changes nothing rather
-  than erroring — so the chain, not the rule, is the real guarantee. **Security → Audit** shows the
+  than erroring — so the chain, not the rule, is the real guarantee. **Settings → Audit** shows the
   verification state and can re-verify on demand.
 - **Firewall changes apply behind a rollback window.** If you do not confirm within the timeout,
   the host reverts. This is what stops you locking yourself out. sshd changes arm the same window,
@@ -609,8 +610,8 @@ Further reading: [`docs/agent-protocol.md`](docs/agent-protocol.md) for the wire
 
 Honest about what is and is not real.
 
-**Beta.** 0.x, no tag pushed yet, and the images are published by CI on the first `v*` tag rather
-than existing today.
+**1.0.** Releases are cut from `v*` tags; CI builds and publishes the images and agent binaries
+and writes `versions.json`.
 
 **Never run on a real host.** The Linux provider is compiled only on Linux (`#[cfg(target_os =
 "linux")]`); it builds, its pure logic (parsers, renderers, the path guard, the Yunori CLI
@@ -619,7 +620,9 @@ simulated provider. The installer likewise has no automated test beyond shellche
 
 **Scaffolding — present in the UI, not wired to a host:**
 
-- Deployments record state but build, clone and copy nothing.
+- Deployments clone a git branch (or stage an upload) into a new release and switch the site to
+  it atomically, keeping five for rollback. There is no build step and no process manager yet,
+  so a project that needs a build or a long-running server is not deployed from git.
 - FTP accounts are real POSIX users (`ftp.account.*`): SFTP through an sshd `Match Group`
   chroot, FTPS through vsftpd, quotas through `setquota` where the filesystem has user quotas.
   Like the rest of the Linux provider, that path has only run against the simulator and unit

@@ -23,14 +23,14 @@ export interface Crumb {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Section label for a path, e.g. "/websites/dns" -> "Websites". */
-function sectionFor(href: string): { section: string; leaf: string } | null {
+/** The deepest leaf a path sits under, so "/apps/installed" is Installed, not Catalog. */
+function leafFor(href: string) {
+  let best: (typeof NAV_LEAVES)[number] | undefined;
   for (const leaf of NAV_LEAVES) {
-    if (href === leaf.href || href.startsWith(`${leaf.href}/`)) {
-      return { section: leaf.section, leaf: leaf.label };
-    }
+    const under = href === leaf.href || (leaf.href !== "/" && href.startsWith(`${leaf.href}/`));
+    if (under && leaf.href.length > (best?.href.length ?? -1)) best = leaf;
   }
-  return null;
+  return best;
 }
 
 /** The section's first readable leaf, so the section crumb can link. */
@@ -41,21 +41,20 @@ function sectionHref(section: string): string | undefined {
 }
 
 export function crumbsFor(pathname: string): Crumb[] {
-  if (pathname === "/") return [{ label: "Command Center" }];
+  if (pathname === "/") return [{ label: "Projects" }];
+  // A project page lives under /websites/sites but its list is the Projects home.
+  if (pathname.startsWith("/websites/sites/")) return [{ label: "Projects", href: "/" }, { label: "Detail" }];
 
-  const match = sectionFor(pathname);
+  const leafEntry = leafFor(pathname);
   const crumbs: Crumb[] = [];
 
-  if (match) {
-    const leafEntry = NAV_LEAVES.find(
-      (leaf) => pathname === leaf.href || pathname.startsWith(`${leaf.href}/`),
-    );
-    if (match.section !== match.leaf) {
-      crumbs.push({ label: match.section, href: sectionHref(match.section) });
+  if (leafEntry) {
+    if (leafEntry.section !== leafEntry.label) {
+      crumbs.push({ label: leafEntry.section, href: sectionHref(leafEntry.section) });
     }
-    crumbs.push({ label: match.leaf, href: leafEntry?.href });
+    crumbs.push({ label: leafEntry.label, href: leafEntry.href });
 
-    const rest = leafEntry ? pathname.slice(leafEntry.href.length) : "";
+    const rest = pathname.slice(leafEntry.href.length);
     for (const segment of rest.split("/").filter(Boolean)) {
       crumbs.push({ label: UUID.test(segment) ? "Detail" : humanize(decodeURIComponent(segment)) });
     }

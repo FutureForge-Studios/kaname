@@ -434,7 +434,7 @@ function CommandPalette({ open, onOpenChange, seed }: CommandPaletteProps) {
         ))}
       </div>
 
-      <div className="kn-label-sm flex h-9 shrink-0 items-center gap-4 border-t border-[var(--kn-border)] px-4 tracking-[0.08em] text-[var(--kn-text-3)]">
+      <div className="kn-label-sm flex h-9 shrink-0 items-center gap-4 border-t border-[var(--kn-border)] px-4 text-[var(--kn-text-3)]">
         <span className="inline-flex items-center gap-1">
           <Kbd keys="up" size="xs" />
           <Kbd keys="down" size="xs" />
@@ -502,7 +502,7 @@ function PaletteRow({ id, item, active, onHover }: PaletteRowProps) {
         </span>
       )}
       <span className="ml-auto flex shrink-0 items-center gap-2">
-        {item.meta && <span className="kn-label-sm tracking-[0.08em] text-[var(--kn-text-3)]">{item.meta}</span>}
+        {item.meta && <span className="kn-label-sm text-[var(--kn-text-3)]">{item.meta}</span>}
         {item.kbd && <Kbd keys={item.kbd} size="xs" />}
         {active && <ArrowRight size={12} className="text-[var(--kn-accent-400)]" aria-hidden />}
       </span>

@@ -56,10 +56,17 @@ export const site = z.object({
   php_version: z.string().nullable(),
   disk_usage: bytes.nullable(),
 
+  /** Where a git deployment clones from when the request names no repository. */
+  repo_url: z.string().nullable(),
+  branch: z.string().nullable(),
+
   last_deployment: z
     .object({
       id: uuid,
       status: deploymentStatus,
+      branch: z.string().nullable(),
+      commit_sha: z.string().nullable(),
+      created_at: isoDate,
       finished_at: isoDate.nullable(),
     })
     .nullable(),
@@ -82,6 +89,33 @@ export const site = z.object({
 });
 export type Site = z.infer<typeof site>;
 
+/**
+ * The same addresses the agent will clone (agent/src/handlers/sites.rs
+ * check_repo_url): https/http/ssh/git URLs or scp-like `git@host:path`,
+ * never something git could read as an option.
+ */
+export const gitRepoUrl = z
+  .string()
+  .max(512)
+  .refine(
+    (v) =>
+      !v.startsWith("-") &&
+      !/[\s\p{Cc}]/u.test(v) &&
+      // A token in the URL would be stored, audited and shown to every reader.
+      !/^https?:\/\/[^/]*@/.test(v) &&
+      !/^[a-z]+:\/\/[^/@]*:[^/@]*@/.test(v) &&
+      (/^(https?|ssh|git):\/\/[^/]/.test(v) || /^[^/:-][^/:]*@[^/:-][^/:]*:.+$/.test(v)),
+    "must be an https://, ssh:// or git@host:path address, with no credentials in it",
+  );
+
+/** A branch name the agent accepts (check_branch): no leading dash, no "..". */
+export const gitBranch = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9._/-]+$/, "letters, digits, '.', '_', '-' and '/' only")
+  .refine((v) => !v.startsWith("-") && !v.includes(".."), "is not a valid branch name");
+
 export const createSiteInput = z.object({
   server_id: uuid,
   name: z.string().min(1).max(128),
@@ -95,6 +129,9 @@ export const createSiteInput = z.object({
   force_https: z.boolean().default(true),
   upstream: z.string().max(256).optional(),
   owner: identifier.optional(),
+  /** Null on update clears it; the site then deploys by upload only. */
+  repo_url: gitRepoUrl.nullable().optional(),
+  branch: gitBranch.nullable().optional(),
 });
 export type CreateSiteInput = z.infer<typeof createSiteInput>;
 
@@ -442,8 +479,8 @@ export type Deployment = z.infer<typeof deployment>;
 export const triggerDeploymentInput = z.object({
   site_id: uuid,
   source: deploymentSource.default("git"),
-  repo_url: z.string().max(512).optional(),
-  branch: z.string().max(200).optional(),
+  repo_url: gitRepoUrl.optional(),
+  branch: gitBranch.optional(),
   /** Pin the run to one revision; omit to take the branch head. */
   commit_sha: z
     .string()

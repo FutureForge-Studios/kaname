@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { cn, variant } from "../lib/cn.js";
 
 /* ------------------------------------------------------------------ *
@@ -19,14 +19,14 @@ export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "dang
 export type ButtonSize = "xs" | "sm" | "md" | "lg";
 
 /*
- * Every action is a pill (ffstudios). Primary is the filled purple pill;
- * secondary is the hairline ghost pill; ghost has no outline until hover.
+ * 8px corners, the same as inputs (KD-044). Primary is filled purple;
+ * secondary a hairline border on the surface; ghost is text until hover.
  */
 const VARIANTS: Record<ButtonVariant, string> = {
   primary:
     "bg-[var(--kn-accent-500)] text-[var(--kn-accent-fg)] border border-[var(--kn-accent-500)] hover:bg-[var(--kn-accent-600)] hover:border-[var(--kn-accent-600)] active:bg-[var(--kn-accent-700)] active:border-[var(--kn-accent-700)]",
   secondary:
-    "bg-transparent text-[var(--kn-text)] border border-[var(--kn-border-strong)] hover:border-[var(--kn-line-control)] hover:bg-[var(--kn-neutral-soft)] active:bg-[var(--kn-surface-3)]",
+    "bg-[var(--kn-surface)] text-[var(--kn-text)] border border-[var(--kn-border-strong)] hover:bg-[var(--kn-surface-2)] active:bg-[var(--kn-surface-3)]",
   ghost:
     "bg-transparent text-[var(--kn-text-2)] border border-transparent hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)] active:bg-[var(--kn-surface-3)]",
   danger:
@@ -37,10 +37,10 @@ const VARIANTS: Record<ButtonVariant, string> = {
 };
 
 const SIZES: Record<ButtonSize, string> = {
-  xs: "h-6 px-2.5 gap-1 text-xs rounded-[var(--kn-r-pill)]",
-  sm: "h-7 px-3 gap-1.5 text-sm rounded-[var(--kn-r-pill)]",
-  md: "h-8 px-3.5 gap-1.5 text-base rounded-[var(--kn-r-pill)]",
-  lg: "h-11 px-5 gap-2.5 text-md rounded-[var(--kn-r-pill)]",
+  xs: "h-6 px-2 gap-1 text-xs rounded-[var(--kn-r-sm)]",
+  sm: "h-7 px-2.5 gap-1.5 text-sm rounded-[var(--kn-r-md)]",
+  md: "h-8 px-3 gap-1.5 text-base rounded-[var(--kn-r-md)]",
+  lg: "h-9 px-4 gap-2 text-base rounded-[var(--kn-r-md)]",
 };
 
 const ICON_SIZES: Record<ButtonSize, number> = { xs: 12, sm: 14, md: 14, lg: 16 };
@@ -54,11 +54,7 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   icon?: React.ComponentType<{ size?: number | string; className?: string }>;
   iconRight?: React.ComponentType<{ size?: number | string; className?: string }>;
   fullWidth?: boolean;
-  /**
-   * Trailing → that nudges right on hover — the ffstudios call to action.
-   * Use it on the one forward action of a view ("Continue", "Add server"
-   * in an empty state), not on every button in a toolbar.
-   */
+  /** Accepted for old call sites; renders nothing (KD-044 dropped trailing arrows). */
   arrow?: boolean;
 }
 
@@ -71,7 +67,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
     icon: Icon,
     iconRight: IconRight,
     fullWidth = false,
-    arrow = false,
+    arrow: _arrow,
     disabled,
     children,
     type = "button",
@@ -111,13 +107,6 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
       )}
       {children}
       {IconRight && !loading && <IconRight size={iconSize} className="shrink-0" aria-hidden />}
-      {arrow && !IconRight && (
-        <ArrowRight
-          size={iconSize}
-          className="shrink-0 transition-transform duration-[var(--kn-dur)] ease-[var(--kn-ease)] group-hover/btn:translate-x-0.5 motion-reduce:transition-none"
-          aria-hidden
-        />
-      )}
     </button>
   );
 });
@@ -131,10 +120,10 @@ export interface IconButtonProps extends Omit<ButtonProps, "icon" | "iconRight" 
 }
 
 const ICON_BUTTON_SIZES: Record<ButtonSize, string> = {
-  xs: "h-6 w-6 rounded-[var(--kn-r-pill)]",
-  sm: "h-7 w-7 rounded-[var(--kn-r-pill)]",
-  md: "h-8 w-8 rounded-[var(--kn-r-pill)]",
-  lg: "h-11 w-11 rounded-[var(--kn-r-pill)]",
+  xs: "h-6 w-6 rounded-[var(--kn-r-sm)]",
+  sm: "h-7 w-7 rounded-[var(--kn-r-md)]",
+  md: "h-8 w-8 rounded-[var(--kn-r-md)]",
+  lg: "h-9 w-9 rounded-[var(--kn-r-md)]",
 };
 
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(

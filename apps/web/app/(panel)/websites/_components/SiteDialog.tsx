@@ -3,17 +3,20 @@
 import * as React from "react";
 import type { Site, SiteRuntime } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, Tag, type ComboboxOption } from "@kaname/ui";
+import { useAudience } from "@/lib/modes";
 import { useCan, useServers } from "@/lib/queries";
-import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
+import { FormDialog, fieldErrors } from "../../_components/FormDialog";
 import { RUNTIME_LABELS } from "./status";
 import { useCreateSite, useUpdateSite } from "./queries";
 
 /* ------------------------------------------------------------------ *
- * Create and edit a site.
+ * Create ("New project") and edit a project.
  *
  * One form for both, because the fields are the same set minus the
  * host — a site cannot move between servers, so `server_id` is create-
- * only and everything else is editable in place.
+ * only and everything else is editable in place. The git source is set
+ * here on create and in the project's Settings tab afterwards. Up front:
+ * name, server, domain and git; everything else sits under "Advanced".
  *
  * Both paths queue a job (KD-008): the row lands immediately, the vhost
  * is written by the agent, and the dialog closes onto the job pill
@@ -48,6 +51,8 @@ interface FormState {
   upstream: string;
   owner: string;
   forceHttps: boolean;
+  repoUrl: string;
+  branch: string;
 }
 
 function initialState(site: Site | null, defaultServerId: string | null): FormState {
@@ -66,6 +71,8 @@ function initialState(site: Site | null, defaultServerId: string | null): FormSt
     upstream: site?.upstream ?? "",
     owner: site?.owner ?? "",
     forceHttps: site?.force_https ?? true,
+    repoUrl: "",
+    branch: "",
   };
 }
 
@@ -93,6 +100,8 @@ export interface SiteDialogProps {
 export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }: SiteDialogProps) {
   const editing = site !== null;
   const can = useCan();
+  // Scoped accounts are refused a repository (KD-039), so they are not offered one.
+  const operator = useAudience().audience === "operator";
   const servers = useServers();
   const create = useCreateSite();
   const update = useUpdateSite(site?.id ?? "");
@@ -103,6 +112,7 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
   );
   const [webrootTouched, setWebrootTouched] = React.useState(false);
   const [submitted, setSubmitted] = React.useState(false);
+  const [advanced, setAdvanced] = React.useState(false);
 
   const resetMutation = mutation.reset;
 
@@ -113,6 +123,7 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
     setForm(initialState(site, defaultServerId ?? null));
     setWebrootTouched(editing);
     setSubmitted(false);
+    setAdvanced(false);
     resetMutation();
   }, [open, site, defaultServerId, editing, resetMutation]);
 
@@ -142,11 +153,12 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
 
   const remote = fieldErrors(mutation.error);
   const local: Record<string, string> = {};
-  if (!editing && form.serverId === "") local["server_id"] = "Pick the host this site runs on.";
+  if (!editing && form.serverId === "")
+    local["server_id"] = "Pick the server this project runs on.";
   if (form.name.trim().length === 0) local["name"] = "Required.";
   else if (!NAME_RE.test(form.name.trim())) {
     local["name"] =
-      "Letters, digits, dots, dashes and underscores only — this is the vhost filename.";
+      "Letters, digits, dots, dashes and underscores only. It is also the config file name.";
   }
   if (!DOMAIN_RE.test(form.primaryDomain.trim())) {
     local["primary_domain"] = "Must be a domain name, for example example.com.";
@@ -157,10 +169,12 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
       break;
     }
   }
-  if (!webroot.startsWith("/")) local["webroot"] = "Must be an absolute path.";
+  // The folder follows the name until edited, so an empty name is the name's error, not this one.
+  if ((webrootTouched || form.name.length > 0) && !webroot.startsWith("/"))
+    local["webroot"] = "Must be an absolute path.";
   else if (webroot.split("/").includes("..")) local["webroot"] = "Path traversal is not allowed.";
   if (NEEDS_UPSTREAM.includes(form.runtime) && form.upstream.trim().length === 0) {
-    local["upstream"] = `A ${form.runtime} site needs an origin to forward to.`;
+    local["upstream"] = `A ${form.runtime} project needs an address to forward to.`;
   }
   if (form.owner.trim().length > 0 && !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(form.owner.trim())) {
     local["owner"] = "Must be a POSIX user name.";
@@ -195,222 +209,275 @@ export function SiteDialog({ open, onOpenChange, site = null, defaultServerId }:
 
     const close = { onSuccess: () => onOpenChange(false) };
     if (editing) update.mutate(payload, close);
-    else create.mutate({ ...payload, server_id: form.serverId }, close);
+    else {
+      create.mutate(
+        {
+          ...payload,
+          server_id: form.serverId,
+          ...(form.repoUrl.trim() ? { repo_url: form.repoUrl.trim() } : {}),
+          ...(form.branch.trim() ? { branch: form.branch.trim() } : {}),
+        },
+        close,
+      );
+    }
   };
 
-  /* Numbered in reading order: an edit has no placement step. */
-  const step = editing ? 0 : 1;
+  const upstreamRequired = NEEDS_UPSTREAM.includes(form.runtime);
+  // A rejected field must not stay folded away under Advanced.
+  const advancedError = [
+    "domains",
+    "runtime",
+    "runtime_version",
+    "php_version",
+    "upstream",
+    "force_https",
+    "webroot",
+    "owner",
+  ].some((field) => errorFor(field) !== undefined);
+
+  const upstreamField = (
+    <FormField
+      label="Proxies to"
+      description={
+        upstreamRequired
+          ? "The address requests are forwarded to."
+          : "Where your app listens. Optional; defaults to http://127.0.0.1:3000."
+      }
+      error={errorFor("upstream")}
+      required={upstreamRequired}
+    >
+      <Input
+        value={form.upstream}
+        onChange={(event) => set("upstream", event.target.value)}
+        placeholder="http://127.0.0.1:3000"
+        mono
+        autoComplete="off"
+        spellCheck={false}
+      />
+    </FormField>
+  );
 
   return (
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={editing ? `Edit ${site.name}` : "New site"}
+      title={editing ? `Edit ${site.name}` : "New project"}
       description={
         editing
-          ? "Changes are written to the vhost and the web server is reloaded as a job."
-          : "Kaname writes the vhost, creates the webroot and reloads the web server as a job."
+          ? "Changes are applied on the server in the background."
+          : "Kaname sets the project up on your server. Deploy it from its page once it is ready."
       }
-      submitLabel={editing ? "Save changes" : "Create site"}
+      submitLabel={editing ? "Save changes" : "Create project"}
       submitting={mutation.isPending}
       error={mutation.error}
       onSubmit={submit}
       size="lg"
     >
-      {!editing && (
-        <FormSection index={1} title="Placement">
-          <FormField label="Server" error={errorFor("server_id")} required>
-            <Combobox
-              options={serverOptions}
-              value={form.serverId}
-              onValueChange={(next) => set("serverId", next ?? "")}
-              placeholder={
-                serverOptions.length === 0 ? "No host you can write to" : "Select a server"
-              }
-              emptyMessage="No server matches that name."
-              loading={servers.isLoading}
-              disabled={serverOptions.length === 0}
-              mono
-            />
-          </FormField>
-        </FormSection>
-      )}
-
-      <FormSection index={step + 1} title="Names">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField
-            label="Site name"
-            description="Used as the vhost filename. Unique per host."
-            error={errorFor("name")}
-            required
-          >
-            <Input
-              value={form.name}
-              onChange={(event) => set("name", event.target.value)}
-              placeholder="example-com"
-              mono
-              autoComplete="off"
-              spellCheck={false}
-              data-autofocus=""
-            />
-          </FormField>
-
-          <FormField
-            label="Primary domain"
-            description="The canonical host. Always the first server_name."
-            error={errorFor("primary_domain")}
-            required
-          >
-            <Input
-              value={form.primaryDomain}
-              onChange={(event) => set("primaryDomain", event.target.value)}
-              placeholder="example.com"
-              mono
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </FormField>
-        </div>
-
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField
-          label="Additional domains"
-          description="Comma or space separated. Each also answers on this site."
-          error={errorFor("domains")}
-          hint={aliases.length > 0 ? `${aliases.length} extra` : undefined}
-        >
-          <Input
-            value={form.aliases}
-            onChange={(event) => set("aliases", event.target.value)}
-            placeholder="www.example.com, cdn.example.com"
-            mono
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </FormField>
-
-        {aliases.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {aliases.map((alias) => (
-              <Tag key={alias} size="xs" mono>
-                {alias}
-              </Tag>
-            ))}
-          </div>
-        )}
-      </FormSection>
-
-      <FormSection index={step + 2} title="Serving">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField label="Runtime" required>
-            <Select
-              value={form.runtime}
-              onChange={(event) => set("runtime", event.target.value as SiteRuntime)}
-              options={RUNTIMES.map((runtime) => ({
-                value: runtime,
-                label: RUNTIME_LABELS[runtime],
-              }))}
-            />
-          </FormField>
-
-          {VERSIONED.includes(form.runtime) ? (
-            <FormField
-              label={`${RUNTIME_LABELS[form.runtime]} version`}
-              description="Must already be installed on the host."
-              error={errorFor("runtime_version")}
-            >
-              <Input
-                value={form.runtimeVersion}
-                onChange={(event) => set("runtimeVersion", event.target.value)}
-                placeholder={form.runtime === "php" ? "8.3" : "22"}
-                mono
-                autoComplete="off"
-              />
-            </FormField>
-          ) : (
-            <FormField
-              label="PHP-FPM pool"
-              description="Optional. A static or proxy site can still serve a legacy PHP path."
-              error={errorFor("php_version")}
-            >
-              <Input
-                value={form.phpVersion}
-                onChange={(event) => set("phpVersion", event.target.value)}
-                placeholder="none"
-                mono
-                autoComplete="off"
-              />
-            </FormField>
-          )}
-        </div>
-
-        <FormField
-          label="Webroot"
-          description="Absolute path on the host. Created if it does not exist."
-          error={errorFor("webroot")}
+          label="Project name"
+          description="Unique per server. Letters, digits, dots and dashes."
+          error={errorFor("name")}
           required
         >
           <Input
-            value={webroot}
-            onChange={(event) => {
-              setWebrootTouched(true);
-              set("webroot", event.target.value);
-            }}
-            placeholder="/var/www/example-com"
+            value={form.name}
+            onChange={(event) => set("name", event.target.value)}
+            placeholder="example-com"
+            mono
+            autoComplete="off"
+            spellCheck={false}
+            data-autofocus=""
+          />
+        </FormField>
+
+        <FormField
+          label="Domain"
+          description="The address the project answers on."
+          error={errorFor("primary_domain")}
+          required
+        >
+          <Input
+            value={form.primaryDomain}
+            onChange={(event) => set("primaryDomain", event.target.value)}
+            placeholder="example.com"
             mono
             autoComplete="off"
             spellCheck={false}
           />
         </FormField>
+      </div>
 
-        {TAKES_UPSTREAM.includes(form.runtime) && (
-          <FormField
-            label="Upstream origin"
-            description={
-              NEEDS_UPSTREAM.includes(form.runtime)
-                ? "Where the vhost forwards to."
-                : "Where the app server listens. Optional; defaults to http://127.0.0.1:3000."
+      {!editing && (
+        <FormField label="Server" error={errorFor("server_id")} required>
+          <Combobox
+            options={serverOptions}
+            value={form.serverId}
+            onValueChange={(next) => set("serverId", next ?? "")}
+            placeholder={
+              serverOptions.length === 0 ? "No host you can write to" : "Select a server"
             }
-            error={errorFor("upstream")}
-            required={NEEDS_UPSTREAM.includes(form.runtime)}
+            emptyMessage="No server matches that name."
+            loading={servers.isLoading}
+            disabled={serverOptions.length === 0}
+            mono
+          />
+        </FormField>
+      )}
+
+      {!editing && operator && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <FormField
+            label="Git repository"
+            description="Optional. You can connect one later in Settings."
+            error={errorFor("repo_url")}
           >
             <Input
-              value={form.upstream}
-              onChange={(event) => set("upstream", event.target.value)}
-              placeholder="http://127.0.0.1:3000"
+              value={form.repoUrl}
+              onChange={(event) => set("repoUrl", event.target.value)}
+              placeholder="https://github.com/you/site.git"
               mono
               autoComplete="off"
               spellCheck={false}
             />
           </FormField>
-        )}
-      </FormSection>
-
-      <FormSection index={step + 3} title="Ownership">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <FormField
-            label="Owner"
-            description="POSIX user that owns the webroot. Optional."
-            error={errorFor("owner")}
-          >
+          <FormField label="Branch" error={errorFor("branch")}>
             <Input
-              value={form.owner}
-              onChange={(event) => set("owner", event.target.value)}
-              placeholder="www-data"
+              value={form.branch}
+              onChange={(event) => set("branch", event.target.value)}
+              placeholder="main"
               mono
               autoComplete="off"
+              spellCheck={false}
+            />
+          </FormField>
+        </div>
+      )}
+
+      <details
+        open={advanced || advancedError}
+        onToggle={(event) => setAdvanced(event.currentTarget.open)}
+      >
+        <summary className="cursor-pointer select-none text-sm font-medium text-[var(--kn-text-2)] hover:text-[var(--kn-text)]">
+          Advanced
+        </summary>
+        <div className="mt-3 flex flex-col gap-4">
+          <FormField
+            label="Additional domains"
+            description="Comma or space separated. Each also answers on this project."
+            error={errorFor("domains")}
+            hint={aliases.length > 0 ? `${aliases.length} extra` : undefined}
+          >
+            <Input
+              value={form.aliases}
+              onChange={(event) => set("aliases", event.target.value)}
+              placeholder="www.example.com, cdn.example.com"
+              mono
+              autoComplete="off"
+              spellCheck={false}
             />
           </FormField>
 
-          <div className="flex items-end pb-1">
-            <Switch
-              checked={form.forceHttps}
-              onChange={(event) => set("forceHttps", event.target.checked)}
-              label="Redirect HTTP to HTTPS"
-              description="Leave on unless the site has to answer on plain HTTP."
+          {aliases.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {aliases.map((alias) => (
+                <Tag key={alias} size="xs" mono>
+                  {alias}
+                </Tag>
+              ))}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <FormField label="Runtime" required>
+              <Select
+                value={form.runtime}
+                onChange={(event) => set("runtime", event.target.value as SiteRuntime)}
+                options={RUNTIMES.map((runtime) => ({
+                  value: runtime,
+                  label: RUNTIME_LABELS[runtime],
+                }))}
+              />
+            </FormField>
+
+            {VERSIONED.includes(form.runtime) && (
+              <FormField
+                label={`${RUNTIME_LABELS[form.runtime]} version`}
+                description="Must already be installed on the host."
+                error={errorFor("runtime_version")}
+              >
+                <Input
+                  value={form.runtimeVersion}
+                  onChange={(event) => set("runtimeVersion", event.target.value)}
+                  placeholder={form.runtime === "php" ? "8.3" : "22"}
+                  mono
+                  autoComplete="off"
+                />
+              </FormField>
+            )}
+          </div>
+
+          {TAKES_UPSTREAM.includes(form.runtime) && upstreamField}
+
+          <Switch
+            checked={form.forceHttps}
+            onChange={(event) => set("forceHttps", event.target.checked)}
+            label="Redirect HTTP to HTTPS"
+            description="Leave on unless the project has to answer on plain HTTP."
+          />
+
+          <FormField
+            label="Folder"
+            description="Where the files live on the server. Created if it does not exist."
+            error={errorFor("webroot")}
+            required
+          >
+            <Input
+              value={webroot}
+              onChange={(event) => {
+                setWebrootTouched(true);
+                set("webroot", event.target.value);
+              }}
+              placeholder="/var/www/example-com"
+              mono
+              autoComplete="off"
+              spellCheck={false}
             />
+          </FormField>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {!VERSIONED.includes(form.runtime) && (
+              <FormField
+                label="PHP version"
+                description="Optional. Lets a static or proxy project still run PHP files."
+                error={errorFor("php_version")}
+              >
+                <Input
+                  value={form.phpVersion}
+                  onChange={(event) => set("phpVersion", event.target.value)}
+                  placeholder="none"
+                  mono
+                  autoComplete="off"
+                />
+              </FormField>
+            )}
+
+            <FormField
+              label="Runs as"
+              description="The system user that owns the folder. Optional."
+              error={errorFor("owner")}
+            >
+              <Input
+                value={form.owner}
+                onChange={(event) => set("owner", event.target.value)}
+                placeholder="www-data"
+                mono
+                autoComplete="off"
+              />
+            </FormField>
           </div>
         </div>
-      </FormSection>
+      </details>
     </FormDialog>
   );
 }

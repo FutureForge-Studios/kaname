@@ -41,7 +41,7 @@ export function KeyboardShortcuts() {
 
   const jumps = React.useMemo(() => {
     const map = new Map<string, { href: string; label: string; section: string }>();
-    map.set("h", { href: "/", label: "Command Center", section: "Overview" });
+    map.set("h", { href: "/", label: "Projects", section: "Projects" });
     for (const leaf of NAV_LEAVES) {
       if (!leaf.shortcut || !can(leaf.permission)) continue;
       if (map.has(leaf.shortcut)) continue;

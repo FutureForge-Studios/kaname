@@ -581,7 +581,7 @@ function DataTableInner<T>(
                     }
                     style={style}
                     className={cn(
-                      "kn-label-sm z-20 h-8 border-b border-[var(--kn-border)] bg-[var(--kn-surface)] tracking-[0.1em] text-[var(--kn-text-3)]",
+                      "kn-label-sm z-20 h-9 border-b border-[var(--kn-border)] bg-[var(--kn-surface)] text-[var(--kn-text-2)]",
                       pad,
                       variant(ALIGN, align, "left"),
                       (stickyHeader || left !== undefined || right !== undefined) && "sticky",
@@ -596,7 +596,7 @@ function DataTableInner<T>(
                         type="button"
                         onClick={() => cycleSort(col.id)}
                         className={cn(
-                          "-mx-1 inline-flex w-[calc(100%+8px)] items-center gap-1 rounded-[var(--kn-r-xs)] px-1 py-0.5 uppercase tracking-[inherit]",
+                          "-mx-1 inline-flex w-[calc(100%+8px)] items-center gap-1 rounded-[var(--kn-r-xs)] px-1 py-0.5",
                           "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease)]",
                           "hover:text-[var(--kn-text)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]",
                           active && "text-[var(--kn-text)]",

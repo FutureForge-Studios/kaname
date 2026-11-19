@@ -134,7 +134,7 @@ export function PillLink({
     <Link
       href={href}
       className={cn(
-        "group/pill inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--kn-r-pill)] border border-[var(--kn-border-strong)] px-2.5 text-xs font-medium text-[var(--kn-text-2)]",
+        "group/pill inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--kn-r-sm)] border border-[var(--kn-border-strong)] px-2.5 text-xs font-medium text-[var(--kn-text-2)]",
         "transition-[background-color,border-color,color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
         "hover:border-[var(--kn-line-control)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)]",
         "outline-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",

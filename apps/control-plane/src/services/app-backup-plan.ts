@@ -1,7 +1,7 @@
 import { eq, inArray, type Database } from "@kaname/db";
 import { appInstalls } from "@kaname/db/schema";
 import { MANAGED_APPS_ROOT } from "@kaname/contract/agent";
-import { findApp, type AppBackupManifest, type AppRecipe } from "@kaname/contract";
+import { COMPOSE_APP_ID, findApp, type AppBackupManifest, type AppRecipe } from "@kaname/contract";
 import { badRequest } from "../lib/errors.js";
 import { APP_SITES_ROOT, containerSecretNames, containerSecretRef } from "./app-installer.js";
 
@@ -82,6 +82,10 @@ export function backupDirFor(row: Pick<InstallRow, "id" | "domain" | "resources"
 /** Whether (and why not) an install can be backed up as an app. */
 export function unsupportedReason(row: InstallRow | undefined, recipe: AppRecipe | undefined): string | null {
   if (!row) return "The install no longer exists.";
+  if (row.appId === COMPOSE_APP_ID) {
+    // shortcut: no stop/dump logic for arbitrary services yet; add per-service stop + copy when asked.
+    return "Docker Compose projects aren't backed up yet; a file copy of a running database can be corrupt.";
+  }
   if (!recipe) return `${row.appName} is no longer in the catalog, so Kaname cannot tell what to back up.`;
   if (row.status !== "active") return `${row.appName} on ${row.domain} is ${row.status}; only an active install can be backed up.`;
   return null;
@@ -166,6 +170,8 @@ export function buildManifest(
   stopped: boolean,
 ): AppBackupManifest {
   const source = recipe.source;
+  // unsupportedReason refuses compose before a backup is planned (KD-045).
+  if (source.kind === "compose") throw new Error("Docker Compose projects aren't backed up");
   return {
     format: 1,
     install_id: row.id,

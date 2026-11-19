@@ -199,11 +199,12 @@ export interface AuditRow {
   server_name: string | null;
 }
 
-export function useDashboard(): UseQueryResult<DashboardSummary, ApiError> {
+export function useDashboard(enabled = true): UseQueryResult<DashboardSummary, ApiError> {
   return useQuery<DashboardSummary, ApiError>({
     queryKey: queryKeys.dashboard(),
     queryFn: ({ signal }) => api.get<DashboardSummary>("/dashboard", { signal }),
     staleTime: LIST_STALE_TIME,
+    enabled,
   });
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@kaname/contract",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -17,6 +17,7 @@
     "clean": "rimraf dist .turbo *.tsbuildinfo"
   },
   "dependencies": {
+    "yaml": "^2.9.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {

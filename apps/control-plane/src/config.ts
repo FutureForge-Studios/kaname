@@ -121,7 +121,7 @@ const schema = z.object({
   KANAME_BOOTSTRAP_PASSWORD: z.string().optional(),
 
   /** Version of this build. Set by the image; the manifest compares against it. */
-  KANAME_VERSION: z.string().default("0.1.0"),
+  KANAME_VERSION: z.string().default("1.0.0"),
 
   /**
    * Written by install.sh so the very first request to a freshly

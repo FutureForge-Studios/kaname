@@ -6,23 +6,17 @@ import { cn, variant } from "../lib/cn.js";
 import type { Tone } from "./Badge.js";
 
 /* ------------------------------------------------------------------ *
- * Editorial — the ffstudios.io vocabulary.
- *
- * These are the pieces that make a page read as FutureForge rather than
- * as a generic admin panel: the mono uppercase label, the eyebrow chip
- * with its purple square, the gradient second line, the numbered section
- * row, the leader annotation, the dot-and-sentence status line, the
- * check list, the hairline card with an inset panel, and the blueprint
- * backdrop with frame rails and crosshair marks.
- *
- * They carry no behaviour. Everything interactive still comes from the
- * rest of the kit; these only give it structure and voice. Usage and
- * the page anatomy they add up to are in docs/redesign-guide.md.
+ * Editorial — page structure without behaviour: the label, the section
+ * title row, the dot-and-sentence status line, the check list, the
+ * hairline card, the page body, and the hero pieces (eyebrow, gradient
+ * line, grid backdrop) that only login, setup, invite and first-run
+ * screens use. KD-044: no numbers, no crosshairs, no grid in the panel.
+ * Usage is in docs/redesign-guide.md.
  * ------------------------------------------------------------------ */
 
 export type IconComponent = React.ComponentType<{ size?: number | string; className?: string }>;
 
-/** "1" -> "01", "12" -> "12", "A" -> "A". The mono section number. */
+/** "1" -> "01", "12" -> "12", "A" -> "A". Kept for callers; the kit no longer renders numbers. */
 export function formatIndex(index: number | string): string {
   if (typeof index === "number") return String(index).padStart(2, "0");
   return /^\d$/.test(index) ? `0${index}` : index;
@@ -52,15 +46,15 @@ const LABEL_SIZES: Record<MonoLabelSize, string> = {
 export interface MonoLabelProps extends React.HTMLAttributes<HTMLElement> {
   /** Rendered element. Default `span`. */
   as?: "span" | "div" | "p" | "dt" | "label" | "h2" | "h3" | "h4";
-  /** `xs` 10px, `sm` 11px (default). */
+  /** `xs` 12px, `sm` 13px (default). */
   size?: MonoLabelSize;
   tone?: MonoLabelTone;
 }
 
 /**
- * The mono, uppercase, wide-tracked label. For anything that annotates:
- * group labels, field captions, axis names, counters. Never for values
- * someone will copy — uppercase would lie about a hostname's case.
+ * The label: sentence-case sans, muted, untracked (the name is historic).
+ * For anything that annotates: group labels, field captions, axis names,
+ * counters. Values someone will copy go in `.kn-mono` instead.
  */
 export const MonoLabel = React.forwardRef<HTMLElement, MonoLabelProps>(function MonoLabel(
   { as = "span", size = "sm", tone = "subtle", className, ...props },
@@ -101,9 +95,8 @@ export interface EyebrowProps extends React.HTMLAttributes<HTMLSpanElement> {
 }
 
 /**
- * The ffstudios eyebrow: a hairline chip holding a mono uppercase word
- * and a small purple square ("STUDIO ▪"). One per page header or hero,
- * naming the area the page belongs to.
+ * A hairline chip with a word and a small square. Hero screens only
+ * (login, setup, invite, first run); routine pages do not use it.
  */
 export const Eyebrow = React.forwardRef<HTMLSpanElement, EyebrowProps>(function Eyebrow(
   { tone = "accent", marker = true, icon: Icon, className, children, ...props },
@@ -158,7 +151,7 @@ export const GradientText = React.forwardRef<HTMLSpanElement, GradientTextProps>
 /* ------------------------------ LeaderLabel ---------------------------- */
 
 export interface LeaderLabelProps extends React.HTMLAttributes<HTMLDivElement> {
-  /** Mono number before the label, in the accent colour ("04"). */
+  /** Accepted for old call sites; ignored (KD-044: no numbers). */
   index?: number | string;
   /** Which side the hairline leader runs to. Default `end`. */
   leader?: "start" | "end" | "both" | "none";
@@ -166,12 +159,11 @@ export interface LeaderLabelProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 /**
- * "04 INTERFACE ———": a mono uppercase annotation with a hairline leader
- * running off to one side. Use it to caption a region (a chart, a group
- * of tiles, a diagram) or as a quiet divider with a name.
+ * "Interface ———": a muted label with a hairline running off to one
+ * side. Captions a region (a chart, a group of tiles) or names a divider.
  */
 export const LeaderLabel = React.forwardRef<HTMLDivElement, LeaderLabelProps>(function LeaderLabel(
-  { index, leader = "end", tone = "subtle", className, children, ...props },
+  { index: _index, leader = "end", tone = "subtle", className, children, ...props },
   ref,
 ) {
   const line = <span aria-hidden className="h-px min-w-6 flex-1 bg-[var(--kn-border-strong)]" />;
@@ -183,11 +175,6 @@ export const LeaderLabel = React.forwardRef<HTMLDivElement, LeaderLabelProps>(fu
     >
       {(leader === "start" || leader === "both") && line}
       <span className={cn("flex min-w-0 shrink-0 items-center gap-2", variant(LABEL_TONES, tone, "subtle"))}>
-        {index !== undefined && (
-          <span aria-hidden className="text-[var(--kn-accent-400)]">
-            {formatIndex(index)}
-          </span>
-        )}
         <span className="truncate">{children}</span>
       </span>
       {(leader === "end" || leader === "both") && line}
@@ -251,10 +238,10 @@ export const StatusLine = React.forwardRef<HTMLParagraphElement, StatusLineProps
 /* ----------------------------- SectionHeader --------------------------- */
 
 export interface SectionHeaderProps extends Omit<React.HTMLAttributes<HTMLDivElement>, "title"> {
-  /** "01". A number is zero-padded to two digits. */
+  /** Accepted for old call sites; ignored (KD-044: no numbered sections). */
   index?: number | string;
   title: React.ReactNode;
-  /** Right-aligned muted sentence: what this section is for. */
+  /** Muted sentence after the title: what this section is for. */
   caption?: React.ReactNode;
   /** Right-aligned controls, after the caption. */
   actions?: React.ReactNode;
@@ -264,13 +251,12 @@ export interface SectionHeaderProps extends Omit<React.HTMLAttributes<HTMLDivEle
 }
 
 /**
- * The ffstudios numbered row: "01  Automate the work ········ Take the
- * repeated, manual work off people." with a hairline underneath. It
- * opens every major section of a page; number them in reading order.
+ * A plain section title (14px, semibold) with an optional muted caption
+ * and actions on the right, over a hairline. Opens a section of a page.
  */
 export const SectionHeader = React.forwardRef<HTMLDivElement, SectionHeaderProps>(
   function SectionHeader(
-    { index, title, caption, actions, headingLevel = 2, divider = true, className, ...props },
+    { index: _index, title, caption, actions, headingLevel = 2, divider = true, className, ...props },
     ref,
   ) {
     const Heading = `h${headingLevel}` as "h2" | "h3" | "h4";
@@ -284,14 +270,7 @@ export const SectionHeader = React.forwardRef<HTMLDivElement, SectionHeaderProps
         )}
         {...props}
       >
-        <div className="flex min-w-0 items-baseline gap-3">
-          {index !== undefined && (
-            <span aria-hidden className="kn-label-sm shrink-0 text-[var(--kn-text-3)]">
-              {formatIndex(index)}
-            </span>
-          )}
-          <Heading className="kn-title m-0 truncate text-md text-[var(--kn-text)]">{title}</Heading>
-        </div>
+        <Heading className="kn-title m-0 min-w-0 truncate text-md text-[var(--kn-text)]">{title}</Heading>
         {(caption || actions) && (
           <div className="flex min-w-0 items-center gap-3">
             {caption && <span className="truncate text-sm text-[var(--kn-text-3)]">{caption}</span>}
@@ -304,6 +283,7 @@ export const SectionHeader = React.forwardRef<HTMLDivElement, SectionHeaderProps
 );
 
 export interface NumberedSectionProps extends Omit<React.HTMLAttributes<HTMLElement>, "title"> {
+  /** Accepted for old call sites; ignored (KD-044). */
   index?: number | string;
   title: React.ReactNode;
   caption?: React.ReactNode;
@@ -365,7 +345,7 @@ export interface CheckListProps extends React.HTMLAttributes<HTMLUListElement> {
   divided?: boolean | "between";
 }
 
-/** The ffstudios check list: soft purple circles, hairline separators. */
+/** A check list: soft purple circles, hairline separators. */
 export const CheckList = React.forwardRef<HTMLUListElement, CheckListProps>(function CheckList(
   { divided = true, className, ...props },
   ref,
@@ -454,7 +434,7 @@ const CARD_PADDING: Record<CardPadding, string> = {
 };
 
 export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
-  /** `lg` 14px (default, panel density), `xl` 18px (feature cards). */
+  /** `lg` 8px (default), `xl` 12px (hero screens only). */
   radius?: CardRadius;
   padding?: CardPadding;
   /** Hover treatment for a card that is itself a link or button target. */
@@ -464,9 +444,8 @@ export interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 /**
- * The plain hairline card: ink-2 with a white-8% line on dark, white
- * with the softest drop on paper. Reach for SectionCard when the block
- * has a title row; Card is for free-form content and feature tiles.
+ * The plain flat hairline container, 8px corners. Reach for SectionCard
+ * when the block has a title row; Card is for free-form content.
  */
 export const Card = React.forwardRef<HTMLDivElement, CardProps>(function Card(
   { radius = "lg", padding = "md", interactive = false, flat = false, className, ...props },
@@ -490,17 +469,17 @@ export const Card = React.forwardRef<HTMLDivElement, CardProps>(function Card(
 });
 
 export interface CardInsetProps extends React.HTMLAttributes<HTMLDivElement> {
-  /** Paint the blueprint grid inside the panel. */
+  /** Accepted for old call sites; ignored (KD-044: no grid in the panel). */
   grid?: boolean;
   padding?: CardPadding;
 }
 
 /**
- * The recessed panel inside a card (the ffstudios card's art well): for
- * a diagram, a code sample, a preview, a big number.
+ * A recessed well for code, a terminal sample or a preview. Not a second
+ * card: don't wrap ordinary content in it.
  */
 export const CardInset = React.forwardRef<HTMLDivElement, CardInsetProps>(function CardInset(
-  { grid = false, padding = "md", className, ...props },
+  { grid: _grid, padding = "md", className, ...props },
   ref,
 ) {
   return (
@@ -508,7 +487,6 @@ export const CardInset = React.forwardRef<HTMLDivElement, CardInsetProps>(functi
       ref={ref}
       className={cn(
         "min-w-0 rounded-[var(--kn-r-md)] border border-[var(--kn-border-subtle)] bg-[var(--kn-bg-inset)]",
-        grid && "kn-grid [--kn-grid-size:16px]",
         variant(CARD_PADDING, padding, "md"),
         className,
       )}
@@ -543,11 +521,9 @@ const GLOW_POSITION: Record<"right" | "left" | "center" | "top", string> = {
 };
 
 /**
- * The ffstudios canvas for a full-bleed region: the blueprint grid, the
- * frame rails, and (sparingly) the glow. Decorative layers sit behind
- * the children and never take pointer events. The panel's main area
- * already has this from the shell (`.kn-canvas`); use GridBackdrop for
- * standalone screens — setup, login, invite, a hero band.
+ * Hero-only backdrop (setup, login, invite, not-found): a faint grid,
+ * optional rails and glow, behind the children. Never inside the panel,
+ * whose canvas is flat (KD-044).
  */
 export const GridBackdrop = React.forwardRef<HTMLDivElement, GridBackdropProps>(
   function GridBackdrop(
@@ -569,9 +545,14 @@ export const GridBackdrop = React.forwardRef<HTMLDivElement, GridBackdropProps>(
           {grid && (
             <div
               className={cn(
-                "kn-grid absolute inset-0",
+                "absolute inset-0",
                 fade && "[mask-image:linear-gradient(to_bottom,black_55%,transparent)]",
               )}
+              style={{
+                backgroundImage:
+                  "linear-gradient(90deg, var(--kn-grid-line) 1px, transparent 1px), linear-gradient(var(--kn-grid-line) 1px, transparent 1px)",
+                backgroundSize: "var(--kn-grid-size) var(--kn-grid-size)",
+              }}
             />
           )}
           {glow && (
@@ -599,38 +580,6 @@ export const GridBackdrop = React.forwardRef<HTMLDivElement, GridBackdropProps>(
   },
 );
 
-/* ------------------------------- Crosshair ----------------------------- */
-
-export interface CrosshairProps extends React.HTMLAttributes<HTMLSpanElement> {
-  /** Arm length end to end, in px. Default 11. */
-  size?: number;
-}
-
-/**
- * One "+" registration mark. Absolutely position it (via className)
- * where a hairline meets a rail. PageHeader already draws its own pair.
- */
-export const Crosshair = React.forwardRef<HTMLSpanElement, CrosshairProps>(function Crosshair(
-  { size = 11, className, style, ...props },
-  ref,
-) {
-  return (
-    <span
-      ref={ref}
-      aria-hidden
-      className={cn("pointer-events-none absolute block", className)}
-      style={{
-        width: size,
-        height: size,
-        background:
-          "linear-gradient(var(--kn-line-control), var(--kn-line-control)) center / 1px 100% no-repeat, linear-gradient(var(--kn-line-control), var(--kn-line-control)) center / 100% 1px no-repeat",
-        ...style,
-      }}
-      {...props}
-    />
-  );
-});
-
 /* -------------------------------- PageHero ----------------------------- */
 
 export type PageHeroSize = "md" | "lg";
@@ -645,7 +594,7 @@ export interface PageHeroProps extends Omit<React.HTMLAttributes<HTMLElement>, "
   accent?: React.ReactNode;
   /** One or two muted sentences. */
   lede?: React.ReactNode;
-  /** The pills: one primary `<Button size="lg" arrow>`, at most one secondary. */
+  /** One primary `<Button size="lg">`, at most one secondary. */
   actions?: React.ReactNode;
   /** Under the actions, typically a `<StatusLine>`. */
   status?: React.ReactNode;
@@ -659,10 +608,9 @@ export interface PageHeroProps extends Omit<React.HTMLAttributes<HTMLElement>, "
 }
 
 /**
- * The ffstudios hero: eyebrow, a big tight headline whose second line
- * is the purple gradient, a muted lede, pill actions, a status line.
- * For the standalone screens and for a module's first-run state. Routine
- * panel pages use PageHeader, which is the same idea at working density.
+ * The hero: eyebrow, a big headline with an optional gradient second
+ * line, a muted lede, actions, a status line. Login, setup, invite and a
+ * module's first-run state only; routine pages use PageHeader.
  */
 export const PageHero = React.forwardRef<HTMLElement, PageHeroProps>(function PageHero(
   {
@@ -754,10 +702,7 @@ const BODY_GAPS: Record<"sm" | "md" | "lg", string> = {
   lg: "gap-10",
 };
 
-/**
- * The page body under a PageHeader: the standard gutter (24px, so the
- * content column sits just inside the canvas rails) and section rhythm.
- */
+/** The page body under a PageHeader: the 24px gutter and section rhythm. */
 export const PageBody = React.forwardRef<HTMLDivElement, PageBodyProps>(function PageBody(
   { gap = "md", width = "full", className, ...props },
   ref,
@@ -796,8 +741,8 @@ export interface SegmentedControlProps<T extends string = string>
 }
 
 /**
- * A pill of mono uppercase segments — a radio group for switching a
- * view mode or unit in place (not navigation: that is Tabs / ViewTabs).
+ * Segments in a hairline box — a radio group for switching a view mode
+ * or unit in place (not navigation: that is Tabs / ViewTabs).
  */
 export function SegmentedControl<T extends string = string>({
   options,
@@ -838,7 +783,7 @@ export function SegmentedControl<T extends string = string>({
       aria-label={label}
       onKeyDown={onKeyDown}
       className={cn(
-        "inline-flex max-w-full items-center gap-0.5 rounded-[var(--kn-r-pill)] border border-[var(--kn-border-strong)] p-0.5",
+        "inline-flex max-w-full items-center gap-0.5 rounded-[var(--kn-r-md)] border border-[var(--kn-border)] bg-[var(--kn-surface)] p-0.5",
         className,
       )}
       {...props}
@@ -857,14 +802,14 @@ export function SegmentedControl<T extends string = string>({
             tabIndex={selected ? 0 : -1}
             onClick={() => onValueChange(option.value)}
             className={cn(
-              "kn-label-sm inline-flex shrink-0 select-none items-center gap-1.5 whitespace-nowrap rounded-[var(--kn-r-pill)] tracking-[0.08em]",
+              "kn-label-sm inline-flex shrink-0 select-none items-center gap-1.5 whitespace-nowrap rounded-[var(--kn-r-sm)]",
               size === "xs" ? "h-5 px-2" : "h-6 px-2.5",
               "transition-[background-color,color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
               "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--kn-ring)]",
               "disabled:cursor-not-allowed disabled:opacity-50",
               selected
-                ? "bg-[var(--kn-accent-soft-strong)] text-[var(--kn-text)]"
-                : "text-[var(--kn-text-3)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)]",
+                ? "bg-[var(--kn-surface-3)] text-[var(--kn-text)]"
+                : "text-[var(--kn-text-2)] hover:bg-[var(--kn-neutral-soft)] hover:text-[var(--kn-text)]",
             )}
           >
             {Icon && <Icon size={12} className="shrink-0" aria-hidden />}

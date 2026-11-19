@@ -31,7 +31,7 @@ export default function InstallAppPage({ params }: { params: Promise<{ app: stri
         <PageHeader eyebrow="Apps" title="Install an app" actions={back} />
         <PageBody>
           <EmptyState
-            title={app ? `${app.name} is coming soon` : "No such app"}
+            title={app ? `${app.name} isn't available` : "No such app"}
             description={app?.unavailable_reason ?? "The catalog has no app with that name."}
             action={
               <Button variant="primary" arrow onClick={() => router.push("/apps")}>
@@ -50,7 +50,11 @@ export default function InstallAppPage({ params }: { params: Promise<{ app: stri
         eyebrow="Apps"
         title={`Install ${app.name}`}
         subtitle={`${APP_CATEGORY_LABELS[app.category]} · ${versionLabel(app.version)}`}
-        status={<StatusLine tone="info">Four short steps. Nothing is created until you press Install.</StatusLine>}
+        status={
+          <StatusLine tone="info">
+            Four short steps. Nothing is created until you press Install.
+          </StatusLine>
+        }
         actions={back}
       />
       <PageBody width="prose">

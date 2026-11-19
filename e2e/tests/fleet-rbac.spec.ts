@@ -61,7 +61,9 @@ test("a viewer sees the fleet and can change none of it", async ({ browser }) =>
   /* Processes and the terminal are not theirs: not in the navigation... */
   const nav = page.getByRole("navigation", { name: "Primary" }).first();
   await expect(nav.getByRole("link", { name: "Servers" })).toBeVisible();
-  await expect(nav.getByRole("link", { name: "Processes" })).toHaveCount(0);
+  const tabs = page.getByRole("navigation", { name: "Servers pages" });
+  await expect(tabs.getByRole("link", { name: "Servers" })).toBeVisible();
+  await expect(tabs.getByRole("link", { name: "Processes" })).toHaveCount(0);
 
   /* ...and every verb on a unit is greyed out. */
   const row = await servicePage(page, "db-01", "cron.service");

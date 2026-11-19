@@ -174,7 +174,7 @@ Unsolicited pushes from the agent. Anything not in this list is dropped rather t
 | `container.changed` | container id        | Re-syncs the cached container list           |
 | `threat.detected`   | `ThreatObservation` | Upserts `threat_events`                      |
 | `ssh.session`       | session info        | SSE only                                     |
-| `cert.expiring`     | subject + days      | SSE, surfaces on the Command Center          |
+| `cert.expiring`     | subject + days      | SSE, surfaces on the Projects                |
 | `disk.pressure`     | mount + percent     | SSE                                          |
 | `log.anomaly`       | source + excerpt    | SSE                                          |
 

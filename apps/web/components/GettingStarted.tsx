@@ -50,14 +50,14 @@ import { useCan, useDashboard, useResourceMutation, useSession } from "@/lib/que
  * ------------------------------------------------------------------ */
 
 type Area =
-  | "Infrastructure"
-  | "Websites"
+  | "Servers"
+  | "Projects"
   | "Email"
   | "Databases"
   | "Security"
   | "Backups"
   | "Monitoring"
-  | "Administration";
+  | "Settings";
 
 interface StepCopy {
   id: OnboardingStepId;
@@ -74,20 +74,20 @@ interface StepCopy {
 type Can = (permission: Permission) => boolean;
 
 const AREA_ICONS: Record<Area, IconComponent> = {
-  Infrastructure: Server,
-  Websites: Globe,
+  Servers: Server,
+  Projects: Globe,
   Email: Mail,
   Databases: Database,
   Security: Shield,
   Backups: Archive,
   Monitoring: Bell,
-  Administration: Users,
+  Settings: Users,
 };
 
 const STEPS: readonly StepCopy[] = [
   {
     id: "server_paired",
-    area: "Infrastructure",
+    area: "Servers",
     label: "Pair a server",
     why: "Its agent dials out to Kaname, so nothing on the host listens inbound.",
     href: () => "/infrastructure/servers?new=1",
@@ -95,7 +95,7 @@ const STEPS: readonly StepCopy[] = [
   },
   {
     id: "agents_connected",
-    area: "Infrastructure",
+    area: "Servers",
     label: "Get every agent connected",
     why: "A host whose agent is offline can be neither changed nor vouched for.",
     href: () => "/infrastructure/servers",
@@ -103,7 +103,7 @@ const STEPS: readonly StepCopy[] = [
   },
   {
     id: "domain_added",
-    area: "Websites",
+    area: "Projects",
     label: "Add a domain",
     why: "DNS records, certificates and mail routing all hang off a domain.",
     href: () => "/websites/domains?new=1",
@@ -111,15 +111,15 @@ const STEPS: readonly StepCopy[] = [
   },
   {
     id: "site_created",
-    area: "Websites",
-    label: "Create a site",
+    area: "Projects",
+    label: "Create a project",
     why: "A vhost Kaname writes and reloads for you, pointing a domain at a webroot.",
     href: () => "/websites/sites?new=1",
     permission: "websites.sites:write",
   },
   {
     id: "certificate_issued",
-    area: "Websites",
+    area: "Projects",
     label: "Issue a certificate",
     why: "ACME runs on the host, so the site is served over HTTPS and renews itself.",
     href: () => "/websites/ssl?new=1",
@@ -200,7 +200,7 @@ const STEPS: readonly StepCopy[] = [
   },
   {
     id: "teammate_invited",
-    area: "Administration",
+    area: "Settings",
     label: "Add a teammate",
     why: "Roles can be scoped per server, so their access can start narrow.",
     href: () => "/administration/users?invite=1",
@@ -208,7 +208,7 @@ const STEPS: readonly StepCopy[] = [
   },
   {
     id: "two_factor_enabled",
-    area: "Administration",
+    area: "Settings",
     label: "Turn on two-factor",
     why: "A stolen password on its own no longer opens this panel.",
     href: () => "/account#two-factor",
@@ -243,7 +243,7 @@ interface VisibleStep extends StepCopy {
 export function GettingStarted() {
   const { session, refresh } = useSession();
   const can = useCan();
-  const dashboard = useDashboard();
+  const dashboard = useDashboard(can("infra.servers:read"));
   const [hidden, setHidden] = React.useState(false);
   const [userCollapsed, setUserCollapsed] = React.useState<boolean | null>(null);
 

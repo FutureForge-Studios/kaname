@@ -4,7 +4,7 @@ import * as React from "react";
 import type { DnsProvider, Domain } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, type ComboboxOption } from "@kaname/ui";
 import { useCan, useServers } from "@/lib/queries";
-import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "../../_components/FormDialog";
 import { DNS_PROVIDER_LABELS } from "./status";
 import { useCreateDomain, useSaveDnsToken, useSites, useUpdateDomain } from "./queries";
 
@@ -158,8 +158,6 @@ export function DomainDialog({
     else create.mutate({ ...payload, name: form.name.trim().toLowerCase() }, close);
   };
 
-  /* Numbered in reading order: an edit cannot rename, so it has no name step. */
-  const step = editing ? 0 : 1;
 
   return (
     <FormDialog
@@ -177,7 +175,7 @@ export function DomainDialog({
       onSubmit={submit}
     >
       {!editing && (
-        <FormSection index={1} title="Name">
+        <FormSection title="Name">
           <FormField
             label="Domain name"
             description="One row per name, so records and certificates never split across two entries."
@@ -197,7 +195,7 @@ export function DomainDialog({
         </FormSection>
       )}
 
-      <FormSection index={step + 1} title="Attachment">
+      <FormSection title="Attachment">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <FormField
             label="Site"
@@ -240,7 +238,7 @@ export function DomainDialog({
         </div>
       </FormSection>
 
-      <FormSection index={step + 2} title="Zone">
+      <FormSection title="Zone">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <FormField
             label="DNS provider"

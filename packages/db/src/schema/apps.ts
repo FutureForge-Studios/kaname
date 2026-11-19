@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { boolean, index, integer, jsonb, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type {
   AppInstallStatus,
+  ComposeSource,
   AppInstallStepId,
   AppInstallStepStatus,
   DbEngine,
@@ -82,6 +83,8 @@ export interface AppInstallInputs {
   admin_email: string;
   system_user: string;
   php_version: string | null;
+  /** Compose installs (KD-045): the translated services, without environment values. */
+  compose?: ComposeSource;
 }
 
 export const appInstalls = pgTable(

@@ -336,9 +336,9 @@ test("each optional step can be skipped, is recorded as skipped, and a reload re
 
 test("the last screen reads back the instance and opens the Command Center", async () => {
   await expect(page.getByRole("heading", { name: "Harbour is ready" })).toBeVisible();
-  await page.getByRole("button", { name: "Open the Command Center" }).click();
+  await page.getByRole("button", { name: "Open Projects" }).click();
   await expect(page).toHaveURL(`${webUrl}/`);
-  await expect(page.getByRole("heading", { level: 1, name: "Command Center" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Projects" })).toBeVisible();
 
   const done = await state(await cookieOf());
   expect(done.needs_onboarding).toBe(false);

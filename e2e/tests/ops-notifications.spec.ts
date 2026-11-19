@@ -153,7 +153,7 @@ test.describe("notifications", () => {
     if (!mail.notifications.smtp.host) {
       const email = await sendTest(page, "e2e email");
       await expect(email).toContainText(
-        "No outgoing mail server is configured. Set one under Administration > Settings > Notifications.",
+        "No outgoing mail server is configured. Set one under Settings > Notifications.",
       );
     }
   });

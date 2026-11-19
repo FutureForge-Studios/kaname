@@ -18,6 +18,7 @@ import {
   PropertyList,
   PropertyRow,
   RelativeTime,
+  ResourceHeader,
   SectionCard,
   Skeleton,
   StatusBadge,
@@ -25,7 +26,6 @@ import {
 } from "@kaname/ui";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { PageError } from "@/components/PageError";
-import { DetailHeader, DetailHeaderSkeleton } from "../../_components/DetailHeader";
 import { useResource } from "@/lib/queries";
 import { formatCount } from "@/lib/format";
 import { LogTailPanel } from "../../_components/LogTailPanel";
@@ -55,10 +55,9 @@ export default function ServiceDetailPage() {
   if (query.isLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <DetailHeaderSkeleton>
-          <Skeleton className="h-5 w-40 rounded-[var(--kn-r-pill)]" label="Loading unit" />
-          <Skeleton className="mt-4 h-7 w-64" />
-        </DetailHeaderSkeleton>
+        <header className="shrink-0 border-b border-[var(--kn-border)] px-6 pb-5 pt-6">
+          <Skeleton label="Loading unit" className="h-7 w-64" />
+        </header>
         <div className="px-6 py-6">
           <Skeleton className="h-64" />
         </div>
@@ -69,9 +68,9 @@ export default function ServiceDetailPage() {
   if (query.isError || !service) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <DetailHeaderSkeleton>
+        <header className="shrink-0 border-b border-[var(--kn-border)] px-6 pb-5 pt-6">
           <Breadcrumbs />
-        </DetailHeaderSkeleton>
+        </header>
         <div className="px-6 py-6">
           <PageError
             error={query.error ?? new Error("This unit is no longer in the cached list.")}
@@ -145,8 +144,7 @@ export default function ServiceDetailPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <DetailHeader
-        eyebrow="Unit"
+      <ResourceHeader
         breadcrumb={<Breadcrumbs trailing={service.unit} />}
         name={service.unit}
         identity={`${service.server_name}${service.description ? ` · ${service.description}` : ""}`}

@@ -11,7 +11,7 @@ import {
   MonoText,
   NumberedSection,
   PageBody,
-  PageHero,
+  PageHeader,
   Skeleton,
   StatusBadge,
   type DataTableColumn,
@@ -32,7 +32,7 @@ const EMPTY_USAGE: QuotaUsage = { sites: 0, domains: 0, mailboxes: 0, databases:
 
 export function ResellerHome() {
   const router = useRouter();
-  const { account, branding, preview } = useModes();
+  const { account, preview } = useModes();
   const real = !preview;
   const clients = useMyClients(real);
   const usage = account?.usage ?? EMPTY_USAGE;
@@ -73,27 +73,18 @@ export function ResellerHome() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="reseller-home">
-      <header className="kn-crosshairs shrink-0 border-b border-[var(--kn-border)] px-6 py-8">
-        <PageHero
-          size="md"
-          eyebrow={branding?.display_name ?? "Reseller"}
-          title="Your clients,"
-          accent="your allowance."
-          lede="Create client accounts, hand them websites, domains, mailboxes and databases, and keep each within the share you choose."
-          actions={
-            <LinkButton href="/reseller/clients?new=1" icon={UserPlus}>
-              New client
-            </LinkButton>
-          }
-          status={
-            real && !account ? (
-              <Skeleton className="h-4 w-64" />
-            ) : (
-              <QuotaStatus quota={quota} usage={usage} />
-            )
-          }
-        />
-      </header>
+      <PageHeader
+        title="Your clients"
+        lede="Create client accounts, hand them websites, domains, mailboxes and databases, and keep each within the share you choose."
+        actions={
+          <LinkButton href="/reseller/clients?new=1" icon={UserPlus}>
+            New client
+          </LinkButton>
+        }
+        status={
+          real && !account ? <Skeleton className="h-4 w-64" /> : <QuotaStatus quota={quota} usage={usage} />
+        }
+      />
 
       <PageBody gap="lg">
         <NumberedSection

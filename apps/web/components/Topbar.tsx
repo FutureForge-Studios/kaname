@@ -19,6 +19,7 @@ import {
 import type { ViewMode } from "@kaname/contract";
 import {
   Avatar,
+  Button,
   DropdownMenu,
   IconButton,
   Kbd,
@@ -137,22 +138,17 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
 
       <Breadcrumbs className="min-w-0 flex-1" />
 
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="sm"
+        icon={Search}
         onClick={() => palette.setOpen(true)}
         aria-label="Search and commands"
-        className={cn(
-          "kn-label-sm hidden h-8 min-w-0 items-center gap-2.5 rounded-[var(--kn-r-sm)] border border-[var(--kn-border-strong)]",
-          "bg-transparent pl-2.5 pr-2 text-[var(--kn-text-3)] outline-none sm:flex",
-          "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
-          "hover:border-[var(--kn-line-control)] hover:text-[var(--kn-text)]",
-          "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
-        )}
+        className="hidden min-w-0 justify-start text-[var(--kn-text-3)] sm:inline-flex"
       >
-        <Search size={13} aria-hidden />
         <span className="w-24 text-left md:w-36">Search</span>
-        <Kbd keys="mod+k" size="xs" className="tracking-normal" />
-      </button>
+        <Kbd keys="mod+k" size="xs" />
+      </Button>
 
       <IconButton
         icon={Search}
@@ -183,18 +179,14 @@ export function Topbar({ onOpenNav, className }: TopbarProps) {
         placement="bottom-end"
         label="Account"
         trigger={
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             aria-label={`Account — ${identity}`}
-            className={cn(
-              "inline-flex h-8 w-8 items-center justify-center rounded-[var(--kn-r-pill)] outline-none",
-              "transition-colors duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
-              "hover:bg-[var(--kn-neutral-soft)]",
-              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
-            )}
+            className="h-8 w-8 rounded-[var(--kn-r-pill)] px-0"
           >
             <Avatar name={identity} size="md" />
-          </button>
+          </Button>
         }
       >
         <MenuLabel className="font-[family-name:var(--kn-font-sans)] normal-case tracking-normal">

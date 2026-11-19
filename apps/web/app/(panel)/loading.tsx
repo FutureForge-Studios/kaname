@@ -9,7 +9,7 @@ import { Skeleton } from "@kaname/ui";
 export default function PanelLoading() {
   return (
     <div className="flex min-h-0 flex-1 flex-col" aria-busy>
-      <div className="kn-crosshairs border-b border-[var(--kn-border)] px-6 pb-5 pt-6">
+      <div className="border-b border-[var(--kn-border)] px-6 pb-5 pt-6">
         <Skeleton className="h-8 w-52" label="Loading page" />
         <Skeleton className="mt-2.5 h-3 w-72" />
       </div>

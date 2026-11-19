@@ -1,8 +1,8 @@
 {
   "name": "kaname",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
-  "description": "Kaname by FutureForge Studios — the control plane for your infrastructure",
+  "description": "Kaname by FutureForge Studios — the self-hosted deploy platform for your own servers",
   "author": "FutureForge Studios (https://ffstudios.io)",
   "packageManager": "pnpm@10.0.0",
   "engines": {

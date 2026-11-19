@@ -15,7 +15,7 @@ import {
 } from "@kaname/db/schema";
 import {
   appInstallSteps,
-  findApp,
+  isContainerSource,
   type AppInstallResourceKind,
   type AppInstallStepId,
   type AppRecipe,
@@ -26,6 +26,8 @@ import { open, seal, type SealedSecret } from "../lib/crypto.js";
 import {
   APP_DB_PRIVILEGES,
   NO_SECRETS,
+  composeEnvRef,
+  containerImages,
   containerSecretNames,
   containerSecretRef,
   containerSpecs,
@@ -33,7 +35,9 @@ import {
   generateSecret,
   initTaskSpecs,
   installNames,
+  installRecipe,
   renderConfig,
+  webRole,
   writablePaths,
   type ContainerContext,
   type ContainerSecrets,
@@ -241,8 +245,8 @@ class InstallRun {
  * with the master key in `secrets`, referenced from the user row.
  * ------------------------------------------------------------------ */
 
-async function storeSecret(
-  ctx: JobContext,
+export async function storeSecret(
+  ctx: Pick<JobContext, "db" | "config">,
   ref: string,
   ownerType: string,
   ownerId: string,
@@ -255,7 +259,7 @@ async function storeSecret(
     .onConflictDoUpdate({ target: secrets.ref, set: { ...sealed, updatedAt: new Date() } });
 }
 
-async function readSecret(ctx: JobContext, ref: string): Promise<string | null> {
+async function readSecret(ctx: Pick<JobContext, "db" | "config">, ref: string): Promise<string | null> {
   const rows = await ctx.db.select().from(secrets).where(eq(secrets.ref, ref)).limit(1);
   const row = rows[0];
   if (!row) return null;
@@ -512,7 +516,7 @@ const siteStep: StepFn = async (run) => {
   const { ctx, names, recipe } = run;
   const inputs = run.row.inputs;
   const source = recipe.source;
-  const image = source.kind === "image";
+  const image = isContainerSource(source);
   const runtimeVersion = image ? null : (inputs.php_version ?? recipe.requirements.runtime_version);
   const upstream = image ? `127.0.0.1:${run.row.appPort}` : null;
   if (image) {
@@ -756,7 +760,7 @@ const verifyStep: StepFn = async (run) => {
     await ctx.log_("error", test.output);
     throw new Error(`The web server configuration is invalid: ${test.output.slice(0, 400)}`);
   }
-  if (recipe.source.kind === "image") {
+  if (isContainerSource(recipe.source)) {
     await verifyContainers(run);
   }
   if (recipe.source.kind === "git") {
@@ -794,6 +798,17 @@ async function containerSecrets(run: InstallRun): Promise<ContainerSecrets> {
   return secretsOut;
 }
 
+/** A compose install's environment, sealed by the install route as one JSON secret. */
+async function composeEnv(run: InstallRun): Promise<Record<string, Record<string, string>> | undefined> {
+  if (run.recipe.source.kind !== "compose") return undefined;
+  const sealed = await readSecret(run.ctx, composeEnvRef(run.row.id));
+  if (sealed) return JSON.parse(sealed) as Record<string, Record<string, string>>;
+  if (run.recipe.source.services.some((s) => s.env_keys.length > 0)) {
+    throw new Error("the install's environment is missing");
+  }
+  return {};
+}
+
 async function containerContext(run: InstallRun): Promise<ContainerContext> {
   if (!run.row.appPort) throw new Error("no loopback port was allocated for this install");
   return {
@@ -802,21 +817,14 @@ async function containerContext(run: InstallRun): Promise<ContainerContext> {
     ssl: run.row.ssl,
     appPort: run.row.appPort,
     secrets: await containerSecrets(run),
+    composeEnv: await composeEnv(run),
   };
-}
-
-function imageSource(run: InstallRun) {
-  const source = run.recipe.source;
-  if (source.kind !== "image") throw new Error(`${run.recipe.name} is not installed from an image`);
-  return source;
 }
 
 /** Every image the install runs, pulled with its progress in the job log. */
 const pullStep: StepFn = async (run) => {
   const { ctx } = run;
-  const source = imageSource(run);
-  const images = [...new Set([...source.companions.map((c) => c.image), source.image])];
-  for (const image of images) {
+  for (const image of containerImages(run.recipe)) {
     await ctx.log_("info", `pulling ${image}`);
     const handle = ctx.hub.stream(
       run.serverId,
@@ -841,10 +849,21 @@ const networkStep: StepFn = async (run) => {
   await run.ctx.log_("info", network.created ? `network ${network.name} created` : `network ${network.name} is in place`);
 };
 
-/** The companion databases, on the private network and published nowhere. */
+/**
+ * Specs in start order, split at the web container: catalog companions
+ * come before the app; compose services keep their depends_on order, so
+ * one that depends on web starts after it.
+ */
+function splitAtWeb(run: InstallRun, context: ContainerContext) {
+  const specs = containerSpecs(run.recipe, context);
+  const web = specs.findIndex((s) => s.role === webRole(run.recipe));
+  return { before: specs.slice(0, web), web: specs[web]!, after: specs.slice(web + 1) };
+}
+
+/** The companion databases (or compose services web depends on), on the private network and published nowhere. */
 const companionStep: StepFn = async (run) => {
   const context = await containerContext(run);
-  const specs = containerSpecs(run.recipe, context).filter((spec) => spec.role !== "app");
+  const specs = splitAtWeb(run, context).before;
   await run.remember({ db_container_attempted: true });
   for (const spec of specs) {
     // The spec carries generated passwords, so only its shape is logged.
@@ -886,21 +905,28 @@ const initStep: StepFn = async (run) => {
   }
 };
 
-/** The app itself, published on 127.0.0.1:<allocated port> only. */
+/** The app itself, published on 127.0.0.1:<allocated port> only, then any compose service that depends on it. */
 const appContainerStep: StepFn = async (run) => {
   const context = await containerContext(run);
-  const spec = containerSpecs(run.recipe, context).find((s) => s.role === "app")!;
+  const { web: spec, after } = splitAtWeb(run, context);
   await run.remember({ app_container_attempted: true, data_dir: run.names.dataDir ?? undefined });
   await run.ctx.log_("info", `starting ${run.recipe.name} (${spec.image}) on 127.0.0.1:${context.appPort}`);
   const info = await run.call(run.serverId, "container.create", spec);
-  await run.remember({ app_container_created: true });
   await run.ctx.log_("info", `${info.name} is ${info.state}`);
+  for (const next of after) {
+    await run.ctx.log_("info", `starting ${next.role} (${next.image})`);
+    const created = await run.call(run.serverId, "container.create", next);
+    await run.ctx.log_("info", `${created.name} is ${created.state}`);
+  }
+  await run.remember({ app_container_created: true });
 };
 
 /** The image half of "check it answers": every container up, and the app speaking HTTP. */
 async function verifyContainers(run: InstallRun): Promise<void> {
   const { ctx } = run;
-  const expected = 1 + imageSource(run).companions.length;
+  const source = run.recipe.source;
+  const expected =
+    source.kind === "compose" ? source.services.length : source.kind === "image" ? 1 + source.companions.length : 0;
   let status = await run.call(run.serverId, "container.app.status", { install_id: run.row.id });
   for (let attempt = 1; ; attempt += 1) {
     const down = status.containers.filter((c) => c.state !== "running");
@@ -910,7 +936,7 @@ async function verifyContainers(run: InstallRun): Promise<void> {
     if (down.some((c) => ["exited", "dead"].includes(c.state))) {
       throw new Error(`${down.map((c) => `${c.name} is ${c.state} (${c.status})`).join("; ")}.`);
     }
-    const app = status.endpoints.find((e) => e.role === "app");
+    const app = status.endpoints.find((e) => e.role === webRole(run.recipe));
     if (down.length === 0 && app?.reachable && app.http_status !== null && app.http_status < 500) {
       await ctx.log_("info", `${run.recipe.name} answers on 127.0.0.1:${app.host_port} (HTTP ${app.http_status})`);
       return;
@@ -1040,7 +1066,7 @@ export async function teardown(run: InstallRun): Promise<string[]> {
   /* containers, their network and their data (image recipes) */
   const containersMade =
     run.res.network_attempted || run.res.db_container_attempted || run.res.app_container_attempted;
-  if (run.recipe.source.kind === "image") {
+  if (isContainerSource(run.recipe.source)) {
     let ok = true;
     if (containersMade) {
       ok = await attempt(`the containers of ${run.row.domain}`, async () => {
@@ -1120,7 +1146,7 @@ async function loadRun(ctx: JobContext): Promise<InstallRun> {
   const rows = await ctx.db.select().from(appInstalls).where(eq(appInstalls.id, install_id)).limit(1);
   const row = rows[0];
   if (!row) throw new Error(`app install ${install_id} no longer exists`);
-  const recipe = findApp(row.appId);
+  const recipe = installRecipe(row);
   if (!recipe) throw new Error(`${row.appId} is no longer in the catalog`);
   return new InstallRun(ctx, row, recipe, serverId);
 }

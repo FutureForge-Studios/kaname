@@ -367,6 +367,10 @@ async fn clone_release(
         ctx,
         git(vec![
             "clone".into(),
+            // Links come out as plain files, so a repo cannot point the
+            // public webroot at /etc or another site.
+            "-c".into(),
+            "core.symlinks=false".into(),
             "--quiet".into(),
             "--no-tags".into(),
             "--single-branch".into(),

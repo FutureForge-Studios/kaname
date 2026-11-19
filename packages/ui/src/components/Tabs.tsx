@@ -189,14 +189,14 @@ export const Tab = React.forwardRef<HTMLButtonElement, TabProps>(function Tab(
         select(value);
       }}
       className={cn(
-        "kn-label inline-flex h-9 shrink-0 items-center gap-2 whitespace-nowrap px-3",
+        "inline-flex h-10 shrink-0 items-center gap-2 whitespace-nowrap px-3 text-base font-medium",
         "outline-none transition-[color,border-color] duration-[var(--kn-dur-fast)] ease-[var(--kn-ease-std)]",
         "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--kn-ring)]",
-        "text-[var(--kn-text-3)] hover:text-[var(--kn-text)]",
+        "text-[var(--kn-text-2)] hover:text-[var(--kn-text)]",
         "aria-selected:text-[var(--kn-text)]",
         horizontal
-          ? "-mb-px border-b-2 border-transparent aria-selected:border-[var(--kn-accent-500)]"
-          : "-mr-px justify-start border-r-2 border-transparent aria-selected:border-[var(--kn-accent-500)]",
+          ? "-mb-px border-b-2 border-transparent aria-selected:border-[var(--kn-text)]"
+          : "-mr-px justify-start border-r-2 border-transparent aria-selected:border-[var(--kn-text)]",
         disabled && "cursor-not-allowed text-[var(--kn-text-3)] hover:text-[var(--kn-text-3)]",
         className,
       )}
@@ -205,7 +205,7 @@ export const Tab = React.forwardRef<HTMLButtonElement, TabProps>(function Tab(
       {Icon && <Icon size={14} className="shrink-0" aria-hidden />}
       {children}
       {badge !== undefined && badge !== null && (
-        <span className="kn-num text-2xs tracking-normal text-[var(--kn-text-3)]">{badge}</span>
+        <span className="kn-num text-xs text-[var(--kn-text-3)]">{badge}</span>
       )}
     </button>
   );

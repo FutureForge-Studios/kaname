@@ -69,6 +69,9 @@ interface SslSummary {
 interface DeploymentSummary {
   id: string;
   status: DeploymentStatus;
+  branch: string | null;
+  commit_sha: string | null;
+  created_at: string;
   finished_at: string | null;
 }
 
@@ -97,7 +100,10 @@ const siteSelection = {
     limit 1
   )`,
   last_deployment: sql<DeploymentSummary | null>`(
-    select json_build_object('id', dep.id, 'status', dep.status, 'finished_at', dep.finished_at)
+    select json_build_object(
+      'id', dep.id, 'status', dep.status, 'branch', dep.branch, 'commit_sha', dep.commit_sha,
+      'created_at', dep.created_at, 'finished_at', dep.finished_at
+    )
     from deployments dep where dep.site_id = ${sites.id}
     order by dep.created_at desc
     limit 1
@@ -221,6 +227,8 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
         upstream: body.upstream ?? null,
         forceHttps: body.force_https,
         owner: body.owner ?? null,
+        repoUrl: body.repo_url ?? null,
+        branch: body.branch ?? null,
         status: "provisioning",
         config: configOf(body.primary_domain, body.php_version),
       })
@@ -325,6 +333,8 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
         ...(body.upstream !== undefined ? { upstream: body.upstream } : {}),
         ...(body.force_https !== undefined ? { forceHttps: body.force_https } : {}),
         ...(body.owner !== undefined ? { owner: body.owner } : {}),
+        ...(body.repo_url !== undefined ? { repoUrl: body.repo_url } : {}),
+        ...(body.branch !== undefined ? { branch: body.branch } : {}),
         config: { ...config, ...configOf(primary, body.php_version ?? config.php_version) },
         updatedAt: new Date(),
       })
@@ -380,6 +390,8 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
         runtime: before.runtime,
         upstream: before.upstream,
         force_https: before.forceHttps,
+        repo_url: before.repoUrl,
+        branch: before.branch,
       },
       after: body,
     });
@@ -605,8 +617,22 @@ function scopedWebroot(req: FastifyRequest, siteName: string): string {
 
 function confineSite(
   req: FastifyRequest,
-  body: { name: string; webroot: string; runtime: string; upstream?: string; owner?: string },
+  body: {
+    name: string;
+    webroot: string;
+    runtime: string;
+    upstream?: string;
+    owner?: string;
+    repo_url?: string | null;
+    branch?: string | null;
+  },
 ): void {
+  // An operator's next deploy would clone whatever a client stored here.
+  if (body.repo_url != null || body.branch != null) {
+    throw new ApiException("forbidden", "This account cannot set a git repository.", {
+      fields: { repo_url: "leave empty" },
+    });
+  }
   if (!SCOPED_RUNTIMES.includes(body.runtime) || body.upstream !== undefined) {
     throw new ApiException(
       "forbidden",
@@ -641,14 +667,16 @@ function confineSiteUpdate(body: {
   runtime?: string;
   upstream?: string;
   owner?: string;
+  repo_url?: string | null;
+  branch?: string | null;
 }): void {
-  const refused = (["name", "webroot", "upstream", "owner"] as const).filter(
+  const refused = (["name", "webroot", "upstream", "owner", "repo_url", "branch"] as const).filter(
     (key) => body[key] !== undefined,
   );
   if (refused.length > 0 || (body.runtime !== undefined && !SCOPED_RUNTIMES.includes(body.runtime))) {
     throw new ApiException(
       "forbidden",
-      "This account cannot change a site's name, folder, system user or upstream.",
+      "This account cannot change a site's name, folder, system user, upstream or git repository.",
       {
         fields: Object.fromEntries(
           [...refused, ...(refused.length === 0 ? ["runtime"] : [])].map((key) => [
@@ -705,6 +733,8 @@ export function siteToApi(row: SiteApiRow): Site {
     domains: refs,
     force_https: s.forceHttps,
     upstream: s.upstream,
+    repo_url: s.repoUrl,
+    branch: s.branch,
     config_path: s.configPath,
     owner: s.owner,
     php_version: s.runtime === "php" ? s.runtimeVersion : (config.php_version ?? null),
@@ -713,6 +743,9 @@ export function siteToApi(row: SiteApiRow): Site {
       ? {
           id: row.last_deployment.id,
           status: row.last_deployment.status,
+          branch: row.last_deployment.branch,
+          commit_sha: row.last_deployment.commit_sha,
+          created_at: new Date(row.last_deployment.created_at).toISOString(),
           finished_at: isoOrNull(row.last_deployment.finished_at),
         }
       : null,

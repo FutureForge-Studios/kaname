@@ -3,8 +3,9 @@
 import * as React from "react";
 import type { DeploymentSource, Site } from "@kaname/contract";
 import { Combobox, FormField, Input, Select, Switch, type ComboboxOption } from "@kaname/ui";
-import { FormDialog, FormSection, fieldErrors } from "./FormDialog";
+import { FormDialog, FormSection, fieldErrors } from "../../_components/FormDialog";
 import { useSites, useTriggerDeployment } from "./queries";
+import { DEPLOYMENT_IN_FLIGHT } from "./status";
 
 /* ------------------------------------------------------------------ *
  * Trigger a deployment.
@@ -92,12 +93,17 @@ export function DeployDialog({
   }
   if (form.repoUrl.trim().length > 512) local["repo_url"] = "Too long for a repository URL.";
 
+  // Same guard as the project header: one deployment at a time.
+  const target = site ?? sites.data?.data.find((row) => row.id === form.siteId);
+  const inFlight =
+    target?.last_deployment != null && DEPLOYMENT_IN_FLIGHT.includes(target.last_deployment.status);
+
   const errorFor = (field: string): string | undefined =>
     submitted ? (local[field] ?? remote[field]) : remote[field];
 
   const submit = () => {
     setSubmitted(true);
-    if (Object.keys(local).length > 0) return;
+    if (Object.keys(local).length > 0 || inFlight) return;
 
     trigger.mutate(
       {
@@ -112,22 +118,25 @@ export function DeployDialog({
     );
   };
 
-  /* Numbered in reading order: opened from a site, there is no target step. */
-  const step = site ? 0 : 1;
-
   return (
     <FormDialog
       open={open}
       onOpenChange={onOpenChange}
       title={site ? `Deploy ${site.name}` : "Deploy a site"}
-      description="Queues a build on the host. The log streams on the deployment page as it runs."
+      description="Clones the branch on the host and switches the site to it. The log streams on the deployment page."
       submitLabel="Start deployment"
       submitting={trigger.isPending}
+      canSubmit={!inFlight}
+      footerExtra={
+        inFlight ? (
+          <span className="text-sm text-[var(--kn-text-3)]">A deployment is already running</span>
+        ) : undefined
+      }
       error={trigger.error}
       onSubmit={submit}
     >
       {!site && (
-        <FormSection index={1} title="Target">
+        <FormSection title="Target">
           <FormField label="Site" error={errorFor("site_id")} required>
             <Combobox
               options={siteOptions}
@@ -142,7 +151,7 @@ export function DeployDialog({
         </FormSection>
       )}
 
-      <FormSection index={step + 1} title="What to build">
+      <FormSection title="Source">
         <FormField label="Source" description="An upload deployment needs no repository.">
           <Select
             value={form.source}
@@ -189,7 +198,7 @@ export function DeployDialog({
         )}
       </FormSection>
 
-      <FormSection index={step + 2} title="Which commit">
+      <FormSection title="Which commit">
         <FormField
           label="Revision"
           description="Pin the run to one commit, or leave blank to take the branch head."

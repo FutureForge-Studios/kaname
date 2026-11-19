@@ -300,31 +300,43 @@ export function wrongTotp(secret: string): string {
 /* ------------------------------ sidebar ----------------------------- */
 
 /**
- * What the primary navigation shows, as "Section" for a top-level link
- * and "Section › Leaf" for a grouped one, in display order.
+ * Every page this account can reach from the primary navigation, as
+ * "Section › Page" in display order ("Section" alone when the one page
+ * shares its name). The sidebar lists sections only, so each section is
+ * visited and its tab row read; a single-page section has no tab row and
+ * is read from the breadcrumb instead. Leaves the page on the last section.
  */
 export async function sidebarEntries(page: Page): Promise<string[]> {
   const nav = page.getByRole("navigation", { name: "Primary" }).first();
   await expect(nav.getByRole("link").first()).toBeVisible();
-  return nav.evaluate((root) => {
-    // The label span, not the whole link: a leaf with a shortcut also
-    // carries its "g then s" hint.
-    const labelOf = (link: Element): string =>
-      (link.querySelector("span")?.textContent ?? link.textContent ?? "").trim();
-    const out: string[] = [];
-    for (const child of Array.from(root.children)) {
-      const group = child.getAttribute("role") === "group" ? child : null;
-      if (!group) {
-        const link = child.querySelector("a");
-        if (link) out.push(labelOf(link));
-        continue;
-      }
-      const labelId = group.getAttribute("aria-labelledby");
-      const label = labelId ? (document.getElementById(labelId)?.textContent ?? "").trim() : "?";
-      for (const link of Array.from(group.querySelectorAll("a"))) {
-        out.push(`${label} › ${labelOf(link)}`);
-      }
-    }
-    return out;
-  });
+  const more = nav.getByRole("button", { name: "More", expanded: false });
+  if ((await more.count()) > 0) await more.first().click();
+  // The label span, not the whole link: an indicator adds sr-only text.
+  const sections = await nav.getByRole("link").evaluateAll((links) =>
+    links.map((link) => ({
+      label: (link.querySelector("span")?.textContent ?? link.textContent ?? "").trim(),
+      href: link.getAttribute("href") ?? "/",
+    })),
+  );
+
+  const out: string[] = [];
+  for (const { label, href } of sections) {
+    await page.goto(href);
+    await expect(nav.getByRole("link").first()).toBeVisible();
+    const tabs = page.getByRole("navigation", { name: `${label} pages` });
+    const pages =
+      (await tabs.count()) > 0
+        ? (await tabs.getByRole("link").allTextContents()).map((text) => text.trim())
+        : [
+            (
+              (await page
+                .getByRole("navigation", { name: "Breadcrumb" })
+                .first()
+                .locator('[aria-current="page"]')
+                .textContent()) ?? label
+            ).trim(),
+          ];
+    for (const leaf of pages) out.push(leaf === label && pages.length === 1 ? label : `${label} › ${leaf}`);
+  }
+  return out;
 }

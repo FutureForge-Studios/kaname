@@ -11,10 +11,9 @@ import { cn, variant } from "../lib/cn.js";
  * colour-codes state imports it from here instead of declaring its own,
  * so "warn" means the same thing in a badge, a metric and a job pill.
  *
- * All three are ffstudios chips: a hairline in the tone's own colour
- * around a faint tint. Badge and Tag are 4px-cornered chips, StatusBadge
- * is the pill with a dot. Text keeps its case — identifiers are greppable
- * — so reach for <MonoLabel> when an uppercase annotation is wanted.
+ * All three are 6px chips: a hairline in the tone's own colour
+ * around a faint tint, sentence case. StatusBadge adds a dot.
+ * Text keeps its case: identifiers are greppable.
  * ------------------------------------------------------------------ */
 
 export type Tone = "neutral" | "ok" | "warn" | "danger" | "info" | "accent";
@@ -118,7 +117,7 @@ export const Badge = React.forwardRef<HTMLSpanElement, BadgeProps>(function Badg
     <span
       ref={ref}
       className={cn(
-        "inline-flex max-w-full select-none items-center whitespace-nowrap rounded-[var(--kn-r-xs)] font-medium",
+        "inline-flex max-w-full select-none items-center whitespace-nowrap rounded-[var(--kn-r-sm)] font-medium",
         variant(CHIP_TONES, tone, "neutral"),
         variant(BADGE_SIZES, size, "sm"),
         mono && "kn-mono",
@@ -165,7 +164,7 @@ export const StatusBadge = React.forwardRef<HTMLSpanElement, StatusBadgeProps>(f
     <span
       ref={ref}
       className={cn(
-        "inline-flex max-w-full select-none items-center whitespace-nowrap rounded-[var(--kn-r-pill)] font-medium",
+        "inline-flex max-w-full select-none items-center whitespace-nowrap rounded-[var(--kn-r-sm)] font-medium",
         variant(CHIP_TONES, tone, "neutral"),
         variant(STATUS_SIZES, size, "sm"),
         className,
@@ -207,7 +206,7 @@ export const Tag = React.forwardRef<HTMLSpanElement, TagProps>(function Tag(
     <span
       ref={ref}
       className={cn(
-        "inline-flex max-w-full items-center whitespace-nowrap rounded-[var(--kn-r-xs)] border border-[var(--kn-border-strong)] bg-transparent text-[var(--kn-text-2)]",
+        "inline-flex max-w-full items-center whitespace-nowrap rounded-[var(--kn-r-sm)] border border-[var(--kn-border-strong)] bg-transparent text-[var(--kn-text-2)]",
         variant(TAG_SIZES, size, "sm"),
         onRemove ? "pr-0.5" : size === "xs" ? "pr-1" : "pr-1.5",
         mono && "kn-mono",

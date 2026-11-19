@@ -3,9 +3,14 @@ import type { z } from "zod";
 import { MANAGED_APPS_ROOT, type ManagedContainerSpec } from "@kaname/contract/agent";
 import {
   appInstallSteps,
+  composeContainerSpec,
+  composeRecipe,
+  findApp,
+  isContainerSource,
   type CompanionEngine,
   type dbPrivilege,
   type AppInstallPlan,
+  type ComposeSource,
   type AppInstallStepSpec,
   type AppRecipe,
   type DbEngine,
@@ -78,7 +83,7 @@ export function installNames(
   const deployRoot = `${APP_SITES_ROOT}/${domain}`;
   const docroot = recipe.source.kind === "git" ? recipe.source.document_root : "";
   const db = recipe.requirements.database;
-  const image = recipe.source.kind === "image";
+  const image = isContainerSource(recipe.source);
 
   return {
     siteName: domain,
@@ -164,14 +169,16 @@ export function buildPlan(
     database: context.engine ? names.database : null,
     db_user: context.engine ? names.dbUser : null,
     steps: planSteps(recipe, input.ssl),
-    app_port: source.kind === "image" ? (context.appPort ?? null) : null,
+    app_port: isContainerSource(source) ? (context.appPort ?? null) : null,
     containers:
       source.kind === "image"
         ? [
             ...source.companions.map((c) => ({ role: c.role, image: c.image })),
             { role: "app", image: source.image },
           ]
-        : [],
+        : source.kind === "compose"
+          ? source.services.map((s) => ({ role: s.name, image: s.image }))
+          : [],
     notices: context.notices ?? [],
   };
 }
@@ -405,6 +412,31 @@ export interface ContainerContext {
   ssl: boolean;
   appPort: number;
   secrets: ContainerSecrets;
+  /** Compose installs: each service's environment, unsealed from `composeEnvRef`. */
+  composeEnv?: Record<string, Record<string, string>>;
+}
+
+/** Where a compose install's environment values are sealed, as one JSON secret. */
+export function composeEnvRef(installId: string): string {
+  return `app_install:${installId}:compose_env`;
+}
+
+/** The recipe an existing install runs: a catalog app, or the compose project stored on its row. */
+export function installRecipe(row: { appId: string; inputs: { compose?: ComposeSource } }): AppRecipe | undefined {
+  return findApp(row.appId) ?? (row.inputs.compose ? composeRecipe(row.inputs.compose) : undefined);
+}
+
+/** The role of the container the site proxies to. */
+export function webRole(recipe: AppRecipe): string {
+  return recipe.source.kind === "compose" ? recipe.source.web.service : "app";
+}
+
+/** Every image an install pulls, each once. */
+export function containerImages(recipe: AppRecipe): string[] {
+  const source = recipe.source;
+  if (source.kind === "compose") return [...new Set(source.services.map((s) => s.image))];
+  if (source.kind === "image") return [...new Set([...source.companions.map((c) => c.image), source.image])];
+  return [];
 }
 
 function need(value: string | null, what: string): string {
@@ -685,6 +717,17 @@ function appSpec(recipe: AppRecipe, ctx: ContainerContext, task: { role: string;
  */
 export function containerSpecs(recipe: AppRecipe, ctx: ContainerContext): ManagedContainerSpec[] {
   const source = recipe.source;
+  if (source.kind === "compose") {
+    // Start order: the stored list is already sorted by depends_on.
+    return source.services.map((s) =>
+      composeContainerSpec(
+        ctx.installId,
+        s,
+        ctx.composeEnv?.[s.name] ?? {},
+        s.name === source.web.service ? { container_port: source.web.port, host_port: ctx.appPort } : null,
+      ),
+    );
+  }
   if (source.kind !== "image") return [];
   return [...source.companions.map((c) => companionSpec(recipe, c, ctx)), appSpec(recipe, ctx, null)];
 }
